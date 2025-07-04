@@ -1,0 +1,47 @@
+services:
+  grabber_dev:
+    image: grabber_image
+    build:
+      context: . 
+      dockerfile: Dockerfile 
+      args: # 设置构建时需要的代理参数
+        http_proxy: "http://192.168.3.7:7897"
+        https_proxy: "http://192.168.3.7:7897"
+    # privileged: true 
+    
+    container_name: grabber_container
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    # 挂载卷
+    volumes:
+      - .:/root/grabber
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw # 挂载X11 socket
+      - ${XAUTHORITY}:/root/.Xauthority:ro # 挂载X11认证用的环境变量
+
+    # 这里定义容器运行时的环境变量
+    environment:
+      - http_proxy=http://192.168.3.7:7897
+      - https_proxy=http://192.168.3.7:7897
+      - no_proxy=localhost,127.0.0.1
+      - DISPLAY=${DISPLAY}
+      - XAUTHORITY=/root/.Xauthority
+      - QT_X11_NO_MITSHM=1
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - NVIDIA_VISIBLE_DEVICES=all
+
+    # 设置网络模式为host
+    network_mode: "host"
+
+    # 让容器可以访问GPU
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    
+    # 让容器保持运行，而不是执行完命令就退出
+    stdin_open: true
+    # tty: true 让我们能获得一个交互式终端
+    tty: true

@@ -1,0 +1,7 @@
+requests
+numpy
+opencv-python
+sounddevice
+playsound==1.2.2 
+configparser
+pybind11
