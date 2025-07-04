@@ -1,0 +1,6 @@
+[submodule "external/RM_API2"]
+	path = external/RM_API2
+	url = https://github.com/RealManRobot/RM_API2.git
+[submodule "external/pyorbbecsdk"]
+	path = external/pyorbbecsdk
+	url = https://github.com/orbbec/pyorbbecsdk.git
