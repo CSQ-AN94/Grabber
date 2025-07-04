@@ -15,3 +15,5 @@ if software_info[0] == 0:
     print("==============================================================\n")
 else:
     print("\nFailed to get arm software information, Error code: ", software_info[0], "\n")
+
+print(robot.rm_get_current_arm_state())

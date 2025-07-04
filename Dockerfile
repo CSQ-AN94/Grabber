@@ -1,7 +1,12 @@
-# 基础镜像: 完全遵照你的选择
-FROM nvidia/cuda:12.8.0-devel-ubuntu22.04
+ARG TARGETPLATFORM
+
+# amd64带显卡笔记本的基础镜像
+FROM nvidia/cuda:12.8.0-devel-ubuntu22.04 AS base-amd64
+# jetson orin 的基础镜像
+FROM dustynv/l4t-pytorch:r36.4.0 AS base-arm64
 
 # --- 环境配置 ---
+FROM base-${TARGETPLATFORM#linux/}
 # 设置为非交互模式，防止apt在构建时卡住
 ENV DEBIAN_FRONTEND=noninteractive
 # 确保Python输出是无缓冲的, 日志会立刻显示
