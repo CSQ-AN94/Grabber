@@ -11,36 +11,52 @@ FROM base-${TARGETPLATFORM#linux/}
 ENV DEBIAN_FRONTEND=noninteractive
 # 确保Python输出是无缓冲的, 日志会立刻显示
 ENV PYTHONUNBUFFERED=1
+# 把RM_API2的Python包加入到路径
+ENV PYTHONPATH="${PYTHONPATH}:/app/external/RM_API2/Python"
 
 # --- 安装系统依赖 ---
-# Ubuntu 22.04 默认就是 Python 3.10，我们只需安装pip和必要的库
 RUN apt-get update && apt-get install -y \
+    tmux htop net-tools nmap tree xclip\
     python3-pip \
     python3-dev \
     python3-venv \
     python3-opencv \
     git \
     cmake \
+    build-essential \
     libusb-1.0.0-dev \
     libgl1-mesa-glx \
     libglib2.0-0 \
     portaudio19-dev \
     libasound2-dev \
+    libudev-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# --- 安装Python依赖 ---
-COPY requirements.txt .
-# 使用pip安装所有指定的Python包
-RUN pip install --no-cache-dir -r requirements.txt
-
-ENV PYTHONPATH="${PYTHONPATH}:/app/external/RM_API2/Python"
-
+# --- 设置工作目录并拷贝所有代码 ---
+# 我们先把所有代码都拷贝进去，在一个统一的工作目录下操作
 WORKDIR /app
 COPY . .
 
-# RUN pip install /app/external/RM_API2/Python
-# RUN pip install /app/external/pyorbbecsdk
+# --- 安装Python核心依赖 ---
+RUN pip install --no-cache-dir -r requirements.txt
+
+# --- 编译并强制安装pyorbbecsdk ---
+RUN cd /app/external/pyorbbecsdk && \
+    echo "Skipping sdk's requirements.txt to avoid pre-installation." && \
+    mkdir -p build && cd build && \
+    cmake -Dpybind11_DIR=$(pybind11-config --cmakedir) .. && \
+    make -j$(nproc) && \
+    make install && \
+    cd .. && \
+    python3 setup.py bdist_wheel && \
+    pip install --force-reinstall ./dist/pyorbbecsdk-*.whl && \
+    rm -rf /app/external/pyorbbecsdk/build /app/external/pyorbbecsdk/dist
+
+# --- 安装udev规则 ---
+RUN bash /app/external/pyorbbecsdk/scripts/install_udev_rules.sh
+
+# --- 修复并设置PYTHONPATH ---
+ENV PYTHONPATH="${PYTHONPATH:-}:/app/external/RM_API2/Python"
 
 # --- 容器启动命令 ---
-# 为开发环境提供一个bash终端，这是最灵活的方式
 CMD ["bash"]

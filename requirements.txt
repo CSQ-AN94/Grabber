@@ -1,7 +1,12 @@
 requests
-numpy
+numpy<2.0
 opencv-python
 sounddevice
 playsound==1.2.2 
 configparser
-pybind11
+pybind11==2.11.0
+pybind11-global==2.11.0
+av
+pygame
+pynput
+wheel
