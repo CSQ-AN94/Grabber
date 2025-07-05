@@ -11,12 +11,10 @@ FROM base-${TARGETPLATFORM#linux/}
 ENV DEBIAN_FRONTEND=noninteractive
 # 确保Python输出是无缓冲的, 日志会立刻显示
 ENV PYTHONUNBUFFERED=1
-# 把RM_API2的Python包加入到路径
-ENV PYTHONPATH="${PYTHONPATH}:/app/external/RM_API2/Python"
 
 # --- 安装系统依赖 ---
 RUN apt-get update && apt-get install -y \
-    tmux htop net-tools nmap tree xclip\
+    tmux htop net-tools nmap tree xclip curl wget vim\
     python3-pip \
     python3-dev \
     python3-venv \
@@ -32,10 +30,10 @@ RUN apt-get update && apt-get install -y \
     libudev-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# --- 设置工作目录并拷贝所有代码 ---
-# 我们先把所有代码都拷贝进去，在一个统一的工作目录下操作
+# --- 设置工作目录并拷贝pip依赖相关文件 ---
 WORKDIR /app
-COPY . .
+COPY requirements.txt .
+COPY external/ ./external/
 
 # --- 安装Python核心依赖 ---
 RUN pip install --no-cache-dir -r requirements.txt
@@ -51,12 +49,9 @@ RUN cd /app/external/pyorbbecsdk && \
     python3 setup.py bdist_wheel && \
     pip install --force-reinstall ./dist/pyorbbecsdk-*.whl && \
     rm -rf /app/external/pyorbbecsdk/build /app/external/pyorbbecsdk/dist
-
 # --- 安装udev规则 ---
 RUN bash /app/external/pyorbbecsdk/scripts/install_udev_rules.sh
 
-# --- 修复并设置PYTHONPATH ---
-ENV PYTHONPATH="${PYTHONPATH:-}:/app/external/RM_API2/Python"
-
-# --- 容器启动命令 ---
+ENV PYTHONPATH=/app
+COPY . .
 CMD ["bash"]

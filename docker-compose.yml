@@ -41,7 +41,7 @@ services:
               count: all
               capabilities: [gpu]
     
-    # 让容器保持运行，而不是执行完命令就退出
+    # 让容器保持运行
     stdin_open: true
-    # tty: true 让我们能获得一个交互式终端
+    # 交互式终端
     tty: true
