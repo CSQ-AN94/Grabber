@@ -29,7 +29,7 @@ class CameraThread(threading.Thread):
         print("相机线程已启动")
         print("RGB内参:", color_profile.as_video_stream_profile().get_intrinsic())
         print("深度内参:", depth_profile.as_video_stream_profile().get_intrinsic())
-        print("深度到RGB转换矩阵", depth_profile.get_extrinsics_to(color_profile))
+        print("深度到RGB转换矩阵", depth_profile.get_extrinsic_to(color_profile))
 
     def run(self):
         while self.is_running:
