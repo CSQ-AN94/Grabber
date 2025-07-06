@@ -67,7 +67,7 @@ if __name__ == "__main__":
     rail_config = app_config.rail
     
     state = RobotState()
-    
+
     # 摄像头线程测试
     cam_thread = CameraThread(state, camera_config)
     cam_thread.start()
@@ -79,7 +79,7 @@ if __name__ == "__main__":
 
     # 获取机械臂DH参数
     [ret, dh] = arm.arm.rm_get_DH_data()
-    print(dh.to_dict())
+    print(dh)
 
     # 获取并保存初始关节角度
     joints = arm.get_current_joint_angles()
