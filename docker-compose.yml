@@ -14,7 +14,7 @@ services:
       - /dev/bus/usb:/dev/bus/usb
     # 挂载卷
     volumes:
-      - .:/root/grabber
+      - .:/app
       - /tmp/.X11-unix:/tmp/.X11-unix:rw # 挂载X11 socket
       - ~/.Xauthority:/root/.Xauthority:ro # 挂载X11授权文件
 
@@ -28,6 +28,7 @@ services:
       - QT_X11_NO_MITSHM=1
       - NVIDIA_DRIVER_CAPABILITIES=all
       - NVIDIA_VISIBLE_DEVICES=all
+      - NO_AT_BRIDGE=1 # 禁用AT-Bridge
 
     # 设置网络模式为host
     network_mode: "host"

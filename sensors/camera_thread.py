@@ -26,6 +26,10 @@ class CameraThread(threading.Thread):
             depth_profile = depth_profile_list.get_default_video_stream_profile()
             self.config.enable_stream(depth_profile)
         self.pipeline.start(self.config)
+        print("相机线程已启动")
+        print("RGB内参:", color_profile.as_vedio_stream_profile().get_intrinsics())
+        print("深度内参:", depth_profile.as_vedio_stream_profile().get_intrinsics())
+        print("深度到RGB转换矩阵", depth_profile.get_extrinsics_to(color_profile))
 
     def run(self):
         while self.is_running:
