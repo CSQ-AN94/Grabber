@@ -15,7 +15,6 @@ class ArmConfig:
     zero_pose: List[float]
     dropoff_pose: List[float]
     checkout_scan_pose: List[float]
-    dh_params: List[List[float]]  # Added DH parameters
 
 
 @dataclass
@@ -70,10 +69,6 @@ def load_config(path: str = 'config.ini') -> AppConfig:
         # 解析形如[[...],[...],[...],[...]]的字符串为numpy数组
         return np.array(ast.literal_eval(s), dtype=float)
 
-    def _parse_dh_params(s):
-        # 解析形如[[a,alpha,d,theta_offset],...]的字符串为list
-        return ast.literal_eval(s)
-    
     # 使用上面定义的dataclass填充配置
     conn_config = ConnectionsConfig(
         arm_ip=parser.get('connections', 'arm_ip'),
@@ -108,9 +103,6 @@ def load_config(path: str = 'config.ini') -> AppConfig:
         scan_speed=parser.getfloat('rail', 'scan_speed', fallback=0.1)
     )
 
-    # 解析DH参数
-    dh_params = _parse_dh_params(parser.get('arm', 'dh_params', fallback='[]'))
-    arm_config.dh_params = dh_params
     # 解析手眼标定矩阵
     T_end_to_camera = _parse_matrix(parser.get('calibration', 'T_end_to_camera', fallback=str(np.eye(4).tolist())))
     calibration_config = CalibrationConfig(T_end_to_camera=T_end_to_camera)

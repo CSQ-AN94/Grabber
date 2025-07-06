@@ -5,9 +5,12 @@ import numpy as np
 import cv2 
 
 class Calibration:
-    def __init__(self, dh_params, T_end_to_camera):
-        self.dh_params = dh_params  # [[a, alpha, d, theta_offset], ...]
+    def __init__(self, T_end_to_camera):
+        self.dh_params = None  # 需后续注入
         self.T_end_to_camera = T_end_to_camera  # 4x4 numpy array
+
+    def set_dh_params(self, dh_params):
+        self.dh_params = dh_params
 
     @staticmethod
     def dh_transform(a, alpha, d, theta):
@@ -24,6 +27,8 @@ class Calibration:
         """
         正运动学计算: 根据关节角度，计算末端相对于基座的变换矩阵。
         """
+        if self.dh_params is None:
+            raise ValueError("DH参数未设置")
         T = np.eye(4)
         for i, angle in enumerate(joint_angles):
             a, alpha, d, theta_offset = self.dh_params[i]
@@ -61,23 +66,8 @@ class Calibration:
         """
         这是本模块对外的核心API，执行完整的坐标转换链。
         """
-        # 伪代码:
-        # 1. 计算 T_base_to_end
-        #    T_base_to_end = self.calculate_fk(joint_angles)
-        
-        # 2. 计算 T_rail_to_base
-        #    T_rail_to_base = create_translation_matrix_x(rail_position)
-        
-        # 3. 组合变换矩阵 (实现你的公式)
-        #    T_world_to_camera = T_rail_to_base @ T_base_to_end @ self.T_end_to_camera
-        
-        # 4. 进行坐标点转换
-        #    # 将相机坐标下的点 (numpy array, shape (3,)) 转换为齐次坐标 (shape (4,))
-        #    camera_point_homogeneous = np.append(camera_point, 1)
-        #    # 使用总的变换矩阵进行转换
-        #    world_point_homogeneous = T_world_to_camera @ camera_point_homogeneous
-        #    # 返回非齐次坐标 (前三个元素)
-        #    return world_point_homogeneous[:3]
+        if self.dh_params is None:
+            raise ValueError("DH参数未设置")
         # T_base_to_end
         T_base_to_end = self.calculate_fk(joint_angles)
         # T_rail_to_base: 仅X轴平移

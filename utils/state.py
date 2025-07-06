@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 from utils.config import load_config
 from utils.calibration import Calibration
+from controllers.arm_controller import ArmController
 
 class RobotState:
     def __init__(self):
