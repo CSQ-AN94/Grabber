@@ -139,9 +139,8 @@ if __name__ == "__main__":
         cv2.destroyAllWindows()
 
     # Calibration测试（动态获取DH参数）
-    robot = RoboticArm()  # 需根据实际接口初始化
-    T_end_to_camera = app_config.calibration.T_end_to_camera
-    calib = Calibration(robot, T_end_to_camera)
+    T_end_to_camera = app_config.calibration.T_end_to_camera # 假设有手眼标定矩阵
+    calib = Calibration(arm.arm, T_end_to_camera)
     # 伪造一组关节角度、滑轨位置、相机点
     joint_angles = [0, 0, 0, 0, 0, 0]  # 6轴机械臂
     rail_position = 0.5  # 滑轨位置
