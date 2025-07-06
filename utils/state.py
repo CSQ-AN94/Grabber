@@ -67,35 +67,18 @@ if __name__ == "__main__":
     rail_config = app_config.rail
     
     state = RobotState()
+    
     # 摄像头线程测试
     cam_thread = CameraThread(state, camera_config)
     cam_thread.start()
     print('Camera thread started. Press q to exit.')
-
-    # 摄像头实时显示
-    try:
-        while True:
-            color, depth = state.get_latest_frames()
-            if color is not None:
-                cv2.imshow('Color', color)
-            if depth is not None:
-                d = depth.astype(np.float32)
-                d = cv2.normalize(d, None, 0, 255, cv2.NORM_MINMAX)
-                d = d.astype(np.uint8)
-                d = cv2.applyColorMap(d, cv2.COLORMAP_JET) # 红色代表最远，蓝色代表最近，黑色是无效值
-                cv2.imshow('Depth', d)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-    finally:
-        cam_thread.join(timeout=1)
-        cv2.destroyAllWindows()
 
     # 机械臂测试
     from controllers.arm_controller import ArmController
     arm = ArmController(conn_config, arm_config, gripper_config)
 
     # 获取机械臂DH参数
-    [ret, dh] = arm.rm_get_DH_data()
+    [ret, dh] = arm.arm.rm_get_DH_data()
     print(dh.to_dict())
 
     # 获取并保存初始关节角度
