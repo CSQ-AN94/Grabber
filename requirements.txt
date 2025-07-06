@@ -10,3 +10,7 @@ av
 pygame
 pynput
 wheel
+torch
+torchvision
+torchaudio
+ultralytics

@@ -3,6 +3,7 @@ import time
 from sensors.camera_thread import CameraThread
 import cv2
 import numpy as np
+from utils.config import load_config
 
 class RobotState:
     def __init__(self):
@@ -55,20 +56,22 @@ class RobotState:
             return self.gripper_openness
 
 # 临时测试代码
-if __name__ == '__main__':
-    from controllers.arm_controller import ArmController
-    import time
-
+if __name__ == "__main__":
+    app_config = load_config("config.ini")
+    conn_config = app_config.connections
+    arm_config = app_config.arm
+    gripper_config = app_config.gripper
+    camera_config = app_config.camera
+    
     state = RobotState()
     # 摄像头线程测试
-    cam_thread = CameraThread(state)
+    cam_thread = CameraThread(state, camera_config)
     cam_thread.start()
     print('Camera thread started. Press q to exit.')
 
     # 机械臂测试
-    arm_ip = '192.168.1.18'
-    arm_port = 8080
-    arm = ArmController(arm_ip, arm_port)
+    from controllers.arm_controller import ArmController
+    arm = ArmController(conn_config, arm_config, gripper_config)
 
     # 获取并保存初始关节角度
     joints = arm.get_current_joint_angles()
@@ -87,12 +90,18 @@ if __name__ == '__main__':
     time.sleep(2)
 
     # 机械臂运动测试
-    print('Moving to initial joints...')
+    print('Moving arm...')
     state.set_arm_moving(True)
-    arm.move_to_joints([0, 0, 0, 0, 0, 0]) # 回到零位
-    time.sleep(3)  # 等待运动完成
+    arm.move_to_joints(arm_config.scanning_pose) 
+    time.sleep(3)
+    arm.move_to_joints(arm_config.dropoff_pose)
+    time.sleep(3)
+    arm.move_to_joints(arm_config.zero_pose)
+    time.sleep(3)
     state.set_arm_moving(False)
     print('Move done.')
+
+    # 所有arm_config相关参数均已通过arm_config对象传递
 
     # 摄像头实时显示
     try:

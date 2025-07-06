@@ -1,13 +1,15 @@
 from external.RM_API2.Python.Robotic_Arm.rm_robot_interface import *
 import threading
 import time
+from utils.config import *
 
 class ArmController:
-    def __init__(self, ip_address, port=8080):
+    def __init__(self, conn_config:ConnectionsConfig, arm_config:ArmConfig, gripper_config:GripperConfig):
         self.lock = threading.Lock()
-        # 按官方示例初始化
+        self.config = arm_config
         self.arm = RoboticArm(rm_thread_mode_e.RM_TRIPLE_MODE_E)
-        self.handle = self.arm.rm_create_robot_arm(ip_address, port)
+        self.handle = self.arm.rm_create_robot_arm(conn_config.arm_ip, conn_config.arm_port)
+        self._init_gripper(gripper_config)  # 初始化夹爪
         print(f"机械臂连接句柄: {self.handle.id}")
 
     def move_to_joints(self, joint_angles, speed=30, radius=0, wait=True):
@@ -35,10 +37,7 @@ class ArmController:
             else:
                 return None
 
-    def _init_gripper(self):
-        # 只初始化一次夹爪
-        if hasattr(self, '_gripper_inited') and self._gripper_inited:
-            return
+    def _init_gripper(self, gripper_config: GripperConfig):
         # 设置24V
         self.arm.rm_set_tool_voltage(3)
         time.sleep(0.5)
@@ -46,13 +45,12 @@ class ArmController:
         print("设置RS485的返回码：", self.arm.rm_set_tool_rs485_mode(0, 9600))
         time.sleep(0.2)
         # 写入速度参数
-        print("写入找零速度的返回码：", self._write_gripper_reg(36, 25600))   # 找零速度
+        self._write_gripper_reg(36, gripper_config.zero_speed)  # 找零速度
         time.sleep(0.2)
-        self._write_gripper_reg(38, 51200)   # 初始速度
+        self._write_gripper_reg(38, gripper_config.init_speed)   # 初始速度
         time.sleep(0.2)
-        self._write_gripper_reg(40, 51200)   # 运行速度
+        self._write_gripper_reg(40, gripper_config.run_speed)   # 运行速度
         time.sleep(0.2)
-        self._gripper_inited = True
 
     def _write_gripper_reg(self, address, value):
         """
@@ -73,6 +71,5 @@ class ArmController:
     def set_gripper_openness(self, openness):
         # 0.0(全开)~1.0(全关)
         with self.lock:
-            self._init_gripper()
             pos = int(openness * 256000)
             return self._write_gripper_reg(43, pos)

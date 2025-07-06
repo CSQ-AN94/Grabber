@@ -1,169 +1,213 @@
-# main.py - 项目蓝图与主调度器
-# =============================================
-# 生产者-消费者架构：
-# - sensors/camera_thread.py: 生产者线程，采集相机数据，写入 state.py
-# - utils/state.py: 线程安全的世界状态仓库，所有模块通过它交换数据
-# - main.py: 唯一消费者/指挥官，从 state 获取世界状态，调度 controllers/intelligence
-# - controllers/: 所有硬件操作的唯一入口（机械臂、夹爪、导轨等）
-# - intelligence/: 所有AI/推理/感知的唯一入口（视觉、语音、LLM等）
-# =============================================
+# main.py - The Final Blueprint: Lean, Stream-based, and Researched
+
+import time
+import configparser
 
 from controllers.arm_controller import ArmController
-from controllers.rail_controller import RailController  # 预留接口
-from intelligence.vision import VisionSystem
+from controllers.rail_controller import RailController
+from sensors.camera_thread import CameraThread
+from intelligence.vision import VisionAnalyzer
 from intelligence.speech import SpeechSystem
 from intelligence.llm_parser import LLMParser
-from sensors.camera_thread import CameraThread
-from utils.state import SystemState
+from utils.state import SharedState
 from utils.calibration import Calibration
-import configparser
-import time
+from utils.config import load_config
 
 class GrabberSystem:
     """
-    总指挥类：唯一的消费者，负责调度所有子系统。
-    只与 state.py 交互，不直接操作硬件。
+    总指挥最终版。
+    本设计基于一个核心理念：将复杂性封装在专门的模块中，
+    main.py只负责调用高级API，清晰地编排比赛流程。
     """
     def __init__(self):
-        print("System Initializing...")
-        # 1. 读取配置
-        self.config = configparser.ConfigParser()
-        self.config.read('config.ini')
-        # 2. 初始化世界状态仓库
-        self.state = SystemState()
-        # 3. 初始化各智能模块
-        self.vision = VisionSystem(self.config)
-        self.speech = SpeechSystem(self.config)
-        self.llm = LLMParser(self.config)
-        # 4. 初始化硬件控制器
-        self.arm_ctrl = ArmController(self.config)
-        self.rail_ctrl = RailController(self.config)  # 预留
-        # 5. 启动生产者线程（相机）
-        self.camera_thread = CameraThread(self.state, self.config)
+        """
+        初始化所有系统组件。
+        """
+        print("SYSTEM BOOT: Initializing Grabber...")
+        self.config = load_config('config.ini')
+        self.robot_state = SharedState()
+        self.calibration = Calibration()
+        self.arm_ctrl = ArmController(self.config.connections, self.config.arm, self.config.gripper)
+        self.rail_ctrl = RailController()
+        self.vision_analyzer = VisionAnalyzer()
+        self.speech_system = SpeechSystem()
+        self.llm_parser = LLMParser()
+        self.camera_thread = CameraThread()
         self.camera_thread.start()
-        print("All systems initialized. Ready for competition.")
-        time.sleep(2) # 等待相机线程稳定
+        time.sleep(2)
+        self.arm_ctrl.go_to_home_position()
+        self.rail_ctrl.move_to(0)
+        print("Grabber initialization complete. Welcome!")
 
-    def shutdown(self):
-        print("System Shutting Down...")
-        self.camera_thread.stop()
-        self.arm_ctrl.disconnect()
-        print("Shutdown complete.")
-
-    # =================== 任务A: 商品识别与语音播报 ===================
-    def task_A_identify_all_items(self):
-        print("\n--- Task A: Identify All Items ---")
-        # 1. 机械臂移动到观察位（通过控制器）
-        self.arm_ctrl.move_to_observe_position()
-        # 2. 从状态仓库获取最新图像
-        latest_image = self.state.get_latest_image()
-        # 3. 视觉模块检测所有物体
-        detected_items = self.vision.detect_all_items(latest_image)
-        # 4. 排序（如有需要）
-        sorted_items = self.vision.sort_items_for_broadcast(detected_items)
-        # 5. 语音播报
-        item_names = [item['name'] for item in sorted_items]
-        broadcast_text = f"检测到以下商品: {', '.join(item_names)}"
-        print(f"Broadcast: {broadcast_text}")
-        self.speech.say(broadcast_text)
-
-    # =================== 任务B: 推荐与抓取 ===================
-    def task_B_recommend_and_grab(self, image_path):
-        print(f"\n--- Task B: Recommend and Grab from {image_path} ---")
-        # 1. LLM分析图片，推荐商品
-        recommended_item = self.llm.recommend_item_from_image(image_path)
-        if not recommended_item:
-            self.speech.say("抱歉，我无法根据这张图片推荐商品。")
-            return
-        self.speech.say(f"根据图片内容，我为您推荐{recommended_item}。现在开始抓取。")
-        # 2. 执行抓取流程
-        self._core_grab_item_by_name(recommended_item)
-
-    # =================== 任务C: 语音选购 ===================
-    def task_C_grab_by_voice_command(self):
-        print("\n--- Task C: Grab by Voice Command ---")
-        self.speech.say("请说出您想要的商品。")
-        command_text = self.speech.listen()
-        if not command_text:
-            self.speech.say("抱歉，我没有听到您的指令。")
-            return
-        item_to_grab = self.llm.parse_item_from_text(command_text)
-        if not item_to_grab:
-            self.speech.say("抱歉，我没能理解您想要的商品是什么。")
-            return
-        self.speech.say(f"好的，正在为您抓取{item_to_grab}。")
-        self._core_grab_item_by_name(item_to_grab)
-
-    # =================== 任务D: 结算与金额播报 ===================
-    def task_D_checkout_and_sum(self):
-        print("\n--- Task D: Checkout and Sum ---")
-        self.arm_ctrl.move_to_checkout_scan_position()
-        latest_image = self.state.get_latest_image()
-        checkout_items = self.vision.detect_items_in_checkout_area(latest_image)
-        if not checkout_items:
-            self.speech.say("结算区内没有检测到任何商品。")
-            return
-        total_price, item_details = self.vision.calculate_total_price(checkout_items)
-        summary_text = f"结算区有{item_details}。总计{total_price}元。"
-        print(f"Checkout Summary: {summary_text}")
-        self.speech.say(summary_text)
-
-    # =================== 核心抓取流程 ===================
-    def _core_grab_item_by_name(self, item_name):
-        print(f"--- Core Grab Sequence for: {item_name} ---")
-        # 1. 获取世界状态
-        latest_image = self.state.get_latest_image()
-        latest_point_cloud = self.state.get_latest_point_cloud()
-        # 2. 视觉定位
-        pixel_coords = self.vision.find_item_pixel_location(latest_image, item_name)
-        if not pixel_coords:
-            self.speech.say(f"抱歉，我在货架上找不到{item_name}。")
-            return False
-        # 3. 点云转3D
-        camera_coords_3d = self.vision.get_3d_coords_from_point_cloud(latest_point_cloud, pixel_coords)
-        # 4. 坐标变换
-        arm_target_pose = Calibration.transform_camera_to_arm_base(camera_coords_3d)
-        # 5. 执行抓取
-        success = self.arm_ctrl.execute_grasp_sequence(arm_target_pose)
-        if success:
-            self.speech.say(f"{item_name}已抓取。")
-            self.arm_ctrl.move_to_dropoff_and_release()
-            self.speech.say("已放置到结算区。")
-        else:
-            self.speech.say(f"抱歉，抓取{item_name}失败。")
-        return success
-
-    # =================== 主循环 ===================
-    def run_grabber(self):
-        """命令行界面，触发不同任务。"""
+    def run_main_loop(self):
+        """
+        启动主循环，等待指令。
+        """
         while True:
             print("\n" + "="*50)
             print("Select Competition Task:")
-            print("[A] Identify All Items")
-            print("[B] Recommend and Grab (from 'test_image.jpg')")
-            print("[C] Grab by Voice Command")
-            print("[D] Checkout and Sum")
+            print("[A] Build World Map and Announce")
+            print("[B] Recommend and Grab")
+            print("[C] Select and Grab by Voice")
+            print("[D] Tally and Settlement")
             print("[Q] Quit")
             choice = input("Enter your choice: ").upper()
             if choice == 'A':
-                self.task_A_identify_all_items()
+                self.task_a_build_world_map_and_announce()
             elif choice == 'B':
-                self.task_B_recommend_and_grab('test_image.jpg')
+                self.task_b_recommend_and_grab()
             elif choice == 'C':
-                self.task_C_grab_by_voice_command()
+                self.task_c_select_and_grab_by_voice()
             elif choice == 'D':
-                self.task_D_checkout_and_sum()
+                self.task_d_tally_settlement()
             elif choice == 'Q':
                 break
             else:
                 print("Invalid choice, please try again.")
-            self.arm_ctrl.go_to_home_position() # 每个任务后回到安全位
+        self.shutdown()
 
-if __name__ == "__main__":
-    system = GrabberSystem()
+    # ======================================================================
+    #                          任务实现                  
+    # ======================================================================
+
+    def task_a_build_world_map_and_announce(self):
+        """
+        任务A: 通过YOLOv8流式视频分析构建世界地图并播报。
+        """
+        print("--- EXECUTING TASK A (Stream-based World Mapping) ---")
+        # 1. [arm_ctrl] 机械臂移动到固定的、使得相机视野开阔的扫描姿态。
+        self.arm_ctrl.move_to_scanning_pose()  # 高级API，机械臂到扫描位
+        # 2. [vision] 启动YOLOv8的流式检测模式。
+        print("Starting stream-based detection...")
+        self.vision_analyzer.start_world_building_scan(self.robot_state, self.rail_ctrl)
+        # 3. [rail_ctrl] 平滑地、非阻塞地移动导轨，完成整个扫描行程。
+        self.rail_ctrl.move_to(self.config.getfloat('rail', 'scan_end_pos'), wait=True)
+        # 4. [vision] 停止流式检测，并进行数据后处理。
+        print("Scan complete. Processing data to build final world map...")
+        world_map = self.vision_analyzer.stop_and_process_scan()
+        # 5. [state] 将最终的世界地图存入共享状态，供所有后续任务使用。
+        self.robot_state.update_item_world_map(world_map)
+        print("World map successfully built and stored.")
+        # 6. [rail_ctrl] 导轨返回结算区，为可能的后续任务做准备。
+        self.rail_ctrl.move_to(0)
+        # 7. [speech] 根据这份精确的地图，生成分层播报。
+        announcement = self._generate_layered_announcement(world_map)
+        print(f"Announcement: {announcement}")
+        self.speech_system.say(announcement)
+        # 8. [arm_ctrl] 机械臂返回初始位置。
+        self.arm_ctrl.go_to_home_position()
+
+    def task_b_recommend_and_grab(self):
+        """任务B: 商品推荐与抓取。流程简化为“LLM分析->查表->抓取”"""
+        print("--- EXECUTING TASK B ---")
+        image_path = input("Please provide the path to the recommendation image: ")
+        # 1. [llm_parser] 调用大模型服务，分析图片并提取出明确的商品名称。
+        target_item_name = self.llm_parser.get_item_recommendation_from_image(image_path)
+        # 2. [Helper Function] 直接调用通用的抓取流程。
+        if target_item_name:
+            self.find_and_grab_item(target_item_name)
+        else:
+            self.speech_system.say("抱歉，我无法从图片中确定要推荐的具体商品。")
+
+    def task_c_select_and_grab_by_voice(self):
+        """任务C: 语音选购。流程简化为“语音->LLM解析->查表->抓取”"""
+        print("--- EXECUTING TASK C ---")
+        self.speech_system.say("您好，请问需要什么？")
+        # 1. [speech & llm_parser] 听取并解析语音，获取结构化指令。
+        command = self.llm_parser.parse_voice_command(self.speech_system.listen())
+        # 2. [Helper Function] 直接调用通用的抓取流程。
+        if command and command.get("action") == "fetch":
+            self.find_and_grab_item(command.get("item_name"))
+        else:
+            self.speech_system.say("对不起，我没能理解您的指令。")
+
+    def task_d_tally_settlement(self):
+        """任务D: 商品结算。这是一个独立的流程，不依赖世界地图。"""
+        # 1. [rail_ctrl] 导轨归零
+        self.rail_ctrl.move_to(0)
+        # 2. [arm_ctrl] 机械臂到结算扫描位
+        self.arm_ctrl.move_to_checkout_scan_position()
+        # 3. [vision] YOLOv8静态图片检测结算区商品
+        image = self.robot_state.get_latest_image()
+        items = self.vision_analyzer.detect_items_in_checkout_area(image)
+        # 4. [vision] 统计价格
+        if not items:
+            self.speech_system.say("结算区内没有检测到任何商品。")
+            return
+        total_price, item_details = self.vision_analyzer.calculate_total_price(items)
+        summary = f"结算区有{item_details}。总计{total_price}元。"
+        print(f"Checkout Summary: {summary}")
+        self.speech_system.say(summary)
+
+    # ======================================================================
+    #                       核心辅助函数
+    # ======================================================================
+    def find_and_grab_item(self, item_name):
+        """
+        最终版“查找-规划-抓取”辅助函数。
+        极度高效，因为它不再“寻找”，而是直接“查询”。
+        """
+        print(f"Executing lookup-and-grab for: '{item_name}'")
+        # 1. [state] 直接从世界地图中查询目标的3D世界坐标。
+        target_world_pose = self.robot_state.get_item_pose_from_map(item_name)
+        # 2. 如果查询失败，说明商品不在或已被取走，直接报告，无需移动硬件。
+        if not target_world_pose:
+            self.speech_system.say(f"抱歉，{item_name}似乎已经卖完了。")
+            return False
+        self.speech_system.say(f"好的，已在地图上定位到{item_name}，正在规划路径。")
+        # 3. [arm_ctrl & rail_ctrl] 协同规划并移动到目标的“预备抓取位”。
+        self.arm_ctrl.plan_and_move_to_pre_grasp_pose(target_world_pose, self.rail_ctrl)
+        # 4. [vision] 在预备位置，进行一次性的精确位姿估计。
+        print("In pre-grasp position. Performing fine-tuning perception...")
+        latest_image = self.robot_state.get_latest_image()
+        fine_tuned_pose = self.vision_analyzer.get_precise_grasp_pose(latest_image, target_world_pose)
+        # 5. [arm_ctrl] 执行最终的、短距离的、精确的抓取序列。
+        success = self.arm_ctrl.execute_final_grasp_sequence(fine_tuned_pose)
+        # 6. [arm_ctrl & rail_ctrl] 抓取成功后，移动到放置区并释放。
+        if success:
+            self.speech_system.say(f"抓取{item_name}成功")
+            self.move_to_dropoff_and_release()
+        else:
+            self.speech_system.say(f"抓取{item_name}失败，可能是最终定位或夹爪出现问题。")
+        # 7. [arm_ctrl & rail_ctrl] 返回初始状态。
+        self.arm_ctrl.go_to_home_position()
+        self.rail_ctrl.move_to(0)
+        return success
+
+    def move_to_dropoff_and_release(self):
+        """
+        放置流程：导轨归零，机械臂到放置位并松开夹爪。
+        """
+        self.rail_ctrl.move_to(0)
+        self.arm_ctrl.move_to_dropoff_and_release()
+
+    def _generate_layered_announcement(self, world_map):
+        """
+        根据世界地图生成分层播报文本。
+        具体实现可根据世界地图结构自定义。
+        """
+        # ... (与v2版相同) ...
+        raise NotImplementedError("请根据世界地图结构实现分层播报。")
+
+    def shutdown(self):
+        """
+        安全关闭所有系统。
+        """
+        print("System Shutting Down...")
+        self.camera_thread.stop()
+        self.arm_ctrl.disconnect()
+        self.rail_ctrl.disconnect()
+        print("Shutdown complete.")
+
+# ======================================================================
+#                      程序主入口                    
+# ======================================================================
+if __name__ == '__main__':
+    grabber = GrabberSystem()
     try:
-        system.run_grabber()
+        # 为了快速测试，可以直接调用特定任务
+        # grabber.task_a_build_world_map_and_announce()
+        grabber.run_main_loop()
     except KeyboardInterrupt:
-        print("\nManual interruption detected.")
-    finally:
-        system.shutdown()
+        print("\nManual shutdown requested.")
+        grabber.shutdown()

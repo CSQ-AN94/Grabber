@@ -8,6 +8,7 @@
     - `python3 utils/state.py` 验证相机/机械臂/夹爪工作状态
 
 ## 项目框架
+```
 Grabber/
 │
 ├── main.py                 # 主程序入口
@@ -28,8 +29,10 @@ Grabber/
 │
 ├── utils/
 │   ├── __init__.py
-│   ├── state.py            # 共享的机器人状态，线程安全
+│   ├── state.py            # 共享的机器人状态和世界信息，线程安全
 │   └── calibration.py      # 坐标系转换
+|   └── config.py           # 处理config.ini，分发配置
 │
 ├── config.ini              # 配置文件
 └── requirements.txt
+```
