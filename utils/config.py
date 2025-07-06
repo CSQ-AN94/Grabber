@@ -29,6 +29,14 @@ class CameraConfig:
     frame_timeout_ms: int
     sleep_interval: float
     # 可扩展分辨率、帧率等参数
+
+@dataclass
+class RailConfig:
+    port: str
+    home_position: float
+    scan_start: float
+    scan_end: float
+    scan_speed: float
     
 # --- 主配置类，聚合所有部分 ---
 @dataclass
@@ -37,6 +45,7 @@ class AppConfig:
     arm: ArmConfig
     gripper: GripperConfig
     camera: CameraConfig
+    rail: RailConfig
     
 # --- 主加载函数 ---
 def load_config(path: str = 'config.ini') -> AppConfig:
@@ -76,9 +85,18 @@ def load_config(path: str = 'config.ini') -> AppConfig:
         sleep_interval=parser.getfloat('camera', 'sleep_interval', fallback=0.01)
     )
 
+    rail_config = RailConfig(
+        port=parser.get('rail', 'port', fallback='/dev/ttyUSB0'),
+        home_position=parser.getfloat('rail', 'home_position', fallback=0.0),
+        scan_start=parser.getfloat('rail', 'scan_start', fallback=0.0),
+        scan_end=parser.getfloat('rail', 'scan_end', fallback=1.0),
+        scan_speed=parser.getfloat('rail', 'scan_speed', fallback=0.1)
+    )
+
     return AppConfig(
         connections=conn_config,
         arm=arm_config,
         gripper=gripper_config,
-        camera=camera_config
+        camera=camera_config,
+        rail=rail_config
     )

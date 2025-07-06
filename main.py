@@ -4,7 +4,6 @@ import time
 import configparser
 
 from controllers.arm_controller import ArmController
-from controllers.rail_controller import RailController
 from sensors.camera_thread import CameraThread
 from intelligence.vision import VisionAnalyzer
 from intelligence.speech import SpeechSystem
@@ -12,6 +11,7 @@ from intelligence.llm_parser import LLMParser
 from utils.state import SharedState
 from utils.calibration import Calibration
 from utils.config import load_config
+from controllers.rail_controller import RailController
 
 class GrabberSystem:
     """
@@ -28,7 +28,7 @@ class GrabberSystem:
         self.robot_state = SharedState()
         self.calibration = Calibration()
         self.arm_ctrl = ArmController(self.config.connections, self.config.arm, self.config.gripper)
-        self.rail_ctrl = RailController()
+        self.rail_ctrl = RailController(self.config.rail)
         self.vision_analyzer = VisionAnalyzer()
         self.speech_system = SpeechSystem()
         self.llm_parser = LLMParser()
@@ -202,12 +202,25 @@ class GrabberSystem:
 # ======================================================================
 #                      程序主入口                    
 # ======================================================================
-if __name__ == '__main__':
-    grabber = GrabberSystem()
-    try:
-        # 为了快速测试，可以直接调用特定任务
-        # grabber.task_a_build_world_map_and_announce()
-        grabber.run_main_loop()
-    except KeyboardInterrupt:
-        print("\nManual shutdown requested.")
-        grabber.shutdown()
+def main():
+    app_config = load_config("config.ini")
+    rail_config = app_config.rail
+    rail = RailController(rail_config)
+    # 示例：主流程中调用rail
+    print(f"[main] Rail at home: {rail.get_current_position()}")
+    rail.move_to(rail_config.scan_end)
+    print(f"[main] Rail moved to: {rail.get_current_position()}")
+    rail.move_to(rail_config.home_position)
+    print(f"[main] Rail returned to home: {rail.get_current_position()}")
+    # ...后续主流程...
+
+if __name__ == "__main__":
+    main()
+    # grabber = GrabberSystem()
+    # try:
+    #     # 为了快速测试，可以直接调用特定任务
+    #     # grabber.task_a_build_world_map_and_announce()
+    #     grabber.run_main_loop()
+    # except KeyboardInterrupt:
+    #     print("\nManual shutdown requested.")
+    #     grabber.shutdown()

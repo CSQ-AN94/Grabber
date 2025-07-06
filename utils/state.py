@@ -62,6 +62,7 @@ if __name__ == "__main__":
     arm_config = app_config.arm
     gripper_config = app_config.gripper
     camera_config = app_config.camera
+    rail_config = app_config.rail
     
     state = RobotState()
     # 摄像头线程测试
@@ -102,6 +103,15 @@ if __name__ == "__main__":
     print('Move done.')
 
     # 所有arm_config相关参数均已通过arm_config对象传递
+
+    # 滑轨控制器测试
+    from controllers.rail_controller import RailController
+    rail = RailController(rail_config)
+    print(f"Rail home position: {rail.get_current_position()}")
+    rail.move_to(rail_config.scan_end)
+    print(f"Rail moved to: {rail.get_current_position()}")
+    rail.move_to(rail_config.home_position)
+    print(f"Rail returned to home: {rail.get_current_position()}")
 
     # 摄像头实时显示
     try:
