@@ -2,7 +2,7 @@
 0. (Optional) 如果在Jetson上使用，建议ssh
     1. `ssh nb@192.168.3.10 -Y`
     2. 密码是`nb`
-    3. `cd /app`到项目文件夹
+    3. `cd ~/dev/Grabber`到项目文件夹
 1. 拉取仓库到本地
 2. 根据具体IP和端口修改你的docker-compose.yml中的http_proxy和https_proxy
 3. 一键构建镜像 `docker compose build`
