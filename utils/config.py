@@ -2,6 +2,7 @@ import configparser
 from dataclasses import dataclass
 import numpy as np
 from typing import List
+import ast
 
 @dataclass
 class ConnectionsConfig:
@@ -14,6 +15,7 @@ class ArmConfig:
     zero_pose: List[float]
     dropoff_pose: List[float]
     checkout_scan_pose: List[float]
+    dh_params: List[List[float]]  # Added DH parameters
 
 
 @dataclass
@@ -37,7 +39,11 @@ class RailConfig:
     scan_start: float
     scan_end: float
     scan_speed: float
-    
+
+@dataclass
+class CalibrationConfig:
+    T_end_to_camera: np.ndarray  # 手眼标定矩阵
+
 # --- 主配置类，聚合所有部分 ---
 @dataclass
 class AppConfig:
@@ -46,6 +52,7 @@ class AppConfig:
     gripper: GripperConfig
     camera: CameraConfig
     rail: RailConfig
+    calibration: CalibrationConfig
     
 # --- 主加载函数 ---
 def load_config(path: str = 'config.ini') -> AppConfig:
@@ -58,6 +65,14 @@ def load_config(path: str = 'config.ini') -> AppConfig:
     def _parse_list(s: str) -> List[float]:
         """一个辅助函数，用于将逗号分隔的字符串解析为浮点数列表"""
         return [float(x.strip()) for x in s.split(',')]
+    
+    def _parse_matrix(s):
+        # 解析形如[[...],[...],[...],[...]]的字符串为numpy数组
+        return np.array(ast.literal_eval(s), dtype=float)
+
+    def _parse_dh_params(s):
+        # 解析形如[[a,alpha,d,theta_offset],...]的字符串为list
+        return ast.literal_eval(s)
     
     # 使用上面定义的dataclass填充配置
     conn_config = ConnectionsConfig(
@@ -93,10 +108,18 @@ def load_config(path: str = 'config.ini') -> AppConfig:
         scan_speed=parser.getfloat('rail', 'scan_speed', fallback=0.1)
     )
 
+    # 解析DH参数
+    dh_params = _parse_dh_params(parser.get('arm', 'dh_params', fallback='[]'))
+    arm_config.dh_params = dh_params
+    # 解析手眼标定矩阵
+    T_end_to_camera = _parse_matrix(parser.get('calibration', 'T_end_to_camera', fallback=str(np.eye(4).tolist())))
+    calibration_config = CalibrationConfig(T_end_to_camera=T_end_to_camera)
+
     return AppConfig(
         connections=conn_config,
         arm=arm_config,
         gripper=gripper_config,
         camera=camera_config,
-        rail=rail_config
+        rail=rail_config,
+        calibration=calibration_config
     )
