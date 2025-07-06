@@ -22,7 +22,6 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-build/
 dist/
 *.egg-info/
 pip-wheel-metadata/
