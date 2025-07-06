@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 from utils.config import load_config
 from utils.calibration import Calibration
-from controllers.arm_controller import ArmController
+from external.RM_API2.Demo.RMDemo_Python.RMDemo_Gripper.src.Robotic_Arm.rm_robot_interface import RoboticArm
 
 class RobotState:
     def __init__(self):
@@ -155,10 +155,10 @@ if __name__ == "__main__":
         cam_thread.join(timeout=1)
         cv2.destroyAllWindows()
 
-    # Calibration测试
-    dh_params = app_config.arm.dh_params
+    # Calibration测试（动态获取DH参数）
+    robot = RoboticArm()  # 需根据实际接口初始化
     T_end_to_camera = app_config.calibration.T_end_to_camera
-    calib = Calibration(dh_params, T_end_to_camera)
+    calib = Calibration(robot, T_end_to_camera)
     # 伪造一组关节角度、滑轨位置、相机点
     joint_angles = [0, 0, 0, 0, 0, 0]  # 6轴机械臂
     rail_position = 0.5  # 滑轨位置

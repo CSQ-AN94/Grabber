@@ -1,16 +1,27 @@
 # utils/calibration.py - Pseudocode
 
 import numpy as np
-# 可能需要 cv2 来做手眼标定
-import cv2 
+import cv2
+from external.RM_API2.Demo.RMDemo_Python.RMDemo_Gripper.src.Robotic_Arm.rm_robot_interface import RoboticArm
 
 class Calibration:
-    def __init__(self, T_end_to_camera):
-        self.dh_params = None  # 需后续注入
-        self.T_end_to_camera = T_end_to_camera  # 4x4 numpy array
+    def __init__(self, robot: RoboticArm, T_end_to_camera: np.ndarray):
+        # 通过机械臂接口获取DH参数
+        ret, dh_dict = robot.rm_get_DH_data()
+        if ret != 0:
+            raise RuntimeError(f"获取DH参数失败，错误码: {ret}")
+        # dh_dict: {'d': [...], 'a': [...], 'alpha': [...], 'offset': [...]}
+        self.dh_params = self._convert_dh_dict_to_list(dh_dict)
+        self.T_end_to_camera = T_end_to_camera
 
-    def set_dh_params(self, dh_params):
-        self.dh_params = dh_params
+    @staticmethod
+    def _convert_dh_dict_to_list(dh_dict):
+        # 转为[[a, alpha, d, theta_offset], ...]，单位转换: alpha/offset需从度转弧度
+        a = dh_dict['a']
+        alpha = [np.deg2rad(x) for x in dh_dict['alpha']]
+        d = dh_dict['d']
+        offset = [np.deg2rad(x) for x in dh_dict['offset']]
+        return [[a[i], alpha[i], d[i], offset[i]] for i in range(len(a))]
 
     @staticmethod
     def dh_transform(a, alpha, d, theta):
@@ -27,8 +38,6 @@ class Calibration:
         """
         正运动学计算: 根据关节角度，计算末端相对于基座的变换矩阵。
         """
-        if self.dh_params is None:
-            raise ValueError("DH参数未设置")
         T = np.eye(4)
         for i, angle in enumerate(joint_angles):
             a, alpha, d, theta_offset = self.dh_params[i]
@@ -66,8 +75,23 @@ class Calibration:
         """
         这是本模块对外的核心API，执行完整的坐标转换链。
         """
-        if self.dh_params is None:
-            raise ValueError("DH参数未设置")
+        # 伪代码:
+        # 1. 计算 T_base_to_end
+        #    T_base_to_end = self.calculate_fk(joint_angles)
+        
+        # 2. 计算 T_rail_to_base
+        #    T_rail_to_base = create_translation_matrix_x(rail_position)
+        
+        # 3. 组合变换矩阵 (实现你的公式)
+        #    T_world_to_camera = T_rail_to_base @ T_base_to_end @ self.T_end_to_camera
+        
+        # 4. 进行坐标点转换
+        #    # 将相机坐标下的点 (numpy array, shape (3,)) 转换为齐次坐标 (shape (4,))
+        #    camera_point_homogeneous = np.append(camera_point, 1)
+        #    # 使用总的变换矩阵进行转换
+        #    world_point_homogeneous = T_world_to_camera @ camera_point_homogeneous
+        #    # 返回非齐次坐标 (前三个元素)
+        #    return world_point_homogeneous[:3]
         # T_base_to_end
         T_base_to_end = self.calculate_fk(joint_angles)
         # T_rail_to_base: 仅X轴平移

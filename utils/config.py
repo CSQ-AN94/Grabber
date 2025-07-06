@@ -16,7 +16,6 @@ class ArmConfig:
     dropoff_pose: List[float]
     checkout_scan_pose: List[float]
 
-
 @dataclass
 class GripperConfig:
     zero_speed: int
@@ -68,7 +67,7 @@ def load_config(path: str = 'config.ini') -> AppConfig:
     def _parse_matrix(s):
         # 解析形如[[...],[...],[...],[...]]的字符串为numpy数组
         return np.array(ast.literal_eval(s), dtype=float)
-
+    
     # 使用上面定义的dataclass填充配置
     conn_config = ConnectionsConfig(
         arm_ip=parser.get('connections', 'arm_ip'),
