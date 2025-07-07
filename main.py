@@ -8,16 +8,14 @@ from sensors.camera_thread import CameraThread
 from intelligence.vision import VisionAnalyzer
 from intelligence.speech import SpeechSystem
 from intelligence.llm_parser import LLMParser
-from utils.state import SharedState
+from utils.state import RobotState
 from utils.calibration import Calibration
 from utils.config import load_config
 from controllers.rail_controller import RailController
 
 class GrabberSystem:
     """
-    总指挥最终版。
-    本设计基于一个核心理念：将复杂性封装在专门的模块中，
-    main.py只负责调用高级API，清晰地编排比赛流程。
+    调用高级API，清晰地编排比赛流程。
     """
     def __init__(self):
         """
@@ -25,18 +23,19 @@ class GrabberSystem:
         """
         print("SYSTEM BOOT: Initializing Grabber...")
         self.config = load_config('config.ini')
-        self.robot_state = SharedState()
-        self.calibration = Calibration()
+        self.robot_state = RobotState()
         self.arm_ctrl = ArmController(self.config.connections, self.config.arm, self.config.gripper)
+        self.calibration = Calibration(self.arm_ctrl.arm.rm_get_DH_data()[1], self.config.calibration.T_end_to_camera)
         self.rail_ctrl = RailController(self.config.rail)
+        self.camera_thread = CameraThread(self.robot_state, self.config.camera)
+        self.camera_thread.start()
         self.vision_analyzer = VisionAnalyzer()
         self.speech_system = SpeechSystem()
         self.llm_parser = LLMParser()
-        self.camera_thread = CameraThread()
-        self.camera_thread.start()
+        self.arm_ctrl.move_to_joints(self.config.arm.scanning_pose)
         time.sleep(2)
-        self.arm_ctrl.go_to_home_position()
         self.rail_ctrl.move_to(0)
+        time.sleep(2)
         print("Grabber initialization complete. Welcome!")
 
     def run_main_loop(self):
@@ -76,7 +75,7 @@ class GrabberSystem:
         """
         print("--- EXECUTING TASK A (Stream-based World Mapping) ---")
         # 1. [arm_ctrl] 机械臂移动到固定的、使得相机视野开阔的扫描姿态。
-        self.arm_ctrl.move_to_scanning_pose()  # 高级API，机械臂到扫描位
+        self.arm_ctrl.move_to_joints(self.config.arm.scanning_pose)
         # 2. [vision] 启动YOLOv8的流式检测模式。
         print("Starting stream-based detection...")
         self.vision_analyzer.start_world_building_scan(self.robot_state, self.rail_ctrl)
@@ -126,7 +125,7 @@ class GrabberSystem:
         # 1. [rail_ctrl] 导轨归零
         self.rail_ctrl.move_to(0)
         # 2. [arm_ctrl] 机械臂到结算扫描位
-        self.arm_ctrl.move_to_checkout_scan_position()
+        self.arm_ctrl.move_to_joints(self.config.arm.checkout_scan_pose)
         # 3. [vision] YOLOv8静态图片检测结算区商品
         image = self.robot_state.get_latest_image()
         items = self.vision_analyzer.detect_items_in_checkout_area(image)
@@ -144,8 +143,7 @@ class GrabberSystem:
     # ======================================================================
     def find_and_grab_item(self, item_name):
         """
-        最终版“查找-规划-抓取”辅助函数。
-        极度高效，因为它不再“寻找”，而是直接“查询”。
+        “查找-规划-抓取”辅助函数。
         """
         print(f"Executing lookup-and-grab for: '{item_name}'")
         # 1. [state] 直接从世界地图中查询目标的3D世界坐标。
@@ -170,7 +168,7 @@ class GrabberSystem:
         else:
             self.speech_system.say(f"抓取{item_name}失败，可能是最终定位或夹爪出现问题。")
         # 7. [arm_ctrl & rail_ctrl] 返回初始状态。
-        self.arm_ctrl.go_to_home_position()
+        self.arm_ctrl.move_to_joints(self.config.arm.scanning_pose)
         self.rail_ctrl.move_to(0)
         return success
 
@@ -179,7 +177,8 @@ class GrabberSystem:
         放置流程：导轨归零，机械臂到放置位并松开夹爪。
         """
         self.rail_ctrl.move_to(0)
-        self.arm_ctrl.move_to_dropoff_and_release()
+        self.arm_ctrl.move_to_joints(self.config.arm.dropoff_pose)
+        self.arm_ctrl.set_gripper_openness(1.0)  # 松开夹爪
 
     def _generate_layered_announcement(self, world_map):
         """

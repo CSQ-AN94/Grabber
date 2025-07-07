@@ -17,7 +17,7 @@ services:
       - .:/app
       - /tmp/.X11-unix:/tmp/.X11-unix:rw # 挂载X11 socket
       - ~/.Xauthority:/root/.Xauthority:ro # 挂载X11授权文件
-
+      
     # 这里定义容器运行时的环境变量
     environment:
       - http_proxy=http://192.168.3.7:7897

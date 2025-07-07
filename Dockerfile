@@ -33,10 +33,11 @@ RUN apt-get update && apt-get install -y \
 # --- 设置工作目录并拷贝pip依赖相关文件 ---
 WORKDIR /app
 COPY requirements.txt .
-COPY external/ ./external/
 
 # --- 安装Python核心依赖 ---
 RUN pip install --no-cache-dir -r requirements.txt
+
+COPY external/ ./external/
 
 # --- 编译并强制安装pyorbbecsdk ---
 RUN cd /app/external/pyorbbecsdk && \
@@ -52,6 +53,6 @@ RUN cd /app/external/pyorbbecsdk && \
 # --- 安装udev规则 ---
 RUN bash /app/external/pyorbbecsdk/scripts/install_udev_rules.sh
 
-ENV PYTHONPATH=/app
 COPY . .
+ENV PYTHONPATH=/app
 CMD ["bash"]

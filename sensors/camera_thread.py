@@ -10,8 +10,6 @@ class CameraThread(threading.Thread):
         super().__init__()
         self.shared_state = shared_state
         self.is_running = True
-        self.pipeline = None
-        self.config = None
         self.camera_config = camera_config
 
         # 摄像头初始化
@@ -27,9 +25,12 @@ class CameraThread(threading.Thread):
             self.config.enable_stream(depth_profile)
         self.pipeline.start(self.config)
         print("相机线程已启动")
+        print("设备信息:", Context().query_devices().get_device_by_index(0).get_device_info())
         print("RGB内参:", color_profile.as_video_stream_profile().get_intrinsic())
         print("深度内参:", depth_profile.as_video_stream_profile().get_intrinsic())
         print("深度到RGB转换矩阵", depth_profile.get_extrinsic_to(color_profile))
+        print("RGB畸变:", color_profile.get_distortion())
+        print("深度畸变:", depth_profile.get_distortion())
 
     def run(self):
         while self.is_running:
@@ -57,3 +58,23 @@ class CameraThread(threading.Thread):
         self.is_running = False
         if self.pipeline:
             self.pipeline.stop()
+
+    def get_camera_intrinsics(self):
+        """
+        返回RGB相机的内参矩阵和畸变系数。
+        """
+        try:
+            K = np.array([
+                [self.color_intrinstic.fx, 0, self.color_intrinstic.cx],
+                [0, self.color_intrinstic.fy, self.color_intrinstic.cy],
+                [0, 0, 1]
+            ])
+            # pyorbbecsdk的distortion字段可能不存在，若无则返回全零
+            if hasattr(self.color_intrinstic, 'distortion'):
+                dist = np.array(self.color_intrinstic.distortion[:5])
+            else:
+                dist = np.zeros(5)
+            return K, dist
+        except Exception:
+            # 占位返回
+            return np.eye(3), np.zeros(5)

@@ -1,6 +1,7 @@
 requests
 numpy<2.0
 opencv-python
+opencv-contrib-python
 sounddevice
 playsound==1.2.2 
 configparser

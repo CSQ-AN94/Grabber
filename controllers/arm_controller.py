@@ -37,6 +37,26 @@ class ArmController:
             else:
                 return None
 
+    def get_current_end_effector_pose(self):
+        """
+        返回当前末端位姿[x, y, z, roll, pitch, yaw]，单位: 米, 弧度。
+        若有真实接口可直接获取，否则用当前关节角度做正运动学近似。
+        """
+        try:
+            joints = self.get_current_joint_angles()
+            if joints is None:
+                joints = [0, 0, 0, 0, 0, 0]
+            from utils.calibration import Calibration
+            [_, dh_dict] = self.arm.rm_get_DH_data()
+            T = Calibration(dh_dict, None).calculate_fk(joints)
+            x, y, z = T[0, 3], T[1, 3], T[2, 3]
+            import scipy.spatial.transform
+            r = scipy.spatial.transform.Rotation.from_matrix(T[:3, :3])
+            roll, pitch, yaw = r.as_euler('xyz', degrees=False)
+            return [x, y, z, roll, pitch, yaw]
+        except Exception:
+            return [0, 0, 0, 0, 0, 0]
+
     def _init_gripper(self, gripper_config: GripperConfig):
         # 设置24V
         self.arm.rm_set_tool_voltage(3)
