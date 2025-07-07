@@ -65,7 +65,7 @@ class CameraThread(threading.Thread):
             self.pipeline.start(config)
             
             print("[CameraThread] Camera initialized successfully.")
-            print("[CameraThread] Device information:", self.pipeline.get_device().get_info(OBDeviceInfo.NAME))
+            print("[CameraThread] Device information:", Context().query_devices().get_device_by_index(0).get_device_info())
             print("[CameraThread] Color Intrinsics:", self.color_intrinsics)
             print("[CameraThread] Depth Intrinsics:", self.depth_intrinsics)
             print("[CameraThread] Depth to Color Extrinsics:", self.depth_to_color_extrinsics)

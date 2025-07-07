@@ -144,19 +144,6 @@ if __name__ == "__main__":
     rail.move_to(rail_config.home_position)
     print(f"Rail returned to home: {rail.get_current_position()}")
 
-    # 主线程可继续做其他事
-    try:
-        while not should_exit['exit']:
-            time.sleep(0.2)
-            # 这里可以插入机械臂/滑轨/标定等操作
-            # 例如定时打印关节角度
-            # print('Current joints:', state.get_joint_angles())
-    finally:
-        should_exit['exit'] = True
-        cam_thread.join(timeout=2)
-        display_thread.join(timeout=2)
-        print('所有线程已安全退出。')
-
     # 一键手眼标定
     if input('是否进行手眼标定？(y/n): ').lower() == 'y':
         calibrator = HandEyeCalibrator(arm, state, cam_thread)
@@ -173,7 +160,6 @@ if __name__ == "__main__":
         camera_point = np.array([0.1, 0.2, 0.3])
         world_point = calib.transform_camera_to_world(camera_point, joint_angles, rail_position)
         print(f"Camera point {camera_point} -> World point {world_point}")
-        exit(0)
 
     # Calibration测试（动态获取DH参数）
     T_end_to_camera = app_config.calibration.T_end_to_camera
@@ -184,3 +170,8 @@ if __name__ == "__main__":
     camera_point = np.array([0.1, 0.2, 0.3])  # 相机系下的点
     world_point = calib.transform_camera_to_world(camera_point, joint_angles, rail_position)
     print(f"Camera point {camera_point} -> World point {world_point}")
+
+    should_exit['exit'] = True
+    cam_thread.join(timeout=2)
+    display_thread.join(timeout=2)
+    print('所有线程已安全退出。')
