@@ -22,40 +22,18 @@ class ArmController:
             # connect=0: 不连接下一个轨迹
             return self.arm.rm_movej(joint_angles, speed, radius, 0, block)
 
-    def move_to_cartesian_pose(self, pose, speed=30, radius=0, wait=True):
-        # pose: [x, y, z, rx, ry, rz] (单位: mm, deg)
-        with self.lock:
-            block = 1 if wait else 0
-            return self.arm.rm_movel(pose, speed, radius, 0, block)
-
     def get_current_joint_angles(self):
-        # 返回当前6个关节角度 (单位: 度)
+        """
+        返回当前6个关节角度 (单位: 弧度)
+        """
         with self.lock:
-            code, joints = self.arm.rm_get_joint_degree()
+            code, joints_deg = self.arm.rm_get_joint_degree() # 返回值是度
             if code == 0:
-                return joints
+                import numpy as np
+                joints_rad = [np.deg2rad(j) for j in joints_deg] # 转换为弧度
+                return joints_rad
             else:
                 return None
-
-    def get_current_end_effector_pose(self):
-        """
-        返回当前末端位姿[x, y, z, roll, pitch, yaw]，单位: 米, 弧度。
-        若有真实接口可直接获取，否则用当前关节角度做正运动学近似。
-        """
-        try:
-            joints = self.get_current_joint_angles()
-            if joints is None:
-                joints = [0, 0, 0, 0, 0, 0]
-            from utils.calibration import Calibration
-            [_, dh_dict] = self.arm.rm_get_DH_data()
-            T = Calibration(dh_dict, None).calculate_fk(joints)
-            x, y, z = T[0, 3], T[1, 3], T[2, 3]
-            import scipy.spatial.transform
-            r = scipy.spatial.transform.Rotation.from_matrix(T[:3, :3])
-            roll, pitch, yaw = r.as_euler('xyz', degrees=False)
-            return [x, y, z, roll, pitch, yaw]
-        except Exception:
-            return [0, 0, 0, 0, 0, 0]
 
     def _init_gripper(self, gripper_config: GripperConfig):
         # 设置24V

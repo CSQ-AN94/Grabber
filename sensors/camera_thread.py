@@ -1,80 +1,149 @@
 import threading
 import time
 import numpy as np
-import cv2
 from pyorbbecsdk import *
 from external.pyorbbecsdk.examples.utils import frame_to_bgr_image
 
 class CameraThread(threading.Thread):
+    """
+    后台摄像头线程
+    持续地从相机硬件获取帧，并将其安全地放入共享状态对象中。
+    """
     def __init__(self, shared_state, camera_config):
         super().__init__()
         self.shared_state = shared_state
-        self.is_running = True
         self.camera_config = camera_config
+        
+        # 使用 threading.Event 来控制线程的启停
+        self.stop_event = threading.Event()
+        
+        # 将线程设置为“守护线程”，这样主程序退出时，它会自动结束
+        self.daemon = True
 
-        # 摄像头初始化
-        self.config = Config()
-        self.pipeline = Pipeline()
-        if self.camera_config.enable_color:
+        # --- 将硬件初始化与对象创建分离 ---
+        self.pipeline = None
+        self.color_intrinsics = None
+        self.depth_intrinsics = None
+        self.depth_to_color_extrinsics = None
+        self.color_distortion = None
+        
+        # 尝试初始化，但不会让程序崩溃
+        self.initialization_successful = self._initialize_camera()
+        if not self.initialization_successful:
+            print("[CameraThread] CRITICAL: Camera initialization failed. Thread will not produce data.")
+
+    def _initialize_camera(self):
+        """
+        一个私有的初始化方法。将硬件交互与构造函数分离。
+        """
+        try:
+            self.pipeline = Pipeline()
+            config = Config()
+            
+            # 获取并保存彩色相机内参、外参和畸变
             color_profile_list = self.pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
-            color_profile = color_profile_list.get_default_video_stream_profile()
-            self.config.enable_stream(color_profile)
-        if self.camera_config.enable_depth:
+            # 分辨率和刷新率来自https://www.orbbec.com/products/stereo-vision-camera/gemini-336l/
+            color_profile = color_profile_list.get_video_stream_profile(1280, 800, OBFormat.BGR, 30)
+            if color_profile is None:
+                print("[CameraThread] ERROR: No matching color profile found.")
+                return False
+            config.enable_stream(color_profile)
+            self.color_intrinsics = color_profile.as_video_stream_profile().get_intrinsic()
+            self.color_distortion = color_profile.as_video_stream_profile().get_distortion()
+
+            # 获取并保存深度相机内参和到彩色的外参
             depth_profile_list = self.pipeline.get_stream_profile_list(OBSensorType.DEPTH_SENSOR)
-            depth_profile = depth_profile_list.get_default_video_stream_profile()
-            self.config.enable_stream(depth_profile)
-        self.pipeline.start(self.config)
-        print("相机线程已启动")
-        print("设备信息:", Context().query_devices().get_device_by_index(0).get_device_info())
-        print("RGB内参:", color_profile.as_video_stream_profile().get_intrinsic())
-        print("深度内参:", depth_profile.as_video_stream_profile().get_intrinsic())
-        print("深度到RGB转换矩阵", depth_profile.get_extrinsic_to(color_profile))
-        print("RGB畸变:", color_profile.get_distortion())
-        print("深度畸变:", depth_profile.get_distortion())
+            depth_profile = depth_profile_list.get_video_stream_profile(1280, 800, OBFormat.Y16, 30)
+            if depth_profile is None:
+                print("[CameraThread] ERROR: No matching depth profile found.")
+                return False
+            config.enable_stream(depth_profile)
+            self.depth_intrinsics = depth_profile.as_video_stream_profile().get_intrinsic()
+            self.depth_to_color_extrinsics = depth_profile.get_extrinsic_to(color_profile)
+
+            # 启动管线
+            self.pipeline.start(config)
+            
+            print("[CameraThread] Camera initialized successfully.")
+            print("[CameraThread] Device information:", self.pipeline.get_device().get_info(OBDeviceInfo.NAME))
+            print("[CameraThread] Color Intrinsics:", self.color_intrinsics)
+            print("[CameraThread] Depth Intrinsics:", self.depth_intrinsics)
+            print("[CameraThread] Depth to Color Extrinsics:", self.depth_to_color_extrinsics)
+            print("[CameraThread] Color Distortion:", self.color_distortion)
+            return True
+        except Exception as e:
+            print(f"[CameraThread] ERROR during initialization: {e}")
+            return False
 
     def run(self):
-        while self.is_running:
-            frames = self.pipeline.wait_for_frames(self.camera_config.frame_timeout_ms)
-            if frames is None:
-                time.sleep(self.camera_config.sleep_interval)
-                continue
-            color_frame = frames.get_color_frame() if self.camera_config.enable_color else None
-            depth_frame = frames.get_depth_frame() if self.camera_config.enable_depth else None
-            if (self.camera_config.enable_color and color_frame is None) or (self.camera_config.enable_depth and depth_frame is None):
-                time.sleep(self.camera_config.sleep_interval)
-                continue
-            color_image = frame_to_bgr_image(color_frame) if color_frame is not None else None
+        """
+        线程主循环。将以最大可能的速度获取和处理帧。
+        """
+        # 如果初始化失败，则此线程不执行任何操作
+        if not self.initialization_successful:
+            return
+
+        while not self.stop_event.is_set():
             try:
-                depth_data = None
-                if depth_frame is not None:
-                    depth_data = np.frombuffer(depth_frame.get_data(), dtype=np.uint16)
-                    depth_data = depth_data.reshape(depth_frame.get_height(), depth_frame.get_width())
-            except Exception:
-                depth_data = None
-            self.shared_state.update_frames(color_image, depth_data)
-            time.sleep(self.camera_config.sleep_interval)
+                frames = self.pipeline.wait_for_frames(1000) # 等待1秒超时
+                if frames is None:
+                    continue
+
+                color_frame = frames.get_color_frame()
+                depth_frame = frames.get_depth_frame()
+
+                if color_frame is None or depth_frame is None:
+                    continue
+                
+                # --- 数据处理 ---
+                color_image = frame_to_bgr_image(color_frame)
+                
+                depth_data = np.frombuffer(depth_frame.get_data(), dtype=np.uint16).reshape(
+                    depth_frame.get_height(), depth_frame.get_width()
+                )
+                
+                # 将最新数据安全地放入共享状态
+                self.shared_state.update_frames(color_image, depth_data)
+                
+            except Exception as e:
+                print(f"[CameraThread] ERROR in run loop: {e}")
+                time.sleep(1) # 如果发生错误，等待一秒再重试
 
     def stop(self):
-        self.is_running = False
-        if self.pipeline:
+        """
+        向线程发送停止信号并清理资源。
+        """
+        print("[CameraThread] Stop signal received.")
+        self.stop_event.set()
+        
+    def join(self, timeout=None):
+        """
+        重写join方法，确保在等待线程结束前先停止管线。
+        """
+        if self.pipeline and self.initialization_successful:
             self.pipeline.stop()
+            print("[CameraThread] Pipeline stopped.")
+        super().join(timeout)
 
     def get_camera_intrinsics(self):
         """
-        返回RGB相机的内参矩阵和畸变系数。
+        安全地返回在初始化时获取的RGB相机内参。
+        如果初始化失败，则返回None。
         """
-        try:
-            K = np.array([
-                [self.color_intrinstic.fx, 0, self.color_intrinstic.cx],
-                [0, self.color_intrinstic.fy, self.color_intrinstic.cy],
-                [0, 0, 1]
-            ])
-            # pyorbbecsdk的distortion字段可能不存在，若无则返回全零
-            if hasattr(self.color_intrinstic, 'distortion'):
-                dist = np.array(self.color_intrinstic.distortion[:5])
-            else:
-                dist = np.zeros(5)
-            return K, dist
-        except Exception:
-            # 占位返回
-            return np.eye(3), np.zeros(5)
+        if not self.initialization_successful:
+            return None, None
+            
+        K = np.array([
+            [self.color_intrinsics.fx, 0, self.color_intrinsics.cx],
+            [0, self.color_intrinsics.fy, self.color_intrinsics.cy],
+            [0, 0, 1]
+        ])
+        # 返回一个5元素的畸变向量
+        dist = np.array([
+            self.color_distortion.k1,
+            self.color_distortion.k2,
+            self.color_distortion.p1,
+            self.color_distortion.p2,
+            self.color_distortion.k3
+        ])
+        return K, dist

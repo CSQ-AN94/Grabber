@@ -6,7 +6,7 @@ from external.RM_API2.Demo.RMDemo_Python.RMDemo_Gripper.src.Robotic_Arm.rm_robot
 
 class Calibration:
     """
-    只负责运动学与坐标变换。DH参数通过RoboticArm动态获取，T_end_to_camera由标定流程写入config.ini。
+    负责运动学与坐标变换。DH参数通过RoboticArm获取，T_end_to_camera由标定流程写入config.ini。
     """
     def __init__(self, dh_dict, T_end_to_camera: np.ndarray):
         self.dh_params = self._convert_dh_dict_to_list(dh_dict)

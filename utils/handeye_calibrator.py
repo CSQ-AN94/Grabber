@@ -3,21 +3,18 @@ import numpy as np
 import time
 import configparser
 from scipy.spatial.transform import Rotation
-
-# ANNOTATION: 确保这些导入路径在你的项目结构中是正确的
 from controllers.arm_controller import ArmController
-# from utils.state import RobotState  # 移除，避免循环依赖
 from sensors.camera_thread import CameraThread
+from utils.calibration import Calibration
 
 class HandEyeCalibrator:
     """
-    一键式自动化手眼标定工具 (更新版)。
-    参数已根据实际情况硬编码，以简化调用。
+    一键式自动化手眼标定工具
+    参数硬编码以简化调用。如果换标定版，更换参数
     """
-    def __init__(self, arm_controller: ArmController, robot_state, camera_thread: CameraThread, config_path='config.ini'):
-        self.arm = arm_controller
-        self.state = robot_state
-        self.camera_thread = camera_thread
+    def __init__(self, arm_controller: ArmController, calibration: Calibration, config_path='config.ini'):
+        self.arm_controller = arm_controller
+        self.calibration = calibration  # 只负责运动学和坐标变换
         self.config_path = config_path
         self.marker_length = 0.034  # 34mm
         self.marker_separation = 0.0085 # 8.5mm
@@ -29,24 +26,23 @@ class HandEyeCalibrator:
             self.marker_separation, 
             self.aruco_dict
         )
-        
         self.camera_matrix = None
         self.dist_coeffs = None
 
     def _get_arm_pose_matrix(self):
-        # ANNOTATION: 此函数逻辑不变，它负责获取机械臂末端位姿。
-        pose = self.arm.get_current_end_effector_pose()
-        position = np.array(pose[:3])
-        rotation = Rotation.from_euler('xyz', pose[3:], degrees=False).as_matrix()
-        T = np.eye(4)
-        T[:3, :3] = rotation
-        T[:3, 3] = position
-        return T
+        """
+        获取当前机械臂末端在世界坐标系下的位姿矩阵（通过关节角+FK）
+        """
+        joint_angles = self.arm_controller.get_current_joint_angles() # 返回值是弧度
+        if joint_angles is None:
+            raise RuntimeError("无法获取机械臂关节角度")
+        pose_matrix = self.calibration.calculate_fk(joint_angles)
+        return pose_matrix
 
     def _find_pattern_in_image(self, image):
-        # ANNOTATION: 此函数逻辑不变，它负责在图像中定位标定板。
+        # 在图像中定位标定板
         corners, ids, _ = cv2.aruco.detectMarkers(image, self.aruco_dict, parameters=self.aruco_params)
-        if ids is not None and len(ids) > 4: # CHANGED: 增加一个健壮性检查，要求至少看到4个标记
+        if ids is not None and len(ids) > 4: # 至少看到4个标记才估计标定板位姿
             retval, rvec, tvec = cv2.aruco.estimatePoseBoard(corners, ids, self.board, self.camera_matrix, self.dist_coeffs, rvec=None, tvec=None)
             if retval > 0:
                 R, _ = cv2.Rodrigues(rvec)
@@ -58,29 +54,29 @@ class HandEyeCalibrator:
 
     def run_calibration_process(self):
         """
-        执行完整的手眼标定流程。标定姿态已硬编码。
+        执行完整的手眼标定流程
         """
         print("--- Starting Automated Hand-Eye Calibration ---")
         
-        # ANNOTATION: 从相机线程获取精确的内参，这是所有计算的基础。
+        # 从相机线程获取精确的内参（已通过Matlab cameraCalibrator确认）
         self.camera_matrix, self.dist_coeffs = self.camera_thread.get_camera_intrinsics()
         if self.camera_matrix is None:
             print("Error: Could not get camera intrinsics. Aborting.")
             return
 
-        # CHANGED: 硬编码一组可靠的标定姿态 (关节角度，单位：弧度)
-        # 这些姿态旨在从不同角度和距离观察标定板，同时确保视野良好。
+        # 硬编码一组可靠的标定姿态
+        # 这些姿态来自于拖教
         calibration_poses = [
-            [0, 0.2, 1.2, 0, 1.57, 0],       # 姿态1: 靠近，俯视
-            [0.3, 0.2, 1.2, 0, 1.57, 0],     # 姿态2: 向右平移
-            [-0.3, 0.2, 1.2, 0, 1.57, 0],    # 姿态3: 向左平移
-            [0, 0.4, 1.0, 0, 1.57, 0],       # 姿态4: 向上平移，稍远
-            [0, 0.1, 1.4, 0, 1.57, 0],       # 姿态5: 向下平移，稍近
-            [0.2, 0.2, 1.2, 0.3, 1.57, 0],   # 姿态6: 带一点旋转
-            [-0.2, 0.2, 1.2, -0.3, 1.57, 0],  # 姿态7: 带一点反向旋转
-            [0, 0.3, 1.1, 0, 1.3, 0],        # 姿态8: 从一个斜角观察
-            [0, 0.3, 1.1, 0, 1.8, 0],        # 姿态9: 从另一个斜角观察
-            [0, 0, 0, 0, 0, 0],              # 姿态10: 回到零位附近（如果能看到板）
+            [0, 0.2, 1.2, 0, 1.57, 0],     
+            [0.3, 0.2, 1.2, 0, 1.57, 0],    
+            [-0.3, 0.2, 1.2, 0, 1.57, 0],  
+            [0, 0.4, 1.0, 0, 1.57, 0],    
+            [0, 0.1, 1.4, 0, 1.57, 0],   
+            [0.2, 0.2, 1.2, 0.3, 1.57, 0],
+            [-0.2, 0.2, 1.2, -0.3, 1.57, 0],
+            [0, 0.3, 1.1, 0, 1.3, 0],
+            [0, 0.3, 1.1, 0, 1.8, 0],
+            [0, 0, 0, 0, 0, 0],
         ]
 
         arm_poses = []
@@ -88,7 +84,7 @@ class HandEyeCalibrator:
         for i, pose in enumerate(calibration_poses):
             print(f"\nMoving to calibration pose {i+1}/{len(calibration_poses)}...")
             self.arm.move_to_joints(pose)
-            time.sleep(3.5) # ANNOTATION: 稍微增加等待时间，确保机械臂完全静止
+            time.sleep(3.5) # 确保机械臂完全静止再拍照
             
             T_base_gripper = self._get_arm_pose_matrix()
             color, _ = self.state.get_latest_frames()
