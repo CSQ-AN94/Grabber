@@ -59,6 +59,28 @@ class RobotState:
         with self.lock:
             return self.gripper_openness
 
+class DisplayThread(threading.Thread):
+    def __init__(self, state, should_exit_flag):
+        super().__init__()
+        self.state = state
+        self.should_exit_flag = should_exit_flag
+
+    def run(self):
+        while not self.should_exit_flag['exit']:
+            color, depth = self.state.get_latest_frames()
+            if color is not None:
+                cv2.imshow('Color', color)
+            if depth is not None:
+                d = depth.astype(np.float32)
+                d = cv2.normalize(d, None, 0, 255, cv2.NORM_MINMAX)
+                d = d.astype(np.uint8)
+                d = cv2.applyColorMap(d, cv2.COLORMAP_JET)
+                cv2.imshow('Depth', d)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                self.should_exit_flag['exit'] = True
+                break
+        cv2.destroyAllWindows()
+
 # 临时测试代码
 if __name__ == "__main__":
     app_config = load_config("config.ini")
@@ -69,11 +91,17 @@ if __name__ == "__main__":
     rail_config = app_config.rail
     
     state = RobotState()
+    should_exit = {'exit': False}
 
-    # 摄像头线程测试
+    # 摄像头线程
     cam_thread = CameraThread(state, camera_config)
     cam_thread.start()
-    print('Camera thread started. Press q to exit.')
+    print('Camera thread started.')
+
+    # 显示线程
+    display_thread = DisplayThread(state, should_exit)
+    display_thread.start()
+    print('Display thread started. 按q退出显示窗口。')
 
     # 机械臂测试
     from controllers.arm_controller import ArmController
@@ -116,23 +144,18 @@ if __name__ == "__main__":
     rail.move_to(rail_config.home_position)
     print(f"Rail returned to home: {rail.get_current_position()}")
 
-    # 摄像头实时显示
+    # 主线程可继续做其他事
     try:
-        while True:
-            color, depth = state.get_latest_frames()
-            if color is not None:
-                cv2.imshow('Color', color)
-            if depth is not None:
-                d = depth.astype(np.float32)
-                d = cv2.normalize(d, None, 0, 255, cv2.NORM_MINMAX)
-                d = d.astype(np.uint8)
-                d = cv2.applyColorMap(d, cv2.COLORMAP_JET) # 红色代表最远，蓝色代表最近，黑色是无效值
-                cv2.imshow('Depth', d)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
+        while not should_exit['exit']:
+            time.sleep(0.2)
+            # 这里可以插入机械臂/滑轨/标定等操作
+            # 例如定时打印关节角度
+            # print('Current joints:', state.get_joint_angles())
     finally:
-        cam_thread.join(timeout=1)
-        cv2.destroyAllWindows()
+        should_exit['exit'] = True
+        cam_thread.join(timeout=2)
+        display_thread.join(timeout=2)
+        print('所有线程已安全退出。')
 
     # 一键手眼标定
     if input('是否进行手眼标定？(y/n): ').lower() == 'y':

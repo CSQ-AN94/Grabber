@@ -33,7 +33,7 @@ class HandEyeCalibrator:
         """
         获取当前机械臂末端在世界坐标系下的位姿矩阵（通过关节角+FK）
         """
-        joint_angles = self.arm_controller.get_current_joint_angles() # 返回值是弧度
+        joint_angles = self.arm_controller.get_current_joint_angles()
         if joint_angles is None:
             raise RuntimeError("无法获取机械臂关节角度")
         pose_matrix = self.calibration.calculate_fk(joint_angles)
