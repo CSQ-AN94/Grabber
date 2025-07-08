@@ -38,8 +38,9 @@ class CameraThread(threading.Thread):
             
             # 获取并保存彩色相机内参和畸变
             color_profile_list = self.pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
-            # 分辨率和刷新率来自https://www.orbbec.com/products/stereo-vision-camera/gemini-336l/
-            color_profile = color_profile_list.get_video_stream_profile(1280, 800, OBFormat.BGR, 60)
+            # 虽然官网https://www.orbbec.com/products/stereo-vision-camera/gemini-336l/提到color分辨率支持(1280, 480)、
+            # 但硬件对齐的深度分辨率是640x480，所以这里使用640x480的彩色分辨率
+            color_profile = color_profile_list.get_video_stream_profile(680, 480, OBFormat.BGR, 60)
             if color_profile is None:
                 print("[CameraThread] ERROR: No matching color profile found.")
                 return False
