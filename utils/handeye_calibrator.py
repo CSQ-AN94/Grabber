@@ -28,8 +28,8 @@ class HandEyeCalibrator:
         self.marker_length = 0.034  # 34mm
         self.marker_separation = 0.0085 # 8.5mm
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_250)
-        self.aruco_params = cv2.aruco.DetectorParameters_create()
-        self.board = cv2.aruco.GridBoard_create(
+        self.aruco_params = cv2.aruco.DetectorParameters()
+        self.board = cv2.aruco.GridBoard(
             (7, 5), # (列数, 行数)
             self.marker_length, 
             self.marker_separation, 
