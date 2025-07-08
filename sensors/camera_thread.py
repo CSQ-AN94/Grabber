@@ -30,41 +30,64 @@ class CameraThread(threading.Thread):
 
     def _initialize_camera(self):
         """
-        一个私有的初始化方法。将硬件交互与构造函数分离。
+        初始化相机。
         """
         try:
             self.pipeline = Pipeline()
             config = Config()
             
-            # 获取并保存彩色相机内参和畸变
-            color_profile_list = self.pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
             # 虽然官网https://www.orbbec.com/products/stereo-vision-camera/gemini-336l/ 提到color分辨率支持(1280,800)
             # 但硬件对齐的深度分辨率是640x480，所以这里使用640x480的彩色分辨率
-            color_profile = color_profile_list.get_video_stream_profile(680, 480, OBFormat.BGR, 60)
-            if color_profile is None:
-                print("[CameraThread] ERROR: No matching color profile found.")
+            target_color_width = 640
+            target_color_height = 480
+            target_color_format = OBFormat.BGR
+            target_color_fps = 60
+
+            # 获取并验证目标彩色相机配置
+            profile_list = self.pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
+            if not profile_list:
+                print("[CameraThread] CRITICAL FAIL: Could not get any color profiles.")
                 return False
+            
+            color_profile = profile_list.get_video_stream_profile(
+                target_color_width, target_color_height, target_color_format, target_color_fps
+            )
+            if not color_profile:
+                print(f"[CameraThread] CRITICAL FAIL: The target color profile ({target_color_width}x{target_color_height}@{target_color_fps}) could not be found in the profile list.")
+                return False
+                
+            print(f"[CameraThread] INFO: Successfully found target color profile: {color_profile}")
+
             # 使用深度到彩色的硬件对齐来获取深度profile，防止手搓对齐带来的误差
             hw_d2c_profile_list = self.pipeline.get_d2c_depth_profile_list(color_profile, OBAlignMode.HW_MODE)
-            if len(hw_d2c_profile_list) == 0:
-                print("[CameraThread] ERROR: No hardware aligned depth profile found.")
+            if not hw_d2c_profile_list or len(hw_d2c_profile_list) == 0:
+                print(f"[CameraThread] CRITICAL FAIL: SDK reports NO compatible HW-aligned depth profiles for our chosen color profile. This should not happen based on our litmus test.")
                 return False
             depth_profile = hw_d2c_profile_list[0]
-            # 保存color的内参和畸变，深度的不保存
+            print(f"[CameraThread] INFO: Found compatible HW-aligned depth profile: {depth_profile}")
+            
+            # 保存color的内参和畸变，深度的不保存，因为深度的会对齐到彩色
             self.color_intrinsics = color_profile.as_video_stream_profile().get_intrinsic()
             self.color_distortion = color_profile.as_video_stream_profile().get_distortion()
-            # 启动pipeline
+
+            # 配置并启动Pipeline
             config.enable_stream(color_profile)
             config.enable_stream(depth_profile)
+            config.set_align_mode(OBAlignMode.HW_MODE) # 硬件对齐模式
             self.pipeline.start(config)
             
+            print("[CameraThread] Camera initialized successfully in Hardware D2C Align Mode.")
             print("[CameraThread] Camera initialized successfully.")
             print("[CameraThread] Device information:", Context().query_devices().get_device_by_index(0).get_device_info())
             print("[CameraThread] Color Intrinsics:", self.color_intrinsics)
             print("[CameraThread] Color Distortion:", self.color_distortion)
             return True
+            
         except Exception as e:
-            print(f"[CameraThread] ERROR during initialization: {e}")
+            print(f"[CameraThread] ERROR during robust initialization: {e}")
+            # 在异常情况下打印堆栈跟踪以获取更多信息
+            import traceback
+            traceback.print_exc()
             return False
 
     def run(self):
