@@ -1,6 +1,4 @@
 import threading
-import cv2
-import numpy as np
 
 class RobotState:
     def __init__(self):
@@ -51,26 +49,3 @@ class RobotState:
     def get_gripper_openness(self):
         with self.lock:
             return self.gripper_openness
-
-class DisplayThread(threading.Thread):
-    def __init__(self, state, should_exit_flag):
-        super().__init__()
-        self.state = state
-        self.should_exit_flag = should_exit_flag
-
-    def run(self):
-        while not self.should_exit_flag['exit']:
-            color, depth = self.state.get_latest_frames()
-            if color is not None:
-                cv2.imshow('Color', color)
-            if depth is not None:
-                d = depth.astype(np.float32)
-                d = cv2.normalize(d, None, 0, 255, cv2.NORM_MINMAX)
-                d = d.astype(np.uint8)
-                d = cv2.applyColorMap(d, cv2.COLORMAP_JET)
-                cv2.imshow('Depth', d)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                self.should_exit_flag['exit'] = True
-                break
-        cv2.destroyAllWindows()
-
