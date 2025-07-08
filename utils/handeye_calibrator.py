@@ -76,23 +76,19 @@ class HandEyeCalibrator:
         # 硬编码一组可靠的标定姿态
         # 这些姿态来自于拖教
         calibration_poses = [
-            [0, 0.2, 1.2, 0, 1.57, 0],     
-            [0.3, 0.2, 1.2, 0, 1.57, 0],    
-            [-0.3, 0.2, 1.2, 0, 1.57, 0],  
-            [0, 0.4, 1.0, 0, 1.57, 0],    
-            [0, 0.1, 1.4, 0, 1.57, 0],   
-            [0.2, 0.2, 1.2, 0.3, 1.57, 0],
-            [-0.2, 0.2, 1.2, -0.3, 1.57, 0],
-            [0, 0.3, 1.1, 0, 1.3, 0],
-            [0, 0.3, 1.1, 0, 1.8, 0],
-            [0, 0, 0, 0, 0, 0],
+            [-40.5, 67.8, -74.5, -50.7, 73.7, 0.0],
+            [3.4, 65.5, -94, -88.9, 72.2, -30.8],
+            [59.5, 61.3, -89.6, -143.6, 56.9, -21.6],
+            [73.9, 7.5, -40.3, -143.9, 50.9, -21.6],
+            [93.5, -11.2, -35.5, -143.9, 24.3, -21.6],
+            [27.5, -36.2, 86.0, -117.1, 97.2, -21.6],
         ]
 
         base_to_end_transforms = []
         camera_to_marker_transforms = []
         for i, pose in enumerate(calibration_poses):
             print(f"\nMoving to calibration pose {i+1}/{len(calibration_poses)}...")
-            self.arm.move_to_joints(pose)
+            self.arm_controller.move_to_joints(pose)
             time.sleep(3.5) # 确保机械臂完全静止再拍照
             
             color_image, _ = self.robot_state.get_latest_frames()
