@@ -13,18 +13,14 @@ class CameraThread(threading.Thread):
         super().__init__()
         self.shared_state = shared_state
         self.camera_config = camera_config
-        
         # 使用 threading.Event 来控制线程的启停
         self.stop_event = threading.Event()
-        
         # 将线程设置为“守护线程”，这样主程序退出时，它会自动结束
         self.daemon = True
 
         # --- 将硬件初始化与对象创建分离 ---
         self.pipeline = None
         self.color_intrinsics = None
-        self.depth_intrinsics = None
-        self.depth_to_color_extrinsics = None
         self.color_distortion = None
         
         # 尝试初始化，但不会让程序崩溃
@@ -40,35 +36,30 @@ class CameraThread(threading.Thread):
             self.pipeline = Pipeline()
             config = Config()
             
-            # 获取并保存彩色相机内参、外参和畸变
+            # 获取并保存彩色相机内参和畸变
             color_profile_list = self.pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
             # 分辨率和刷新率来自https://www.orbbec.com/products/stereo-vision-camera/gemini-336l/
-            color_profile = color_profile_list.get_video_stream_profile(1280, 800, OBFormat.BGR, 30)
+            color_profile = color_profile_list.get_video_stream_profile(1280, 800, OBFormat.BGR, 60)
             if color_profile is None:
                 print("[CameraThread] ERROR: No matching color profile found.")
                 return False
-            config.enable_stream(color_profile)
+            # 使用深度到彩色的硬件对齐来获取深度profile，防止手搓对齐带来的误差
+            hw_d2c_profile_list = self.pipeline.get_d2c_depth_profile_list(color_profile, OBAlignMode.HW_MODE)
+            if len(hw_d2c_profile_list) == 0:
+                print("[CameraThread] ERROR: No hardware aligned depth profile found.")
+                return False
+            depth_profile = hw_d2c_profile_list[0]
+            # 保存color的内参和畸变，深度的不保存
             self.color_intrinsics = color_profile.as_video_stream_profile().get_intrinsic()
             self.color_distortion = color_profile.as_video_stream_profile().get_distortion()
-
-            # 获取并保存深度相机内参和到彩色的外参
-            depth_profile_list = self.pipeline.get_stream_profile_list(OBSensorType.DEPTH_SENSOR)
-            depth_profile = depth_profile_list.get_video_stream_profile(1280, 800, OBFormat.Y16, 30)
-            if depth_profile is None:
-                print("[CameraThread] ERROR: No matching depth profile found.")
-                return False
+            # 启动pipeline
+            config.enable_stream(color_profile)
             config.enable_stream(depth_profile)
-            self.depth_intrinsics = depth_profile.as_video_stream_profile().get_intrinsic()
-            self.depth_to_color_extrinsics = depth_profile.get_extrinsic_to(color_profile)
-
-            # 启动管线
             self.pipeline.start(config)
             
             print("[CameraThread] Camera initialized successfully.")
             print("[CameraThread] Device information:", Context().query_devices().get_device_by_index(0).get_device_info())
             print("[CameraThread] Color Intrinsics:", self.color_intrinsics)
-            print("[CameraThread] Depth Intrinsics:", self.depth_intrinsics)
-            print("[CameraThread] Depth to Color Extrinsics:", self.depth_to_color_extrinsics)
             print("[CameraThread] Color Distortion:", self.color_distortion)
             return True
         except Exception as e:
@@ -90,20 +81,22 @@ class CameraThread(threading.Thread):
                     continue
 
                 color_frame = frames.get_color_frame()
-                depth_frame = frames.get_depth_frame()
+                depth_frame = frames.get_depth_frame() # 深度帧是硬件对齐过的
 
                 if color_frame is None or depth_frame is None:
                     continue
                 
                 # --- 数据处理 ---
                 color_image = frame_to_bgr_image(color_frame)
-                
-                depth_data = np.frombuffer(depth_frame.get_data(), dtype=np.uint16).reshape(
+                # 深度帧转ndarray
+                depth_data_uint16 = np.frombuffer(depth_frame.get_data(), dtype=np.uint16).reshape(
                     depth_frame.get_height(), depth_frame.get_width()
                 )
-                
+                # 转float32计算
+                depth_data_mm = depth_data_uint16.astype(np.float32) * depth_frame.get_depth_scale()
+                depth_data_meters = depth_data_mm / 1000.0  # 转换为米
                 # 将最新数据安全地放入共享状态
-                self.shared_state.update_frames(color_image, depth_data)
+                self.shared_state.update_frames(color_image, depth_data_meters)
                 
             except Exception as e:
                 print(f"[CameraThread] ERROR in run loop: {e}")
@@ -118,7 +111,7 @@ class CameraThread(threading.Thread):
         
     def join(self, timeout=None):
         """
-        重写join方法，确保在等待线程结束前先停止管线。
+        确保在等待线程结束前先停止管线。
         """
         if self.pipeline and self.initialization_successful:
             self.pipeline.stop()
@@ -127,8 +120,7 @@ class CameraThread(threading.Thread):
 
     def get_camera_intrinsics(self):
         """
-        安全地返回在初始化时获取的RGB相机内参。
-        如果初始化失败，则返回None。
+        安全地返回在初始化时获取的RGB相机内参和畸变。
         """
         if not self.initialization_successful:
             return None, None
@@ -138,7 +130,7 @@ class CameraThread(threading.Thread):
             [0, self.color_intrinsics.fy, self.color_intrinsics.cy],
             [0, 0, 1]
         ])
-        # 返回一个5元素的畸变向量
+        # 返回OpenCV期望的5元素的畸变向量
         dist = np.array([
             self.color_distortion.k1,
             self.color_distortion.k2,

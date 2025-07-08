@@ -109,7 +109,7 @@ if __name__ == "__main__":
 
     # 获取机械臂DH参数
     [ret, dh] = arm.arm.rm_get_DH_data()
-    print(dh)
+    print("机械臂DH参数:", dh)
 
     # 夹爪开合测试
     print('Opening gripper...')
@@ -162,8 +162,9 @@ if __name__ == "__main__":
         print(f"Camera point {camera_point} -> World point {world_point}")
 
     # Calibration测试（动态获取DH参数）
+    K, dist = cam_thread.get_camera_intrinsics()
     T_end_to_camera = app_config.calibration.T_end_to_camera
-    calib = Calibration(arm.arm.rm_get_DH_data()[1], T_end_to_camera)
+    calib = Calibration(arm.arm.rm_get_DH_data()[1], T_end_to_camera, K, dist)
     # 伪造一组关节角度、滑轨位置、相机点
     joint_angles = [0, 0, 0, 0, 0, 0]  # 6轴机械臂
     rail_position = 0.5  # 滑轨位置
