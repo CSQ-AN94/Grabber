@@ -14,13 +14,21 @@ class ArmController:
 
     def move_to_joints(self, joint_angles, speed=30, radius=0, wait=True):
         # joint_angles: list of 6 floats (单位: 度)
-        # speed: int, 机械臂运动速度
+        # speed: int, 机械臂运动速度百分比
         # radius: int, 轨迹圆滑度
-        # wait: 是否阻塞直到完成
+        
         with self.lock:
             block = 1 if wait else 0
             # connect=0: 不连接下一个轨迹
             return self.arm.rm_movej(joint_angles, speed, radius, 0, block)
+        
+    def move_to_cartesian_pose(self, pose, speed=30, wait=True):
+        # pose: 一个6元素的列表 [x, y, z, roll, pitch, yaw]。位置单位为毫米(mm)，姿态单位为度(degrees)。
+        # speed: 运动速度百分比
+        # wait: 是否阻塞直到完成
+        with self.lock:
+            block = 1 if wait else 0
+            return self.arm.rm_movej_p(pose, speed, 0, 0, block)
 
     def get_current_joint_angles(self):
         """
