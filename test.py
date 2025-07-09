@@ -11,6 +11,7 @@ from utils.handeye_calibrator import HandEyeCalibrator
 from sensors.camera_thread import CameraThread
 from controllers.arm_controller import ArmController
 from controllers.rail_controller import RailController
+from scipy.spatial.transform import Rotation
 
 class DisplayThread(threading.Thread):
     """一个简单的线程，用于在OpenCV窗口中实时显示相机画面。"""
@@ -114,6 +115,59 @@ def run_handeye_calibration(arm: ArmController, cam_thread: CameraThread, state:
     print("\n--- Hand-Eye Calibration Process Finished ---")
     print("Please check `config.ini` for the updated `T_end_to_camera` matrix.")
 
+def collect_calibration_poses_interactively(arm: ArmController, exit_event: threading.Event):
+    """
+    辅助采集高质量的手眼标定姿态。
+    """
+    print("\n" + "*"*60)
+    print("Interactive Pose Collection Tool")
+    print("1. Manually move the arm to a desired pose (using teach mode or another script).")
+    print("2. Ensure the calibration board is fully visible in the 'Color Feed' window.")
+    print("3. Press 'c' in the OpenCV window to capture and print the pose.")
+    print("4. Press 'q' in the OpenCV window to quit this mode.")
+    print("*"*60)
+
+    # 确保显示窗口在前台
+    cv2.imshow('Color Feed', np.zeros((480, 640, 3), dtype=np.uint8)) 
+
+    captured_poses = []
+    while not exit_event.is_set():
+        key = cv2.waitKey(100) & 0xFF
+        
+        if key == ord('q'):
+            print("Quitting pose collection mode.")
+            break
+        elif key == ord('c'):
+            print("\n--- Capturing Pose ---")
+            # 获取关节角度
+            joint_angles = arm.get_current_joint_angles()
+            if joint_angles is None:
+                print("ERROR: Could not get joint angles.")
+                continue
+            
+            # 计算笛卡尔空间坐标 (需要FK)
+            temp_dh = arm.arm.rm_get_DH_data()[1]
+            fk_solver = Calibration(temp_dh, np.eye(4))
+            pose_matrix = fk_solver.calculate_fk(joint_angles)
+            
+            # 提取位置(m)和欧拉角(rad)
+            position_m = pose_matrix[:3, 3]
+            euler_rad = Rotation.from_matrix(pose_matrix[:3, :3]).as_euler('xyz')
+            
+            # 转换为对人类友好的格式
+            joint_angles_deg = [round(np.rad2deg(j), 2) for j in joint_angles]
+            position_mm = [round(p * 1000, 2) for p in position_m]
+            
+            print(f"Joints (deg): {joint_angles_deg},")
+            print(f"Pose (mm, rad): pos=({position_mm[0]}, {position_mm[1]}, {position_mm[2]}) rot=({round(euler_rad[0],2)}, {round(euler_rad[1],2)}, {round(euler_rad[2],2)})")
+            
+            captured_poses.append(joint_angles_deg)
+
+    print("\n--- Captured Poses for Calibration ---")
+    print("Please copy the following list into `handeye_calibrator.py`:")
+    for pose in captured_poses:
+        print(f"    {pose},")
+
 # --------------------------------------------------------------------------
 #  主测试菜单
 # --------------------------------------------------------------------------
@@ -127,6 +181,7 @@ def run_test_menu(app_config, state, cam_thread, arm, rail, calibration):
         print("3. Test Rail Movement")
         print("4. Test Coordinate Transform (Live)")
         print("5. Run Full Hand-Eye Calibration")
+        print("6. Collect Calibration Poses Interactively")
         print("Y. (Future) Test YOLOv8 Detection")
         print("Q. Quit")
         choice = input("Enter your choice: ").upper()
@@ -141,6 +196,8 @@ def run_test_menu(app_config, state, cam_thread, arm, rail, calibration):
             test_coordinate_transform(calibration, arm, rail)
         elif choice == '5':
             run_handeye_calibration(arm, cam_thread, state, calibration)
+        elif choice == '6':
+            collect_calibration_poses_interactively(arm, exit_event)
         elif choice == 'Q':
             exit_event.set() # 发送退出信号
         else:
@@ -188,10 +245,9 @@ if __name__ == "__main__":
     # --- 2. 运行测试菜单 (Main Logic) ---
     # 使用 try...finally 来确保即使测试崩溃，也能安全退出
     try:
-        run_test_menu(app_config, state, cam_thread, arm, rail, calibration)
+        run_test_menu(app_config, state, cam_thread, arm, rail, calibration, exit_event)
     except Exception as e:
         print(f"\nAn exception occurred: {e}")
-        exit_event.set() # 确保在异常时也能退出
     finally:
         # --- 3. 系统关闭 (Teardown) ---
         print("\n--- System Teardown ---")
@@ -202,8 +258,5 @@ if __name__ == "__main__":
             cam_thread.join(timeout=2)
         if display_thread.is_alive():
             display_thread.join(timeout=2)
-            
-        # 可以添加其他清理代码，如断开硬件连接
-        # arm.disconnect() 
         
         print("Test suite finished.")
