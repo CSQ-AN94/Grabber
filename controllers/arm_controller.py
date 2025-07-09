@@ -1,4 +1,5 @@
 from external.RM_API2.Python.Robotic_Arm.rm_robot_interface import *
+from scipy.spatial.transform import Rotation
 import threading
 import time
 from utils.config import *
@@ -41,6 +42,37 @@ class ArmController:
                 joints_rad = [np.deg2rad(j) for j in joints_deg] # 转换为弧度
                 return joints_rad
             else:
+                return None
+            
+    def get_base_to_end_pose_matrix(self):
+        """
+        获取机械臂末端在基坐标系下的位姿矩阵
+        """
+        with self.lock:
+            ret_code, state_dict = self.arm.rm_get_current_arm_state()
+            if ret_code != 0:
+                print(f"获取机械臂状态失败，错误码: {ret_code}")
+                return None
+            pose_raw = state_dict.get('pose')
+            if pose_raw is None:
+                print("无法获取末端位姿")
+                return None
+            # 单位转换
+            x_m = pose_raw[0] / 1000000.0  # 0.001mm -> m
+            y_m = pose_raw[1] / 1000000.0  # 0.001mm -> m
+            z_m = pose_raw[2] / 1000000.0  # 0.001mm -> m
+            rx_rad = pose_raw[3] / 1000.0    # 0.001rad -> rad
+            ry_rad = pose_raw[4] / 1000.0    # 0.001rad -> rad
+            rz_rad = pose_raw[5] / 1000.0    # 0.001rad -> rad
+            # 构造4x4位姿矩阵
+            T = np.eye(4)
+            try:
+                rotation_matrix = Rotation.from_euler('xyz', [rx_rad, ry_rad, rz_rad], degrees=False).as_matrix()
+                T[:3, :3] = rotation_matrix
+                T[:3, 3] = [x_m, y_m, z_m]
+                return T
+            except Exception as e:
+                print(f"转换位姿矩阵失败: {e}")
                 return None
 
     def _init_gripper(self, gripper_config: GripperConfig):

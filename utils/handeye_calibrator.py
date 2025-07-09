@@ -2,10 +2,8 @@ import cv2
 import numpy as np
 import time
 import configparser
-from scipy.spatial.transform import Rotation
 from controllers.arm_controller import ArmController
 from sensors.camera_thread import CameraThread
-from utils.calibration import Calibration
 from utils.state import RobotState
 
 class HandEyeCalibrator:
@@ -17,13 +15,11 @@ class HandEyeCalibrator:
                  arm_controller: ArmController, 
                  camera_thread: CameraThread,
                  robot_state: RobotState,
-                 calibration: Calibration, 
                  config_path='config.ini'):
         
         self.arm_controller = arm_controller
         self.camera_thread = camera_thread
         self.robot_state = robot_state  # 用于获取最新图像和机械臂状态
-        self.calibration = calibration
         self.config_path = config_path
         self.marker_length = 0.034  # 34mm
         self.marker_separation = 0.0085 # 8.5mm
@@ -40,26 +36,13 @@ class HandEyeCalibrator:
 
     def _get_arm_pose_matrix(self):
         """
-        获取当前机械臂末端在base frame下的位姿矩阵（通过关节角+FK）
+        获取当前机械臂末端在base frame下的位姿矩阵
         """
-        joint_angles = self.arm_controller.get_current_joint_angles()
-        if joint_angles is None:
-            raise RuntimeError("无法获取机械臂关节角度")
-        T_base_to_end = self.calibration.calculate_fk(joint_angles)
+        T_base_to_end = self.arm_controller.get_base_to_end_pose_matrix()
+        if T_base_to_end is None:
+            print("Error: Could not get arm pose matrix. Aborting.")
+            raise RuntimeError("Failed to get arm pose matrix")
         return T_base_to_end
-
-    def _find_pattern_in_image(self, image):
-        # 在图像中定位标定板
-        corners, ids, _ = cv2.aruco.detectMarkers(image, self.aruco_dict, parameters=self.aruco_params)
-        if ids is not None and len(ids) > 4: # 至少看到4个标记才估计标定板位姿
-            retval, rvec, tvec = cv2.aruco.estimatePoseBoard(corners, ids, self.board, self.camera_matrix, self.dist_coeffs, rvec=None, tvec=None)
-            if retval > 0:
-                R, _ = cv2.Rodrigues(rvec)
-                T_camera_to_marker = np.eye(4)
-                T_camera_to_marker[:3, :3] = R
-                T_camera_to_marker[:3, 3] = tvec.flatten()
-                return T_camera_to_marker
-        return None
 
     def run_calibration_process(self):
         """
@@ -106,7 +89,7 @@ class HandEyeCalibrator:
             if color_image is None:
                 print(f"Pose {i+1}: Could not get image. Skipping.")
                 continue
-            T_base_to_end = self._get_arm_pose_matrix()
+            T_base_to_end = self.arm_controller.get_base_to_end_pose_matrix()
             T_camera_to_marker = self._find_pattern_in_image(color_image)
             
             if T_camera_to_marker is not None:

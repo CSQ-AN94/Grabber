@@ -49,12 +49,19 @@ def test_arm_movement(arm: ArmController, config):
     print("\n--- [Test] Arm Movement ---")
     print("Moving to scanning pose...")
     arm.move_to_joints(config.scanning_pose) 
-    time.sleep(1)
+    time.sleep(1.5)
+    print("Scanning pose in joint space:", arm.get_current_joint_angles())
+    print("Scaninng pose in cartesian space", arm.get_base_to_end_pose_matrix)
     print("Moving to dropoff pose...")
     arm.move_to_joints(config.dropoff_pose)
-    time.sleep(1)
+    time.sleep(1.5)
+    print("Dropoff pose in joint space:", arm.get_current_joint_angles())
+    print("Dropoff pose in cartesian space", arm.get_base_to_end_pose_matrix)
     print("Moving to zero pose...")
     arm.move_to_joints(config.zero_pose)
+    time.sleep(1.5)
+    print("Zero pose in joint space:", arm.get_current_joint_angles())
+    print("Zero pose in cartesian space", arm.get_base_to_end_pose_matrix)
     print("--- Arm Movement Test PASSED ---")
 
 def test_gripper_control(arm: ArmController):
@@ -98,7 +105,7 @@ def test_coordinate_transform(calibration: Calibration, arm: ArmController, rail
     else:
         print("--- Coordinate Transform Test FAILED (Invalid depth at pixel) ---")
 
-def run_handeye_calibration(arm: ArmController, cam_thread: CameraThread, state: RobotState, calibration: Calibration):
+def run_handeye_calibration(arm: ArmController, cam_thread: CameraThread, state: RobotState):
     print("\n" + "*"*60)
     print("WARNING: Starting Hand-Eye Calibration Process.")
     print("Please ensure:")
@@ -110,7 +117,7 @@ def run_handeye_calibration(arm: ArmController, cam_thread: CameraThread, state:
         print("Calibration cancelled.")
         return
         
-    calibrator = HandEyeCalibrator(arm, cam_thread, state, calibration)
+    calibrator = HandEyeCalibrator(arm, cam_thread, state)
     calibrator.run_calibration_process()
     print("\n--- Hand-Eye Calibration Process Finished ---")
     print("Please check `config.ini` for the updated `T_end_to_camera` matrix.")
