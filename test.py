@@ -171,7 +171,7 @@ def collect_calibration_poses_interactively(arm: ArmController, exit_event: thre
 # --------------------------------------------------------------------------
 #  主测试菜单
 # --------------------------------------------------------------------------
-def run_test_menu(app_config, state, cam_thread, arm, rail, calibration):
+def run_test_menu(app_config, state, cam_thread, arm, rail, calibration, exit_event):
     while not exit_event.is_set():
         print("\n" + "="*50)
         print("Grabber System Test Suite")
