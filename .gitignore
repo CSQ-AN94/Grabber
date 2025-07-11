@@ -6,7 +6,7 @@ env/
 /env.old/
 /venv.old/
 
-__pycache__/
+**/__pycache__/
 *.pyc
 *.pyo
 *.pyd
@@ -51,3 +51,4 @@ Thumbs.db
 ehthumbs.db
 
 .cache/
+/models

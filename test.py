@@ -3,7 +3,6 @@ import time
 import cv2
 import numpy as np
 
-# 导入我们所有的模块和工具
 from utils.config import load_config
 from utils.state import RobotState
 from utils.calibration import Calibration
@@ -12,6 +11,8 @@ from sensors.camera_thread import CameraThread
 from controllers.arm_controller import ArmController
 from controllers.rail_controller import RailController
 from scipy.spatial.transform import Rotation
+from intelligence.speech import SpeechSystem
+from intelligence.llm_parser import LLMParser
 
 class DisplayThread(threading.Thread):
     """一个简单的线程，用于在OpenCV窗口中实时显示相机画面。"""
@@ -22,25 +23,32 @@ class DisplayThread(threading.Thread):
         self.daemon = True
 
     def run(self):
-        print("[DisplayThread] Started. Press 'q' in the OpenCV window to request exit.")
-        while not self.exit_event.is_set():
-            color, depth = self.state.get_latest_frames()
-            if color is not None:
-                # 在图像上可以添加一些状态信息，比如机械臂是否在移动
-                if self.state.get_arm_moving():
-                    cv2.putText(color, "ARM MOVING", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        print("[DisplayThread] Started. Press 'q' IN THE OPENCV WINDOW to close visualization.")
+        try:
+            # 循环条件：主程序没有要求退出
+            while not self.exit_event.is_set():
+                color, depth = self.state.get_latest_frames()
+                # 如果没有新帧，短暂等待，避免CPU空转
+                if color is None:
+                    time.sleep(0.01)
+                    continue
+
+                # 在图像上可以添加一些状态信息
                 cv2.imshow('Color Feed', color)
-            if depth is not None:
-                # 深度图的可视化
-                d_vis = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
-                d_vis = cv2.applyColorMap(d_vis, cv2.COLORMAP_JET)
-                cv2.imshow('Depth Feed', d_vis)
-            
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                self.exit_event.set() # 发送退出信号
-                break
-        cv2.destroyAllWindows()
-        print("[DisplayThread] Windows closed.")
+                
+                if depth is not None:
+                    d_vis = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+                    d_vis = cv2.applyColorMap(d_vis, cv2.COLORMAP_JET)
+                    cv2.imshow('Depth Feed', d_vis)
+                
+                # waitKey现在只用于检测是否要关闭窗口，它不再设置全局事件
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    print("[DisplayThread] 'q' pressed. Closing visualization windows...")
+                    break # 只跳出自己的循环，线程将自然结束
+        finally:
+            # 确保窗口被销毁
+            cv2.destroyAllWindows()
+            print("[DisplayThread] Windows closed.")
 
 # --------------------------------------------------------------------------
 #  独立的测试函数
@@ -175,10 +183,40 @@ def collect_calibration_poses_interactively(arm: ArmController, exit_event: thre
     for pose in captured_poses:
         print(f"    {pose},")
 
+def test_speech_synthesis(speech_system: SpeechSystem):
+    print("\n--- [Test] Speech Synthesis (TTS) ---")
+    text_to_say = "你好，这是一个语音合成测试。如果能听到我说话，说明一切正常。"
+    speech_system.say(text_to_say)
+    print("--- TTS Test Finished ---")
+
+def test_speech_recognition(speech_system: SpeechSystem):
+    print("\n--- [Test] Speech Recognition (ASR) ---")
+    print("Please speak into the microphone for 5 seconds after the prompt...")
+    time.sleep(1)
+    recognized_text = speech_system.listen(duration=5)
+    if recognized_text:
+        print(f"SUCCESS: Recognized text is -> '{recognized_text}'")
+    else:
+        print("FAILURE: No text recognized.")
+    print("--- ASR Test Finished ---")
+
+def test_llm_parser(llm_parser: LLMParser):
+    print("\n--- [Test] LLM Command Parser ---")
+    test_cases = [
+        "你好",
+        "我想要一瓶可口可乐",
+        "帮我拿一下右边那个薯片",
+        "有什么好喝的吗？",
+    ]
+    for case in test_cases:
+        result = llm_parser.parse_user_command(case)
+        print(f"Input: '{case}' -> Parsed: {result}")
+    print("--- LLM Parser Test Finished ---")
+
 # --------------------------------------------------------------------------
 #  主测试菜单
 # --------------------------------------------------------------------------
-def run_test_menu(app_config, state, cam_thread, arm, rail, calibration, exit_event):
+def run_test_menu(app_config, state, cam_thread, arm, rail, calibration, speech, llm, exit_event):
     while not exit_event.is_set():
         print("\n" + "="*50)
         print("Grabber System Test Suite")
@@ -189,26 +227,36 @@ def run_test_menu(app_config, state, cam_thread, arm, rail, calibration, exit_ev
         print("4. Test Coordinate Transform (Live)")
         print("5. Run Full Hand-Eye Calibration")
         print("6. Collect Calibration Poses Interactively")
+        print("7. Test Speech Synthesis (TTS)")
+        print("8. Test Speech Recognition (ASR)")
+        print("9. Test LLM Command Parser")
         print("Y. (Future) Test YOLOv8 Detection")
         print("Q. Quit")
         choice = input("Enter your choice: ").upper()
 
-        if choice == '1':
-            test_arm_movement(arm, app_config.arm)
-        elif choice == '2':
-            test_gripper_control(arm)
-        elif choice == '3':
-            test_rail_movement(rail, app_config.rail)
-        elif choice == '4':
-            test_coordinate_transform(calibration, arm, rail)
-        elif choice == '5':
-            run_handeye_calibration(arm, cam_thread, state, calibration)
-        elif choice == '6':
-            collect_calibration_poses_interactively(arm, exit_event)
-        elif choice == 'Q':
-            exit_event.set() # 发送退出信号
-        else:
-            print("Invalid choice.")
+        match choice:
+            case '1':
+                test_arm_movement(arm, app_config.arm) 
+            case '2':
+                test_gripper_control(arm)
+            case '3':
+                test_rail_movement(rail, app_config.rail)
+            case '4':   
+                test_coordinate_transform(calibration, arm, rail)
+            case '5':
+                run_handeye_calibration(arm, cam_thread, state)
+            case '6':
+                collect_calibration_poses_interactively(arm, exit_event)
+            case '7':
+                test_speech_synthesis(speech)
+            case '8':
+                test_speech_recognition(speech)
+            case '9':
+                test_llm_parser(llm)
+            case 'Q':
+                exit_event.set()
+            case _:
+                print("Invalid choice. Please try again.")       
         
         # 给硬件一些喘息时间
         time.sleep(1)
@@ -238,21 +286,29 @@ if __name__ == "__main__":
     else:
         print("Camera is live.")
 
-    # 初始化控制器和工具
-    arm = ArmController(app_config.connections, app_config.arm, app_config.gripper)
-    rail = RailController(app_config.rail) # 即使是dummy controller，也实例化
+    # # 初始化控制器和工具
+    # arm = ArmController(app_config.connections, app_config.arm, app_config.gripper)
+    # rail = RailController(app_config.rail) # 即使是dummy controller，也实例化
     
-    # 初始化标定对象，这是所有坐标转换的基础
-    K, dist = cam_thread.get_camera_intrinsics()
-    T_end_to_camera = app_config.calibration.T_end_to_camera
-    dh_params = arm.arm.rm_get_DH_data()[1]
-    calibration = Calibration(dh_params, T_end_to_camera, K, dist)
-    print("Controllers and Calibration tools initialized.")
+    # # 初始化标定对象，这是所有坐标转换的基础
+    # K, dist = cam_thread.get_camera_intrinsics()
+    # T_end_to_camera = app_config.calibration.T_end_to_camera
+    # dh_params = arm.arm.rm_get_DH_data()[1]
+    # calibration = Calibration(dh_params, T_end_to_camera, K, dist)
+    # print("Controllers and Calibration tools initialized.")
+
+    # 初始化智能系统
+    speech = SpeechSystem(app_config.speech)
+    llm = LLMParser(app_config.llm)
+    print("Speech and LLM systems initialized.")
     
     # --- 2. 运行测试菜单 (Main Logic) ---
     # 使用 try...finally 来确保即使测试崩溃，也能安全退出
     try:
-        run_test_menu(app_config, state, cam_thread, arm, rail, calibration, exit_event)
+        arm = None
+        rail = None
+        calibration = None
+        run_test_menu(app_config, state, cam_thread, arm, rail, calibration, speech, llm, exit_event)
     except Exception as e:
         print(f"\nAn exception occurred: {e}")
     finally:

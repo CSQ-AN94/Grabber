@@ -28,6 +28,8 @@ RUN apt-get update && apt-get install -y \
     portaudio19-dev \
     libasound2-dev \
     libudev-dev \
+    alsa-utils \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # --- 设置工作目录并拷贝pip依赖相关文件 ---

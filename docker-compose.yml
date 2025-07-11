@@ -12,6 +12,7 @@ services:
     container_name: grabber_container
     devices:
       - /dev/bus/usb:/dev/bus/usb
+      - /dev/snd:/dev/snd # 挂载声卡
     # 挂载卷
     volumes:
       - .:/app
@@ -32,6 +33,9 @@ services:
 
     # 设置网络模式为host
     network_mode: "host"
+
+    group_add:
+      - audio # 添加音频组权限
 
     # 让容器可以访问GPU
     deploy:

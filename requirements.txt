@@ -2,7 +2,6 @@ requests
 numpy<2.0
 opencv-python
 opencv-contrib-python
-sounddevice
 playsound==1.2.2 
 configparser
 pybind11==2.11.0
@@ -15,3 +14,8 @@ torch
 torchvision
 torchaudio
 ultralytics
+google-generativeai
+sounddevice
+soundfile
+scipy
+websocket-client

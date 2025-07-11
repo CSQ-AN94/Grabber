@@ -42,6 +42,18 @@ class RailConfig:
 class CalibrationConfig:
     T_end_to_camera: np.ndarray  # 手眼标定矩阵
 
+@dataclass
+class LLMConfig:
+    gemini_api_key: str
+
+@dataclass
+class SpeechConfig:
+    openai_api_key: str
+
+@dataclass
+class VisionConfig:
+    model_path: str
+
 # --- 主配置类，聚合所有部分 ---
 @dataclass
 class AppConfig:
@@ -51,6 +63,9 @@ class AppConfig:
     camera: CameraConfig
     rail: RailConfig
     calibration: CalibrationConfig
+    llm: LLMConfig
+    speech: SpeechConfig
+    vision: VisionConfig
     
 # --- 主加载函数 ---
 def load_config(path: str = 'config.ini') -> AppConfig:
@@ -102,6 +117,18 @@ def load_config(path: str = 'config.ini') -> AppConfig:
         scan_speed=parser.getfloat('rail', 'scan_speed', fallback=0.1)
     )
 
+    llm_config = LLMConfig(
+        gemini_api_key=parser.get('llm', 'gemini_api_key')
+    )
+
+    speech_config = SpeechConfig(
+        openai_api_key=parser.get('speech', 'openai_api_key')
+    )
+
+    vision_config = VisionConfig(
+        model_path=parser.get('vision', 'model_path')
+    )
+
     # 解析手眼标定矩阵
     T_end_to_camera = _parse_matrix(parser.get('calibration', 'T_end_to_camera', fallback=str(np.eye(4).tolist())))
     calibration_config = CalibrationConfig(T_end_to_camera=T_end_to_camera)
@@ -112,5 +139,8 @@ def load_config(path: str = 'config.ini') -> AppConfig:
         gripper=gripper_config,
         camera=camera_config,
         rail=rail_config,
-        calibration=calibration_config
+        calibration=calibration_config,
+        llm=llm_config,
+        speech=speech_config,
+        vision=vision_config
     )
