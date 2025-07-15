@@ -3,7 +3,7 @@ ARG TARGETPLATFORM
 # amd64带显卡笔记本的基础镜像
 FROM nvidia/cuda:12.8.0-devel-ubuntu22.04 AS base-amd64
 # jetson orin 的基础镜像
-FROM dustynv/l4t-pytorch:r36.4.0 AS base-arm64
+FROM ultralytics/ultralytics:latest-jetson-jetpack6 AS base-arm64
 
 # --- 环境配置 ---
 FROM base-${TARGETPLATFORM#linux/}
