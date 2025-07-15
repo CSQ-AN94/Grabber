@@ -2,6 +2,7 @@ from external.RM_API2.Python.Robotic_Arm.rm_robot_interface import *
 from scipy.spatial.transform import Rotation
 import threading
 import time
+import numpy as np
 from utils.config import *
 
 class ArmController:
@@ -14,20 +15,23 @@ class ArmController:
         print(f"机械臂连接句柄: {self.handle.id}")
 
     def move_to_joints(self, joint_angles, speed=30, radius=0, wait=True):
-        # joint_angles: list of 6 floats (单位: 度)
+        # joint_angles: list of 6 floats (单位: 弧度)
         # speed: int, 机械臂运动速度百分比
         # radius: int, 轨迹圆滑度
         
         with self.lock:
+            # 将弧度转换为度，因为API需要度作为输入
+            joint_angles_deg = [np.rad2deg(angle) for angle in joint_angles]
             block = 1 if wait else 0
             # connect=0: 不连接下一个轨迹
-            return self.arm.rm_movej(joint_angles, speed, radius, 0, block)
+            return self.arm.rm_movej(joint_angles_deg, speed, radius, 0, block)
         
     def move_to_cartesian_pose(self, pose, speed=30, wait=True):
-        # pose: 一个6元素的列表 [x, y, z, roll, pitch, yaw]。位置单位为毫米(mm)，姿态单位为度(degrees)。
+        # pose: 一个6元素的列表 [x, y, z, roll, pitch, yaw]。位置单位为米(m)，姿态单位为弧度(rad)。
         # speed: 运动速度百分比
         # wait: 是否阻塞直到完成
         with self.lock:
+            # rm_movej_p API需要米和弧度，直接使用传入的pose
             block = 1 if wait else 0
             return self.arm.rm_movej_p(pose, speed, 0, 0, block)
 
@@ -38,7 +42,6 @@ class ArmController:
         with self.lock:
             code, joints_deg = self.arm.rm_get_joint_degree() # 返回值是度
             if code == 0:
-                import numpy as np
                 joints_rad = [np.deg2rad(j) for j in joints_deg] # 转换为弧度
                 return joints_rad
             else:

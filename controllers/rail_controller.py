@@ -5,7 +5,6 @@ from utils.config import RailConfig
 
 class RailController:
     def __init__(self, rail_config: RailConfig):
-        self.port = rail_config.port
         self.home_position = rail_config.home_position
         self.scan_start = rail_config.scan_start
         self.scan_end = rail_config.scan_end

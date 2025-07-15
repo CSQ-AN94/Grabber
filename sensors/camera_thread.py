@@ -63,7 +63,7 @@ class CameraThread(threading.Thread):
             if not hw_d2c_profile_list or len(hw_d2c_profile_list) == 0:
                 print(f"[CameraThread] CRITICAL FAIL: SDK reports NO compatible HW-aligned depth profiles for our chosen color profile. This should not happen based on our litmus test.")
                 return False
-            depth_profile = hw_d2c_profile_list[0]
+            depth_profile = hw_d2c_profile_list[1] # 680*480的深度profile，第一个是848x100，覆盖效果不好
             print(f"[CameraThread] INFO: Found compatible HW-aligned depth profile: {depth_profile}")
             
             # 保存color的内参和畸变，深度的不保存，因为深度的会对齐到彩色

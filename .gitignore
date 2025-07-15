@@ -1,54 +1,200 @@
-.venv/
-venv/
-env/
-/env.bak/
-/venv.bak/
-/env.old/
-/venv.old/
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
 
-**/__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.cpython-*.pyc
+# C extensions
+*.so
 
+# Distribution / packaging
+.Python
 build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
 *.egg-info/
+.installed.cfg
 *.egg
-/downloads/
-/eggs/
-/parts/
-/sdist/
-/var/
-/wheels/
-pip-wheel-metadata/
+MANIFEST
 
-.idea/
-.vscode/
-*.swp
-*.sublime-project
-*.sublime-workspace
-.ionide/
+# PyInstaller
+*.manifest
+*.spec
 
-.idea_modules/
-.idea_unloaded_modules/
-*.iml
-*.ipr
-*.iws
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
 
-*.log
-*.log.*
-
-.pytest_cache/
+# Unit test / coverage reports
 htmlcov/
+.tox/
 .coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
 
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# celery beat schedule file
+celerybeat-schedule
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
 .DS_Store
-Thumbs.db
+.DS_Store?
 ._*
 .Spotlight-V100
 .Trashes
 ehthumbs.db
+Thumbs.db
 
+# Grabber specific files
+*.pcm
+*.wav
+*.mp3
+*.mp4
+*.avi
+demo.*
+diagnose_*
+error_info.txt
+voice_test_output.txt
+microphone_test.wav
+robot_log.txt
+
+# Log files
+logs/
+*.log
+
+# Temporary files
+temp/
+tmp/
+*.tmp
+*.bak
+*.temp
+
+# Model files (usually large)
+*.pt
+*.pth
+*.onnx
+*.tflite
+models/weights/
+
+# Audio test files
+test_audio_*
+*_audio_*
+
+# GPU cache
+.nv/
+
+# Python virtual environments
+grabber_env/
+robotics_env/
+
+# Docker volumes and data
+docker-data/
+.docker/
+
+# Configuration backup
+config.ini.bak
+config.ini.orig
+config_local.ini
+
+# Test artifacts
+test_results/
+test_reports/
+test_data/
+
+# Documentation build
+docs/api/
+docs/_build/
+docs/_static/
+docs/_templates/
+
+# External libraries (if not using submodules)
+# external/*/
+
+# Local development files
+local_*
+dev_*
+debug_*
+scratch_*
+
+# Cache directories
 .cache/
-/models
+__pycache__/
+.pytest_cache/
+
+# Coverage reports
+.coverage
+htmlcov/
+coverage.xml
+
+# Profiling data
+*.prof
+
+# Large data files
+*.dataset
+*.data
+large_files/
+
+# Sensitive information
+secrets/
+keys/
+certificates/
+CLAUDE.md
+.claude/
+
+# Runtime files
+*.pid
+*.sock
+
+# Keep project documentation and configuration
+!docs/
+!config.ini

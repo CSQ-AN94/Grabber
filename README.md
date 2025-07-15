@@ -1,43 +1,144 @@
-## 使用
-1. (Optional) 如果在Jetson上使用，建议ssh
-    1. `ssh nb@192.168.3.10 -Y`
-    2. 密码是`nb`
-    3. `cd ~/dev/Grabber`到项目文件夹
-2. 拉取仓库到本地
-    1. (Optional) 如果是第一次拉取，需要使用`git submodule update --init --recursive` 拉取子模块
-3. 根据具体IP和端口修改你的docker-compose.yml中的http_proxy和https_proxy
-4. 一键构建镜像 `docker compose build`
-5. 一键运行镜像 `docker compose run --rm grabber_dev bash`
-6. 验证
-    - `nvidia-smi` 验证显卡
-    - `python3 utils/state.py` 验证相机/机械臂/夹爪工作状态
+# Grabber - 智能零售机器人系统
 
-## 项目框架
+一个智能零售机器人系统，结合6自由度机械臂（RM-65B）与导轨系统，实现自动库存扫描、物体识别和精确抓取。使用Google Gemini Live API进行实时语音交互，采用"感知-决策分离，执行可中断"的架构设计。
+
+## 系统架构
+
+系统采用模块化架构，将感知、决策和执行分离：
+
+- **智能层**: 语音交互（Gemini Live API）、计算机视觉（YOLOv8）和机器人工具
+- **硬件控制器**: 机械臂控制、导轨定位和夹爪管理  
+- **传感器**: 连续图像捕获的相机线程
+- **实用工具**: 配置管理、手眼标定和共享状态
+
+## 核心功能
+
+- 使用Google Gemini Live API进行实时语音交互
+- 基于YOLOv8的物体检测和分析
+- 6自由度机械臂控制与Modbus RTU夹爪接口
+- 步进电机导轨控制
+- 手眼标定用于坐标变换
+- 线程安全的共享机器人状态管理
+- 基于Docker容器的开发环境
+
+## 硬件要求
+
+- **机械臂**: 睿尔曼RM-65B
+- **相机**: Orbbec 336L深度相机
+- **导轨系统**: 步进电机导轨
+- **夹爪**: 兼容Modbus RTU的夹爪
+- **计算平台**: x86_64开发 / ARM64 Jetson部署
+
+## 快速开始
+
+### 开发环境
+
+所有开发都在Docker容器内进行：
+
+```bash
+# 构建容器镜像
+docker compose build
+
+# 进入开发容器
+docker compose run --rm grabber_dev bash
+
+# 验证容器内硬件访问
+nvidia-smi  # 验证GPU访问
+python3 utils/state.py  # 验证相机/机械臂/夹爪连接
+```
+
+### 初始化子模块
+
+项目包含关键的git子模块：
+
+```bash
+git submodule update --init --recursive
+```
+
+### 配置
+
+所有系统配置集中在`config.ini`中：
+
+- 硬件连接（机械臂IP、相机设置、导轨参数）
+- AI配置（Gemini API密钥、音频设置、模型路径）  
+- 标定数据（手眼变换矩阵）
+- 操作参数（关节姿态、速度、阈值）
+
+## 语音处理
+
+系统使用Google Gemini Live API进行实时语音处理：
+
+- **语音识别**: 由Gemini Live API直接处理，无需本地ASR
+- **语音合成**: iFlytek WebAPI提供中文TTS
+- **音频流**: 自适应麦克风参数检测和重采样
+- **实时处理**: WebSocket连接实现低延迟语音交互
+
+## 部署
+
+### 开发环境（x86_64）
+- 支持NVIDIA GPU的Docker容器
+- 相机和音频的USB设备访问
+- GUI应用的X11转发
+
+### 生产环境（Jetson Orin NX）
+- ARM64优化的容器构建
+- 从开发机器进行网络音频流传输
+- 自动启动和监控
+
+## 项目结构
+
 ```
 Grabber/
-│
-├── main.py                 # 主程序入口
-├── controllers/
-│   ├── __init__.py
-│   ├── arm_controller.py   # 封装机械臂和夹爪的控制
-│   └── rail_controller.py  # 封装导轨的控制 (留出接口)
-│
-├── sensors/
-│   ├── __init__.py
-│   └── camera_thread.py    # 独立的摄像头线程，持续更新图像
-│
-├── intelligence/
-│   ├── __init__.py
-│   ├── vision.py           # 视觉分析 (YOLOv8)
-│   ├── speech.py           # 语音识别与合成 (ASR/TTS)
-│   └── llm_parser.py       # 大模型语义分析
-│
-├── utils/
-│   ├── __init__.py
-│   ├── state.py            # 共享的机器人状态和世界信息，线程安全
-│   └── calibration.py      # 坐标系转换
-|   └── config.py           # 处理config.ini，分发配置
-│
-├── config.ini              # 配置文件
-└── requirements.txt
+├── controllers/          # 硬件控制模块
+├── intelligence/         # AI/视觉/语音合成
+├── sensors/             # 传感器接口  
+├── utils/               # 配置和实用工具
+├── tests/               # 测试脚本和诊断
+├── docs/                # 文档
+└── external/            # Git子模块
+    ├── RM_API2/         # 睿尔曼机械臂SDK
+    └── pyorbbecsdk/     # Orbbec相机SDK
 ```
+
+## 比赛任务
+
+系统专为智能零售比赛任务设计：
+
+1. **任务A**: 货架扫描和播报
+2. **任务B**: 基于图像理解的商品推荐和抓取
+3. **任务C**: 按名称、相对位置或语义类别进行商品选择和抓取
+4. **任务D**: 结账计算
+
+## API集成
+
+### Gemini Live API
+- 模型: `gemini-2.0-flash-live-001`（半级联，稳定）
+- 实时语音输入，文本输出
+- 机器人工具集成的函数调用
+- 比赛的中文语言支持
+
+### 硬件API
+- **RM_API2**: 睿尔曼机械臂控制
+- **Orbbec SDK**: 实时深度/彩色图像捕获 
+
+## 开发状态
+
+### 工作组件
+- 硬件控制器（机械臂、导轨、相机、夹爪）
+- 视觉系统（YOLOv8集成）
+- 配置管理
+- 手眼标定系统
+- 综合测试框架
+- 音频流基础设施
+
+### 核心集成
+- Gemini Agent语音交互
+- 硬件抽象的机器人工具
+- 主应用事件循环
+
+## 贡献
+
+1. 提交更改前确保所有测试通过
+2. 遵循现有的代码风格和模式
+3. 为新功能更新文档
+4. 在开发和目标硬件平台上测试

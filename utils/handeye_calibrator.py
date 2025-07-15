@@ -4,7 +4,7 @@ import time
 import configparser
 from controllers.arm_controller import ArmController
 from sensors.camera_thread import CameraThread
-from utils.state import RobotState
+from utils.state import WorldState
 
 class HandEyeCalibrator:
     """
@@ -14,12 +14,12 @@ class HandEyeCalibrator:
     def __init__(self, 
                  arm_controller: ArmController, 
                  camera_thread: CameraThread,
-                 robot_state: RobotState,
+                 world_state: WorldState,
                  config_path='config.ini'):
         
         self.arm_controller = arm_controller
         self.camera_thread = camera_thread
-        self.robot_state = robot_state  # 用于获取最新图像和机械臂状态
+        self.world_state = world_state  # 用于获取最新图像和机械臂状态
         self.config_path = config_path
         self.marker_length = 0.034  # 34mm
         self.marker_separation = 0.0085 # 8.5mm
@@ -56,9 +56,9 @@ class HandEyeCalibrator:
             print("Error: Could not get camera intrinsics. Aborting.")
             return
 
-        # 硬编码一组标定姿态
+        # 硬编码一组标定姿态（单位：度）
         # 这些姿态来自于拖教
-        calibration_poses = [
+        calibration_poses_deg = [
             [-92.57, 4.17, 29.14, 6.36, 92.16, -8.84],
             [-92.06, -25.22, 85.55, 20.18, 41.46, 93.04],
             [-85.82, -82.94, 121.96, 2.16, 56.98, 0.64],
@@ -77,6 +77,9 @@ class HandEyeCalibrator:
             [-115.07, 17.06, 63.02, 69.1, 26.21, 223.98],
             [-94.18, -76.08, 101.0, 6.35, 66.27, 157.9],
         ]
+        
+        # 将度转换为弧度
+        calibration_poses = [[np.deg2rad(angle) for angle in pose] for pose in calibration_poses_deg]
 
         base_to_end_transforms = []
         camera_to_marker_transforms = []
@@ -85,7 +88,7 @@ class HandEyeCalibrator:
             self.arm_controller.move_to_joints(pose)
             time.sleep(3.5) # 确保机械臂完全静止再拍照
             
-            color_image, _ = self.robot_state.get_latest_frames()
+            color_image, _ = self.world_state.get_latest_frames()
             if color_image is None:
                 print(f"Pose {i+1}: Could not get image. Skipping.")
                 continue

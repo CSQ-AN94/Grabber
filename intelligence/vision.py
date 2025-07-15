@@ -7,7 +7,7 @@ import time
 
 # 为了独立测试，我们需要能够模拟或接收来自外部的数据
 # 在真实集成时，这些对象将由主程序传入
-from utils.state import RobotState
+from utils.state import WorldState
 from sensors.camera_thread import CameraThread
 from utils.config import load_config
 
@@ -17,7 +17,7 @@ class VisionAnalyzer:
     负责所有与图像理解相关的任务，主要是YOLOv8的目标检测。
     它被设计为松耦合的，可以处理来自视频流或静态图片的图像。
     """
-    def __init__(self, model_path: str):
+    def __init__(self, model_path: str = "intelligence/models/yolov8n.pt"):
         """
         初始化视觉分析器。
         
@@ -195,13 +195,13 @@ if __name__ == '__main__':
             
             # 初始化相机线程和共享状态
             # 这是vision.py与系统其他部分唯一的连接点
-            robot_state = RobotState()
-            camera_thread = CameraThread(robot_state, config.camera)
+            world_state = WorldState()
+            camera_thread = CameraThread(world_state, None)
             camera_thread.start()
             
             # 等待相机启动
             time.sleep(3) 
-            if robot_state.get_latest_frames()[0] is None:
+            if world_state.get_latest_frames()[0] is None:
                 print("Error: Failed to start camera stream.")
                 camera_thread.stop()
                 camera_thread.join()
@@ -210,15 +210,14 @@ if __name__ == '__main__':
             try:
                 while True:
                     # 从共享状态获取最新的彩色图和深度图
-                    color_frame, depth_frame = robot_state.get_latest_frames()
+                    color_frame, depth_frame = world_state.get_latest_frames()
                     
                     if color_frame is not None:
                         # 分析当前帧
-                        rgb_frame = cv2.cvtColor(color_frame, cv2.COLOR_BGR2RGB)  # YOLO需要RGB格式
-                        detections = analyzer.analyze_image(rgb_frame, depth_frame)
+                        detections = analyzer.analyze_image(color_frame, depth_frame)
                         
                         # 在帧上绘制检测结果
-                        frame_with_boxes = VisionAnalyzer.draw_detections(rgb_frame, detections)
+                        frame_with_boxes = VisionAnalyzer.draw_detections(color_frame, detections)
                         
                         # 显示处理后的帧
                         cv2.imshow("Live Video Analysis", frame_with_boxes)
