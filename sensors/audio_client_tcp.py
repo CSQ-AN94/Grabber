@@ -26,7 +26,7 @@ class TCPAudioClient:
     与Jetson的MicrophoneThread和SpeakerThread配套工作
     """
     
-    def __init__(self, jetson_host="192.168.3.1", mic_port=8888, speaker_port=8889):
+    def __init__(self, jetson_host="192.168.3.1", mic_port=9888, speaker_port=9889):
         """
         初始化TCP音频客户端
         
@@ -368,8 +368,8 @@ def main():
     """主函数"""
     parser = argparse.ArgumentParser(description="TCP音频客户端")
     parser.add_argument("--host", default="192.168.3.1", help="Jetson主机地址")
-    parser.add_argument("--mic-port", type=int, default=8888, help="麦克风端口")
-    parser.add_argument("--speaker-port", type=int, default=8889, help="扬声器端口")
+    parser.add_argument("--mic-port", type=int, default=9888, help="麦克风端口")
+    parser.add_argument("--speaker-port", type=int, default=9889, help="扬声器端口")
     parser.add_argument("--list-devices", action="store_true", help="列出音频设备")
     
     args = parser.parse_args()

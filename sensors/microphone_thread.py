@@ -23,7 +23,7 @@ class MicrophoneThread:
     4. 简单的网络协议（TCP原始音频数据）
     """
     
-    def __init__(self, port: int = 8888, sample_rate: int = 16000, chunk_size: int = 1024):
+    def __init__(self, port: int = 9888, sample_rate: int = 16000, chunk_size: int = 1024):
         """
         初始化麦克风线程
         
@@ -289,7 +289,7 @@ async def test_microphone_thread():
     """测试麦克风线程"""
     logging.basicConfig(level=logging.INFO)
     
-    mic = MicrophoneThread(port=8888)
+    mic = MicrophoneThread(port=9888)
     
     try:
         # 启动麦克风线程

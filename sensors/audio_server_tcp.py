@@ -76,7 +76,7 @@ class TCPAudioServer:
     集成MicrophoneThread、SpeakerThread、Live API和TTS系统
     """
     
-    def __init__(self, mic_port=8888, speaker_port=8889, config_path="config.ini"):
+    def __init__(self, mic_port=9888, speaker_port=9889, config_path="config.ini"):
         """
         初始化TCP音频服务器
         
@@ -365,8 +365,8 @@ class TCPAudioServer:
 async def main():
     """主函数"""
     parser = argparse.ArgumentParser(description="TCP音频服务器")
-    parser.add_argument("--mic-port", type=int, default=8888, help="麦克风端口")
-    parser.add_argument("--speaker-port", type=int, default=8889, help="扬声器端口")
+    parser.add_argument("--mic-port", type=int, default=9888, help="麦克风端口")
+    parser.add_argument("--speaker-port", type=int, default=9889, help="扬声器端口")
     parser.add_argument("--config", default="config.ini", help="配置文件路径")
     
     args = parser.parse_args()

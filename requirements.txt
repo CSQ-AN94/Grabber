@@ -13,6 +13,7 @@ pymodbus
 Pillow
 pandas
 websockets
+websocket-client
 requests
 pyyaml
 configparser

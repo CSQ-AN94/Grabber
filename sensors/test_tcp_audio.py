@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 class TCPAudioTest:
     """TCP音频系统测试类"""
     
-    def __init__(self, jetson_host="192.168.3.1", mic_port=8888, speaker_port=8889):
+    def __init__(self, jetson_host="192.168.3.1", mic_port=9888, speaker_port=9889):
         self.jetson_host = jetson_host
         self.mic_port = mic_port
         self.speaker_port = speaker_port
@@ -283,8 +283,8 @@ async def main():
     """主函数"""
     parser = argparse.ArgumentParser(description="TCP音频系统测试")
     parser.add_argument("--host", default="192.168.3.1", help="Jetson主机地址")
-    parser.add_argument("--mic-port", type=int, default=8888, help="麦克风端口")
-    parser.add_argument("--speaker-port", type=int, default=8889, help="扬声器端口")
+    parser.add_argument("--mic-port", type=int, default=9888, help="麦克风端口")
+    parser.add_argument("--speaker-port", type=int, default=9889, help="扬声器端口")
     
     args = parser.parse_args()
     

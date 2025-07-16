@@ -23,7 +23,7 @@ class SpeakerThread:
     4. 线程安全的音频队列
     """
     
-    def __init__(self, port: int = 8889, sample_rate: int = 16000, chunk_size: int = 1024):
+    def __init__(self, port: int = 9889, sample_rate: int = 16000, chunk_size: int = 1024):
         """
         初始化音频输出线程
         
@@ -290,7 +290,7 @@ async def test_speaker_thread():
     """测试音频输出线程"""
     logging.basicConfig(level=logging.INFO)
     
-    speaker = SpeakerThread(port=8889)
+    speaker = SpeakerThread(port=9889)
     
     try:
         # 启动音频输出线程

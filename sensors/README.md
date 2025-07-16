@@ -23,7 +23,7 @@ sensors/
 ```
 笔记本(192.168.3.7) ←→ Jetson(192.168.3.1)
     ↓                      ↓
-TCPAudioClient          MicrophoneThread(8888) + SpeakerThread(8889)
+TCPAudioClient          MicrophoneThread(9888) + SpeakerThread(9889)
 麦克风/扬声器          ↓
                     AudioServer + Live API + TTS
 ```
@@ -47,25 +47,25 @@ python sensors/test_tcp_audio.py --host 192.168.3.1
 **第二步 - 启动Jetson音频服务器**
 ```bash
 # 在Jetson容器内运行
-python sensors/audio_server_tcp.py --mic-port 8888 --speaker-port 8889
+python sensors/audio_server_tcp.py --mic-port 9888 --speaker-port 9889
 ```
 
 **第三步 - 启动笔记本音频客户端**：
 ```bash
 # 在笔记本上运行
-python sensors/audio_client_tcp.py --host 192.168.3.1 --mic-port 8888 --speaker-port 8889
+python sensors/audio_client_tcp.py --host 192.168.3.1 --mic-port 9888 --speaker-port 9889
 ```
 
 ### 2.可选参数
 
 **audio_client_tcp.py**:
 ```bash
-python sensors/audio_client_tcp.py --host 192.168.3.1 --mic-port 8888 --speaker-port 8889 --list-devices
+python sensors/audio_client_tcp.py --host 192.168.3.1 --mic-port 9888 --speaker-port 9889 --list-devices
 ```
 
 **audio_server_tcp.py**:
 ```bash
-python sensors/audio_server_tcp.py --mic-port 8888 --speaker-port 8889 --config config.ini
+python sensors/audio_server_tcp.py --mic-port 9888 --speaker-port 9889 --config config.ini
 ```
 
 ## 核心组件
@@ -126,7 +126,7 @@ python sensors/audio_server_tcp.py --mic-port 8888 --speaker-port 8889 --config 
 
 1. **TCP连接失败**：
    - 检查Jetson服务器是否启动
-   - 验证端口8888和8889是否可用
+   - 验证端口9888和9889是否可用
    - 确认网络连通性
 
 2. **音频设备问题**：
