@@ -14,9 +14,6 @@ services:
       - /dev/bus/usb:/dev/bus/usb
       - /dev/snd:/dev/snd # 挂载声卡
 
-    ports:
-      - "8888:8888" # 端口映射，允许外部通过8888端口访问容器内的服务，用于麦克风
-      - "9889:9889" # 用于扬声器
     # 挂载卷
     volumes:
       - .:/app
@@ -49,6 +46,9 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+    
+    # 使用 command 指令确保容器在 up 之后保持运行
+    command: tail -f /dev/null
     
     # 让容器保持运行
     stdin_open: true
