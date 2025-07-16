@@ -126,10 +126,6 @@ tmp/
 *.tflite
 models/weights/
 
-# Audio test files
-test_audio_*
-*_audio_*
-
 # GPU cache
 .nv/
 
@@ -150,15 +146,6 @@ config_local.ini
 test_results/
 test_reports/
 test_data/
-
-# Documentation build
-docs/api/
-docs/_build/
-docs/_static/
-docs/_templates/
-
-# External libraries (if not using submodules)
-# external/*/
 
 # Local development files
 local_*
