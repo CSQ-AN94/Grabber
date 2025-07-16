@@ -183,6 +183,7 @@ coverage.xml
 *.dataset
 *.data
 large_files/
+data/
 
 # Sensitive information
 secrets/

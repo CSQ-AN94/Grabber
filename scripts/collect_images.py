@@ -78,16 +78,13 @@ class ImageCollector:
         保存图像到文件
         
         Args:
-            image: 要保存的图像 (BGR格式)
+            image: 要保存的图像 (RBG)
         """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"image_{timestamp}_{self.image_count:04d}.jpg"
         filepath = os.path.join(self.output_dir, filename)
         
-        # 确保图像是BGR格式（OpenCV默认格式）
         if len(image.shape) == 3 and image.shape[2] == 3:
-            # 如果是RGB格式，转换为BGR
-            # 注意：camera_thread返回的应该已经是BGR格式
             success = cv2.imwrite(filepath, image)
             
             if success:
@@ -120,8 +117,9 @@ class ImageCollector:
                 color_frame, depth_frame = self.world_state.get_latest_frames()
                 
                 if color_frame is not None:
-                    # 显示彩色图像
-                    display_image = color_frame.copy()
+                    # 显示RGB图像
+                    color_frame = cv2.cvtColor(color_frame, cv2.COLOR_BGR2RGB)
+                    display_frame = color_frame.copy()
                     
                     # 添加信息叠加
                     current_time = time.time()
@@ -132,15 +130,15 @@ class ImageCollector:
                     info_text = f"Images saved: {self.image_count}"
                     time_text = f"Next save in: {next_save_in:.1f}s"
                     
-                    cv2.putText(display_image, info_text, (10, 30), 
+                    cv2.putText(display_frame, info_text, (10, 30), 
                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                    cv2.putText(display_image, time_text, (10, 60), 
+                    cv2.putText(display_frame, time_text, (10, 60), 
                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                    cv2.putText(display_image, "Press 'q' to quit, 's' to save", (10, 90), 
+                    cv2.putText(display_frame, "Press 'q' to quit, 's' to save", (10, 90), 
                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
                     
                     # 显示图像
-                    cv2.imshow('Image Collector', display_image)
+                    cv2.imshow('Image Collector', display_frame)
                     
                     # 如果有深度图像，也显示出来
                     if depth_frame is not None:

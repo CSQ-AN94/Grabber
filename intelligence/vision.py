@@ -17,7 +17,7 @@ class VisionAnalyzer:
     负责所有与图像理解相关的任务，主要是YOLOv8的目标检测。
     它被设计为松耦合的，可以处理来自视频流或静态图片的图像。
     """
-    def __init__(self, model_path: str = "intelligence/models/yolov8n.pt"):
+    def __init__(self, model_path: str = "intelligence/models/best.pt"):
         """
         初始化视觉分析器。
         
@@ -211,6 +211,7 @@ if __name__ == '__main__':
                 while True:
                     # 从共享状态获取最新的彩色图和深度图
                     color_frame, depth_frame = world_state.get_latest_frames()
+                    color_frame = cv2.cvtColor(color_frame, cv2.COLOR_BGR2RGB)  # 转换为RGB格式
                     
                     if color_frame is not None:
                         # 分析当前帧
