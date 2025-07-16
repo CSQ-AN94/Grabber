@@ -1,0 +1,49 @@
+➜  Grabber git:(main) ✗ pactl list sources short
+1       alsa_output.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.HiFi__hw_sofhdadsp__sink.monitor      module-alsa-card.c      s16le 2ch 48000Hz       RUNNING
+2       alsa_input.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.HiFi__hw_sofhdadsp__source     module-alsa-card.c      s16le 2ch 48000Hz       SUSPENDED
+3       alsa_input.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.HiFi__hw_sofhdadsp_6__source   module-alsa-card.c      s16le 2ch 48000Hz       RUNNING
+➜  Grabber git:(main) ✗ pactl list sinks short
+1       alsa_output.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.HiFi__hw_sofhdadsp__sink      module-alsa-card.c      s16le 2ch 48000Hz       RUNNING
+➜  Grabber git:(main) ✗ arecord -l                                   
+**** List of CAPTURE Hardware Devices ****
+card 1: sofhdadsp [sof-hda-dsp], device 0: HDA Analog (*) []
+  Subdevices: 1/1
+  Subdevice #0: subdevice #0
+card 1: sofhdadsp [sof-hda-dsp], device 1: HDA Digital (*) []
+  Subdevices: 1/1
+  Subdevice #0: subdevice #0
+card 1: sofhdadsp [sof-hda-dsp], device 6: DMIC (*) []
+  Subdevices: 0/1
+  Subdevice #0: subdevice #0
+card 1: sofhdadsp [sof-hda-dsp], device 7: DMIC16kHz (*) []
+  Subdevices: 1/1
+  Subdevice #0: subdevice #0
+➜  Grabber git:(main) ✗ aplay -l                                     
+**** List of PLAYBACK Hardware Devices ****
+card 0: NVidia [HDA NVidia], device 3: HDMI 0 [HDMI 0]
+  Subdevices: 1/1
+  Subdevice #0: subdevice #0
+card 0: NVidia [HDA NVidia], device 7: HDMI 1 [HDMI 1]
+  Subdevices: 1/1
+  Subdevice #0: subdevice #0
+card 0: NVidia [HDA NVidia], device 8: HDMI 2 [HDMI 2]
+  Subdevices: 1/1
+  Subdevice #0: subdevice #0
+card 0: NVidia [HDA NVidia], device 9: HDMI 3 [HDMI 3]
+  Subdevices: 1/1
+  Subdevice #0: subdevice #0
+card 1: sofhdadsp [sof-hda-dsp], device 0: HDA Analog (*) []
+  Subdevices: 0/1
+  Subdevice #0: subdevice #0
+card 1: sofhdadsp [sof-hda-dsp], device 1: HDA Digital (*) []
+  Subdevices: 1/1
+  Subdevice #0: subdevice #0
+card 1: sofhdadsp [sof-hda-dsp], device 3: HDMI1 (*) []
+  Subdevices: 1/1
+  Subdevice #0: subdevice #0
+card 1: sofhdadsp [sof-hda-dsp], device 4: HDMI2 (*) []
+  Subdevices: 1/1
+  Subdevice #0: subdevice #0
+card 1: sofhdadsp [sof-hda-dsp], device 5: HDMI3 (*) []
+  Subdevices: 1/1
+  Subdevice #0: subdevice #0
