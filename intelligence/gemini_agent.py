@@ -93,7 +93,7 @@ class GeminiAgent:
         
         try:
             # Start microphone thread for network audio input
-            self.microphone.start()
+            await self.microphone.start_server()
             
             # Create Live API session with proper config
             config_dict = self._create_session_config()
@@ -272,7 +272,7 @@ class GeminiAgent:
     async def stop_session(self):
         """Stop the interactive session"""
         self.is_running = False
-        self.microphone.stop()
+        await self.microphone.stop_server()
         if self.session:
             self.session = None
         self.logger.info("Gemini Agent session stopped")

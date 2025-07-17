@@ -29,7 +29,7 @@ async def main(port: int):
     mic_thread = MicrophoneThread(port=port)
     
     try:
-        mic_thread.start()
+        await mic_thread.start_server()
         logging.info(f"✅ MicrophoneThread server started. Waiting for a client to connect on port {port} and send audio...")
         
         chunk_count = 0
@@ -56,7 +56,7 @@ async def main(port: int):
         logging.error(f"An error occurred: {e}", exc_info=True)
     finally:
         logging.info("Stopping MicrophoneThread server.")
-        mic_thread.stop()
+        await mic_thread.stop_server()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test MicrophoneThread Audio Receiver")
