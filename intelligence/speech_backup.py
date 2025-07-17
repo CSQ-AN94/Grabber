@@ -1,17 +1,16 @@
 # -*- coding:utf-8 -*-
 """
 智能语音合成系统 - 基于iFlytek WebAPI
-提供清洁的异步接口给Agent使用，支持网络音频输出
+提供清洁的异步接口给Agent使用
 
 重构自原始iFlytek demo，优化为生产级别的模块化设计
-支持配置文件管理和网络音频传输
 """
 
 import asyncio
 import os
 import time
 import logging
-import socket
+import subprocess
 import wave
 from typing import Optional, Dict, Any
 from dataclasses import dataclass
@@ -31,11 +30,6 @@ from datetime import datetime
 from time import mktime
 import _thread as thread
 
-# 导入配置系统
-try:
-    from utils.config import SpeechConfig as ConfigSpeechConfig
-except ImportError:
-    ConfigSpeechConfig = None
 
 # 全局变量供WebSocket回调使用
 current_output_file = None
@@ -43,17 +37,24 @@ synthesis_complete = False
 synthesis_success = False
 
 
-@dataclass 
-class TTSConfig:
-    """TTS引擎内部配置"""
-    app_id: str
-    api_key: str
-    api_secret: str
-    voice: str = 'x4_yezi'
-    audio_format: str = 'raw'
-    sample_rate: int = 16000
-    encoding: str = 'utf8'
-    output_dir: str = 'intelligence'
+@dataclass
+class SpeechConfig:
+    """语音合成配置"""
+    app_id: str = 'aeb60378'
+    api_key: str = 'e248b59b7b21d7291702b7808ba07257'
+    api_secret: str = 'MjQ1ZmM3MjkwNmEzZTQyN2ZiNTYxN2Ey'
+    voice: str = 'x4_yezi'  # 发音人
+    audio_format: str = 'raw'  # 音频格式
+    sample_rate: int = 16000  # 采样率
+    encoding: str = 'utf8'  # 文本编码
+    output_dir: str = 'intelligence'  # 输出目录
+    
+    # 播放器配置 (按优先级排序)
+    audio_players: list = None
+    
+    def __post_init__(self):
+        if self.audio_players is None:
+            self.audio_players = ['aplay', 'paplay', 'play', 'mplayer']
 
 
 class WsParam:
@@ -118,7 +119,7 @@ class WsParam:
 class iFlyTekTTS:
     """iFlytek WebAPI TTS核心实现类"""
     
-    def __init__(self, config: TTSConfig):
+    def __init__(self, config):
         self.config = config
         self.logger = logging.getLogger(__name__)
         
@@ -271,44 +272,46 @@ class SpeechSystem:
     """
     高级语音合成系统
     为Agent提供简洁的异步语音合成接口
-    支持网络音频输出到远程扬声器
     """
     
-    def __init__(self, speech_config: Optional[ConfigSpeechConfig] = None):
-        self.speech_config = speech_config
-        self.logger = logging.getLogger(__name__)
+    def __init__(self, config: Optional[SpeechConfig] = None):
+        self.config = config or SpeechConfig()
+        self.tts_engine = iFlyTekTTS(self.config)
         self.executor = ThreadPoolExecutor(max_workers=2)
-        
-        # 创建TTS配置和引擎
-        if self.speech_config:
-            # 使用配置文件中的TTS配置
-            tts_config = TTSConfig(
-                app_id=self.speech_config.app_id,
-                api_key=self.speech_config.api_key,
-                api_secret=self.speech_config.api_secret
-            )
-        else:
-            # 使用默认配置（向后兼容）
-            tts_config = TTSConfig(
-                app_id='aeb60378',
-                api_key='e248b59b7b21d7291702b7808ba07257',
-                api_secret='MjQ1ZmM3MjkwNmEzZTQyN2ZiNTYxN2Ey'
-            )
-            
-        self.tts_engine = iFlyTekTTS(tts_config)
+        self.logger = logging.getLogger(__name__)
         
         # 确保输出目录存在
-        output_dir = 'intelligence'
-        os.makedirs(output_dir, exist_ok=True)
-        self.output_dir = output_dir
+        os.makedirs(self.config.output_dir, exist_ok=True)
+        
+        # 音频播放器检测
+        self.available_player = self._detect_audio_player()
+        if not self.available_player:
+            self.logger.warning("未找到可用的音频播放器，语音播放可能失败")
     
-    async def say(self, text: str, send_to_speaker: bool = True) -> Dict[str, Any]:
+    def _detect_audio_player(self) -> Optional[str]:
+        """检测可用的音频播放器"""
+        for player in self.config.audio_players:
+            try:
+                result = subprocess.run(
+                    ['which', player], 
+                    capture_output=True, 
+                    text=True, 
+                    timeout=2
+                )
+                if result.returncode == 0:
+                    self.logger.info(f"检测到音频播放器: {player}")
+                    return player
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                continue
+        return None
+    
+    async def say(self, text: str, play_audio: bool = True) -> Dict[str, Any]:
         """
-        异步语音合成和网络播放
+        异步语音合成和播放
         
         Args:
             text: 要合成的文本
-            send_to_speaker: 是否发送到网络扬声器
+            play_audio: 是否自动播放音频
             
         Returns:
             Dict: 操作结果
@@ -319,7 +322,8 @@ class SpeechSystem:
         try:
             # 生成唯一的文件名
             timestamp = int(time.time() * 1000)
-            pcm_file = os.path.join(self.output_dir, f"tts_{timestamp}.pcm")
+            pcm_file = os.path.join(self.config.output_dir, f"tts_{timestamp}.pcm")
+            wav_file = os.path.join(self.config.output_dir, f"tts_{timestamp}.wav")
             
             self.logger.info(f"开始合成语音: {text}")
             
@@ -329,20 +333,25 @@ class SpeechSystem:
             if not success:
                 return {"success": False, "message": "语音合成失败"}
             
-            # 发送音频到网络扬声器
-            if send_to_speaker and self.speech_config:
-                send_success = await self._send_audio_to_speaker(pcm_file)
-                if not send_success:
-                    self.logger.warning("网络音频发送失败，但合成成功")
-            elif send_to_speaker and not self.speech_config:
-                self.logger.warning("缺少语音配置，跳过网络音频发送")
+            # 转换为WAV格式
+            wav_success = await self._convert_pcm_to_wav(pcm_file, wav_file)
+            
+            if not wav_success:
+                return {"success": False, "message": "音频格式转换失败"}
+            
+            # 播放音频
+            if play_audio and self.available_player:
+                play_success = await self._play_audio(wav_file)
+                if not play_success:
+                    self.logger.warning("音频播放失败，但合成成功")
             
             # 清理临时文件
             self._cleanup_files([pcm_file])
             
             return {
                 "success": True,
-                "message": "语音合成和发送完成",
+                "message": "语音合成完成",
+                "audio_file": wav_file,
                 "text": text
             }
             
@@ -350,53 +359,60 @@ class SpeechSystem:
             self.logger.error(f"语音合成系统错误: {e}")
             return {"success": False, "message": f"系统错误: {str(e)}"}
     
-    async def _send_audio_to_speaker(self, pcm_file: str) -> bool:
-        """发送音频到网络扬声器"""
-        if not self.speech_config:
-            self.logger.error("缺少语音配置，无法发送网络音频")
-            return False
-            
+    async def _convert_pcm_to_wav(self, pcm_file: str, wav_file: str) -> bool:
+        """异步PCM转WAV"""
         try:
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(
                 self.executor,
-                self._send_audio_sync,
-                pcm_file
+                self._convert_pcm_to_wav_sync,
+                pcm_file,
+                wav_file
             )
         except Exception as e:
-            self.logger.error(f"网络音频发送错误: {e}")
+            self.logger.error(f"PCM转WAV错误: {e}")
             return False
     
-    def _send_audio_sync(self, pcm_file: str) -> bool:
-        """同步发送音频到网络扬声器"""
+    def _convert_pcm_to_wav_sync(self, pcm_file: str, wav_file: str) -> bool:
+        """同步PCM转WAV"""
         try:
-            # 读取PCM音频数据
-            with open(pcm_file, 'rb') as f:
-                audio_data = f.read()
-            
-            if not audio_data:
-                self.logger.error("音频文件为空")
-                return False
-            
-            # 连接到笔记本扬声器服务器
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(10)  # 10秒超时
-            
-            try:
-                self.logger.info(f"连接到扬声器服务器: {self.speech_config.notebook_ip}:{self.speech_config.speaker_port}")
-                sock.connect((self.speech_config.notebook_ip, self.speech_config.speaker_port))
-                
-                # 发送音频数据
-                sock.sendall(audio_data)
-                self.logger.info(f"成功发送音频数据: {len(audio_data)} 字节")
-                
-                return True
-                
-            finally:
-                sock.close()
-                
+            with wave.open(wav_file, 'wb') as wav:
+                wav.setparams((1, 2, self.config.sample_rate, 0, 'NONE', 'not compressed'))
+                with open(pcm_file, 'rb') as pcm:
+                    wav.writeframes(pcm.read())
+            return True
         except Exception as e:
-            self.logger.error(f"网络音频发送失败: {e}")
+            self.logger.error(f"PCM转WAV同步错误: {e}")
+            return False
+    
+    async def _play_audio(self, audio_file: str) -> bool:
+        """异步音频播放"""
+        if not self.available_player:
+            return False
+        
+        try:
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                self.executor,
+                self._play_audio_sync,
+                audio_file
+            )
+        except Exception as e:
+            self.logger.error(f"异步音频播放错误: {e}")
+            return False
+    
+    def _play_audio_sync(self, audio_file: str) -> bool:
+        """同步音频播放"""
+        try:
+            result = subprocess.run(
+                [self.available_player, audio_file],
+                capture_output=True,
+                timeout=30,
+                check=False
+            )
+            return result.returncode == 0
+        except Exception as e:
+            self.logger.error(f"音频播放错误: {e}")
             return False
     
     def _cleanup_files(self, files: list):
@@ -421,13 +437,80 @@ class SpeechSystem:
             self.executor.shutdown(wait=False)
 
 
+# 兼容性函数 - 支持原有的文件监控方式 (可选使用)
+async def monitor_ai_output_and_speak(
+    file_path: str = 'intelligence/ai_output.txt', 
+    check_interval: float = 1.0,
+    speech_config: Optional[SpeechConfig] = None
+):
+    """
+    持续监控AI输出文件变化并转换为语音 (兼容性函数)
+    
+    Args:
+        file_path: AI输出文件路径
+        check_interval: 检查间隔(秒)
+        speech_config: 语音配置
+    """
+    speech_system = SpeechSystem(speech_config)
+    logger = logging.getLogger(__name__)
+    
+    logger.info(f"开始监控AI输出文件: {file_path}")
+    
+    last_content = ""
+    last_modified_time = 0
+    
+    try:
+        while True:
+            # 检查文件是否存在
+            if not os.path.exists(file_path):
+                await asyncio.sleep(check_interval)
+                continue
+                
+            # 检查文件是否被修改
+            current_modified_time = os.path.getmtime(file_path)
+            if current_modified_time <= last_modified_time:
+                await asyncio.sleep(check_interval)
+                continue
+                
+            # 读取新内容
+            try:
+                with open(file_path, 'r', encoding='utf-8') as file:
+                    current_content = file.read().strip()
+                
+                # 跳过空内容或相同内容
+                if not current_content or current_content == last_content:
+                    last_modified_time = current_modified_time
+                    await asyncio.sleep(check_interval)
+                    continue
+                    
+                logger.info(f"检测到新的AI输出: {current_content}")
+                
+                # 转换为语音
+                result = await speech_system.say(current_content)
+                if result["success"]:
+                    logger.info("语音播放完成")
+                else:
+                    logger.error(f"语音播放失败: {result['message']}")
+                
+                # 更新跟踪变量
+                last_content = current_content
+                last_modified_time = current_modified_time
+                
+            except Exception as e:
+                logger.error(f"读取AI输出文件错误: {e}")
+                await asyncio.sleep(check_interval)
+                
+    except KeyboardInterrupt:
+        logger.info("监控已停止")
+
+
 # 测试功能
-async def test_speech_system(speech_config: Optional[ConfigSpeechConfig] = None):
+async def test_speech_system():
     """测试语音系统"""
     print("🎤 测试语音合成系统...")
     
-    # 使用配置创建语音系统
-    speech_system = SpeechSystem(speech_config)
+    # 使用默认配置
+    speech_system = SpeechSystem()
     
     # 测试基本功能
     test_texts = [
@@ -457,19 +540,14 @@ if __name__ == "__main__":
     import sys
     
     if len(sys.argv) > 1 and sys.argv[1] == "test":
-        # 测试模式 - 尝试加载配置
-        try:
-            from utils.config import load_config
-            config = load_config("config.ini")
-            speech_config = config.speech
-            print("使用配置文件中的语音配置")
-        except Exception as e:
-            print(f"加载配置失败，使用默认配置: {e}")
-            speech_config = None
-        
-        asyncio.run(test_speech_system(speech_config))
+        # 测试模式
+        asyncio.run(test_speech_system())
+    elif len(sys.argv) > 1 and sys.argv[1] == "monitor":
+        # 兼容性监控模式
+        asyncio.run(monitor_ai_output_and_speak())
     else:
         print("智能语音合成系统")
         print("使用方法:")
         print("  python speech.py test     - 测试语音合成")
+        print("  python speech.py monitor  - 监控AI输出文件")
         print("  或在代码中导入SpeechSystem类使用")
