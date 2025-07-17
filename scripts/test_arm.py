@@ -43,10 +43,8 @@ def test_gripper_control(arm: ArmController):
     print("\n--- [Test] Gripper Control ---")
     print("Opening gripper...")
     arm.set_gripper_openness(0.0)
-    time.sleep(2)
     print("Closing gripper...")
     arm.set_gripper_openness(1.0)
-    time.sleep(2)
     print("--- Gripper Control Test PASSED ---")
 
 
