@@ -147,7 +147,6 @@ test_reports/
 test_data/
 
 # Local development files
-local_*
 dev_*
 debug_*
 scratch_*

@@ -425,11 +425,9 @@ class LocalAudioPlayer:
         try:
             import subprocess
             
-            # 获取音频文件信息
+            # 获取音频文件信息用于超时设置
             file_size = os.path.getsize(pcm_file)
             expected_duration = file_size / (16000 * 2)  # 16kHz, 16-bit
-            
-            self.logger.info(f"🎵 [PulseAudio播放] 文件: {os.path.basename(pcm_file)}, 大小: {file_size}字节, 预计时长: {expected_duration:.2f}秒")
             
             # 设置PulseAudio环境变量
             env = os.environ.copy()
@@ -445,70 +443,45 @@ class LocalAudioPlayer:
                     'aplay', '-t', 'raw', '-f', 'S16_LE', '-r', '16000', '-c', '1', pcm_file
                 ]
                 
-                self.logger.info(f"🎵 [aplay开始] 执行命令: {' '.join(aplay_cmd)}")
-                play_start = time.time()
-                
                 result = subprocess.run(aplay_cmd, capture_output=True, text=True, 
                                       env=env, timeout=expected_duration + 5)
                 
-                play_end = time.time()
-                actual_duration = play_end - play_start
-                
                 if result.returncode == 0:
-                    self.logger.info(f"✅ [aplay完成] 播放成功，实际耗时: {actual_duration:.2f}秒, 预计时长: {expected_duration:.2f}秒")
-                    
-                    # 检查播放时长是否合理
-                    if actual_duration < expected_duration * 0.8:
-                        self.logger.warning(f"⚠️ [播放异常] 实际播放时长过短！可能音频被截断")
-                    elif actual_duration > expected_duration * 1.2:
-                        self.logger.info(f"📊 [播放正常] 实际播放时长稍长，可能包含缓冲时间")
-                    else:
-                        self.logger.info(f"✅ [播放正常] 播放时长合理")
-                    
+                    self.logger.info("aplay播放成功")
                     return True
                 else:
-                    self.logger.warning(f"❌ [aplay失败] 返回码: {result.returncode}, 错误: {result.stderr}")
+                    self.logger.warning(f"aplay播放失败: {result.stderr}")
                     
             except subprocess.TimeoutExpired:
-                self.logger.error(f"❌ [aplay超时] 播放超时，预计时长: {expected_duration:.2f}秒")
+                self.logger.error("aplay播放超时")
             except (subprocess.CalledProcessError, FileNotFoundError) as e:
-                self.logger.warning(f"❌ [aplay错误] {e}")
+                self.logger.warning(f"aplay错误: {e}")
             
-            # 如果aplay失败，尝试ffmpeg with blocking options
+            # 如果aplay失败，尝试ffplay (阻塞播放)
             try:
-                self.logger.info("🔄 [回退到ffmpeg] 尝试使用ffmpeg阻塞播放")
-                
-                # 使用ffplay代替ffmpeg，ffplay会等待播放完成
                 ffplay_cmd = [
                     'ffplay', '-nodisp', '-autoexit', '-f', 's16le', '-ar', '16000', '-ac', '1', pcm_file
                 ]
                 
-                self.logger.info(f"🎵 [ffplay开始] 执行命令: {' '.join(ffplay_cmd)}")
-                play_start = time.time()
-                
                 result = subprocess.run(ffplay_cmd, capture_output=True, text=True, 
                                       env=env, timeout=expected_duration + 5)
                 
-                play_end = time.time()
-                actual_duration = play_end - play_start
-                
                 if result.returncode == 0:
-                    self.logger.info(f"✅ [ffplay完成] 播放成功，实际耗时: {actual_duration:.2f}秒, 预计时长: {expected_duration:.2f}秒")
+                    self.logger.info("ffplay播放成功")
                     return True
                 else:
-                    self.logger.warning(f"❌ [ffplay失败] 返回码: {result.returncode}, 错误: {result.stderr}")
+                    self.logger.warning(f"ffplay播放失败: {result.stderr}")
                     
             except subprocess.TimeoutExpired:
-                self.logger.error(f"❌ [ffplay超时] 播放超时，预计时长: {expected_duration:.2f}秒")
+                self.logger.error("ffplay播放超时")
             except (subprocess.CalledProcessError, FileNotFoundError) as e:
-                self.logger.warning(f"❌ [ffplay错误] {e}")
+                self.logger.warning(f"ffplay错误: {e}")
             
             # 回退到命令行播放
-            self.logger.info("🔄 [回退] 尝试命令行播放")
             return self._play_with_command_line(pcm_file)
             
         except Exception as e:
-            self.logger.error(f"❌ [PulseAudio错误] {e}")
+            self.logger.error(f"PulseAudio播放失败: {e}")
             return False
     
     def _play_with_command_line(self, pcm_file: str) -> bool:
@@ -618,41 +591,29 @@ class LocalSpeechSystem:
     
     async def _process_speech_queue(self):
         """处理语音队列中的所有任务"""
-        task_count = 0
-        self.logger.info("🚀 [队列处理器] 启动完成，等待任务...")
+        self.logger.info("语音队列处理器启动")
         
         while True:
             try:
                 # 等待队列中的任务
-                self.logger.info(f"📋 [队列状态] 等待队列中的任务... (当前队列大小: {self.speech_queue.qsize()})")
                 speech_item = await self.speech_queue.get()
                 
                 if speech_item is None:  # 停止信号
-                    self.logger.info("🛑 [队列处理器] 收到停止信号，退出")
+                    self.logger.info("队列处理器收到停止信号")
                     break
                 
                 text, play_locally, result_future = speech_item
-                task_count += 1
                 
                 try:
-                    self.logger.info(f"📝 [队列任务 #{task_count}] 开始处理: '{text}' (播放: {play_locally})")
-                    start_time = time.time()
-                    
                     # 执行实际的语音合成和播放
                     result = await self._synthesize_and_play(text, play_locally)
-                    
-                    end_time = time.time()
-                    task_duration = end_time - start_time
                     
                     # 设置结果
                     if not result_future.done():
                         result_future.set_result(result)
-                        self.logger.info(f"✅ [队列任务 #{task_count}] 处理完成: '{text}', 总耗时: {task_duration:.2f}秒")
-                    else:
-                        self.logger.warning(f"⚠️ [队列任务 #{task_count}] Future已完成，跳过结果设置")
                     
                 except Exception as e:
-                    self.logger.error(f"❌ [队列任务 #{task_count}] 处理错误: {e}")
+                    self.logger.error(f"队列处理错误: {e}")
                     if not result_future.done():
                         result_future.set_result({
                             "success": False,
@@ -662,13 +623,12 @@ class LocalSpeechSystem:
                 finally:
                     # 标记任务完成
                     self.speech_queue.task_done()
-                    self.logger.info(f"🔄 [队列任务 #{task_count}] 任务标记完成，继续处理下一个...")
                     
             except asyncio.CancelledError:
-                self.logger.info("🛑 [队列处理器] 被取消")
+                self.logger.info("队列处理器被取消")
                 break
             except Exception as e:
-                self.logger.error(f"❌ [队列处理器] 意外错误: {e}")
+                self.logger.error(f"队列处理器意外错误: {e}")
     
     async def say(self, text: str, play_locally: bool = True) -> Dict[str, Any]:
         """
@@ -714,47 +674,26 @@ class LocalSpeechSystem:
             timestamp = int(time.time() * 1000)
             pcm_file = os.path.join(self.output_dir, f"tts_{timestamp}.pcm")
             
-            self.logger.info(f"🎯 [队列处理] 开始处理文本: '{text}' (文件: {os.path.basename(pcm_file)})")
-            synthesis_start = time.time()
+            self.logger.info(f"开始语音合成: {text}")
             
             # 异步语音合成
             success = await self.tts_engine.synthesize_speech(text, pcm_file)
-            synthesis_end = time.time()
             
             if not success:
-                self.logger.error(f"❌ 语音合成失败: {text}")
+                self.logger.error("语音合成失败")
                 return {"success": False, "message": "语音合成失败"}
-            
-            # 检查生成的音频文件
-            if os.path.exists(pcm_file):
-                file_size = os.path.getsize(pcm_file)
-                audio_duration = file_size / (16000 * 2)  # 16kHz, 16-bit
-                self.logger.info(f"✅ 语音合成完成: 文件大小={file_size}字节, 预计时长={audio_duration:.2f}秒, 合成耗时={synthesis_end-synthesis_start:.2f}秒")
-            else:
-                self.logger.error(f"❌ 音频文件不存在: {pcm_file}")
-                return {"success": False, "message": "音频文件生成失败"}
             
             # 本地播放音频
             if play_locally:
-                self.logger.info(f"🔊 [播放开始] 开始播放音频: '{text}'")
-                play_start = time.time()
-                
+                self.logger.info("开始本地播放音频")
                 play_success = await self._play_audio_locally(pcm_file)
-                
-                play_end = time.time()
-                play_duration = play_end - play_start
-                
-                if play_success:
-                    self.logger.info(f"✅ [播放完成] 音频播放成功: '{text}', 播放耗时={play_duration:.2f}秒")
-                else:
-                    self.logger.warning(f"⚠️ [播放失败] 音频播放失败: '{text}', 但合成成功")
+                if not play_success:
+                    self.logger.warning("本地音频播放失败，但合成成功")
             
             # 清理临时文件
             self._cleanup_files([pcm_file])
             
-            total_time = time.time() - synthesis_start
-            self.logger.info(f"🎉 [处理完成] 文本处理总耗时: {total_time:.2f}秒 - '{text}'")
-            
+            self.logger.info(f"语音处理完成: {text}")
             return {
                 "success": True,
                 "message": "语音合成和播放完成",
@@ -762,7 +701,7 @@ class LocalSpeechSystem:
             }
             
         except Exception as e:
-            self.logger.error(f"❌ [系统错误] 语音合成系统错误: {e}")
+            self.logger.error(f"语音合成系统错误: {e}")
             return {"success": False, "message": f"系统错误: {str(e)}"}
     
     async def _play_audio_locally(self, pcm_file: str) -> bool:
