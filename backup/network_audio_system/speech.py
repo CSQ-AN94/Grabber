@@ -1,7 +1,10 @@
 # -*- coding:utf-8 -*-
 """
-修复版语音合成系统 - 简化队列实现
-解决阻塞问题，保持原有功能
+智能语音合成系统 - 基于iFlytek WebAPI
+提供清洁的异步接口给Agent使用，支持网络音频输出
+
+重构自原始iFlytek demo，优化为生产级别的模块化设计
+支持配置文件管理和网络音频传输
 """
 
 import asyncio
@@ -9,6 +12,7 @@ import os
 import time
 import logging
 import socket
+import wave
 from typing import Optional, Dict, Any
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
@@ -265,10 +269,12 @@ class iFlyTekTTS:
         thread.start_new_thread(run, ())
 
 
-class FixedSpeechSystem:
+class SpeechSystem:
     """
-    修复版语音合成系统
-    使用简单的锁机制而不是复杂的队列+线程
+    高级语音合成系统 - 优化版
+    为Agent提供简洁的异步语音合成接口
+    支持网络音频输出到远程扬声器
+    具有队列管理防止语音重叠
     """
     
     def __init__(self, speech_config: Optional[ConfigSpeechConfig] = None):
@@ -276,8 +282,15 @@ class FixedSpeechSystem:
         self.logger = logging.getLogger(__name__)
         self.executor = ThreadPoolExecutor(max_workers=2)
         
-        # 简单的锁机制防止并发播放
-        self.speech_lock = asyncio.Lock()
+        # 语音播放队列和管理
+        self.speech_queue = queue.Queue(maxsize=5)  # 限制队列大小
+        self.speech_worker_running = False
+        self.speech_worker_thread = None
+        self.current_speech_task = None
+        self.speech_lock = threading.Lock()
+        
+        # 启动语音播放工作线程
+        self._start_speech_worker()
         
         # 创建TTS配置和引擎
         if self.speech_config:
@@ -302,13 +315,83 @@ class FixedSpeechSystem:
         os.makedirs(output_dir, exist_ok=True)
         self.output_dir = output_dir
     
-    async def say(self, text: str, send_to_speaker: bool = True) -> Dict[str, Any]:
+    def _start_speech_worker(self):
+        """启动语音播放工作线程"""
+        if not self.speech_worker_running:
+            self.speech_worker_running = True
+            self.speech_worker_thread = threading.Thread(target=self._speech_worker)
+            self.speech_worker_thread.daemon = True
+            self.speech_worker_thread.start()
+            self.logger.info("🎵 语音播放工作线程已启动")
+    
+    def _speech_worker(self):
+        """语音播放工作线程"""
+        while self.speech_worker_running:
+            try:
+                # 从队列获取语音任务
+                task = self.speech_queue.get(timeout=1.0)
+                
+                if task is None:  # 停止信号
+                    break
+                    
+                text, future = task
+                self.current_speech_task = task
+                
+                # 执行语音合成和播放
+                try:
+                    result = asyncio.run(self._synthesize_and_play(text))
+                    if not future.cancelled():
+                        future.set_result(result)
+                except Exception as e:
+                    if not future.cancelled():
+                        future.set_exception(e)
+                finally:
+                    self.current_speech_task = None
+                    self.speech_queue.task_done()
+                    
+            except queue.Empty:
+                continue
+            except Exception as e:
+                self.logger.error(f"语音工作线程错误: {e}")
+                
+        self.logger.info("🎵 语音播放工作线程已停止")
+    
+    def _stop_speech_worker(self):
+        """停止语音播放工作线程"""
+        if self.speech_worker_running:
+            self.speech_worker_running = False
+            
+            # 清空队列
+            while not self.speech_queue.empty():
+                try:
+                    task = self.speech_queue.get_nowait()
+                    if task and len(task) == 2:
+                        _, future = task
+                        if not future.cancelled():
+                            future.cancel()
+                except queue.Empty:
+                    break
+            
+            # 发送停止信号
+            try:
+                self.speech_queue.put(None, timeout=1.0)
+            except queue.Full:
+                pass
+            
+            # 等待线程结束
+            if self.speech_worker_thread and self.speech_worker_thread.is_alive():
+                self.speech_worker_thread.join(timeout=3.0)
+                if self.speech_worker_thread.is_alive():
+                    self.logger.warning("语音工作线程未能正常结束")
+    
+    async def say(self, text: str, send_to_speaker: bool = True, interrupt_current: bool = False) -> Dict[str, Any]:
         """
-        异步语音合成和网络播放（修复版）
+        异步语音合成和网络播放（优化版）
         
         Args:
             text: 要合成的文本
             send_to_speaker: 是否发送到网络扬声器
+            interrupt_current: 是否中断当前播放
             
         Returns:
             Dict: 操作结果
@@ -316,46 +399,98 @@ class FixedSpeechSystem:
         if not text.strip():
             return {"success": False, "message": "文本为空"}
         
-        # 使用锁确保顺序播放
-        async with self.speech_lock:
+        # 如果要求中断当前播放，清空队列
+        if interrupt_current:
+            self._clear_speech_queue()
+        
+        # 如果队列满了，丢弃最旧的任务
+        if self.speech_queue.full():
             try:
-                # 生成唯一的文件名
-                timestamp = int(time.time() * 1000)
-                pcm_file = os.path.join(self.output_dir, f"tts_{timestamp}.pcm")
-                
-                self.logger.info(f"开始合成语音: {text}")
-                
-                # 异步语音合成
-                success = await self.tts_engine.synthesize_speech(text, pcm_file)
-                
-                if not success:
-                    self.logger.error("语音合成失败")
-                    return {"success": False, "message": "语音合成失败"}
-                
-                self.logger.info("语音合成成功，开始发送到扬声器")
-                
-                # 发送音频到网络扬声器
-                if send_to_speaker and self.speech_config:
-                    send_success = await self._send_audio_to_speaker(pcm_file)
-                    if not send_success:
-                        self.logger.warning("网络音频发送失败，但合成成功")
-                        # 即使网络发送失败，仍然返回成功（因为合成成功了）
-                elif send_to_speaker and not self.speech_config:
-                    self.logger.warning("缺少语音配置，跳过网络音频发送")
-                
-                # 清理临时文件
-                self._cleanup_files([pcm_file])
-                
-                self.logger.info(f"语音处理完成: {text}")
-                return {
-                    "success": True,
-                    "message": "语音合成和发送完成",
-                    "text": text
-                }
-                
-            except Exception as e:
-                self.logger.error(f"语音合成系统错误: {e}")
-                return {"success": False, "message": f"系统错误: {str(e)}"}
+                old_task = self.speech_queue.get_nowait()
+                if old_task and len(old_task) == 2:
+                    _, old_future = old_task
+                    if not old_future.cancelled():
+                        old_future.cancel()
+                self.logger.warning("语音队列满，丢弃旧任务")
+            except queue.Empty:
+                pass
+        
+        # 创建Future对象用于异步等待结果
+        future = asyncio.Future()
+        
+        try:
+            # 将任务加入队列
+            self.speech_queue.put((text, future), block=False)
+            
+            # 等待任务完成
+            result = await future
+            return result
+            
+        except queue.Full:
+            return {"success": False, "message": "语音队列满，请稍后再试"}
+        except asyncio.CancelledError:
+            return {"success": False, "message": "语音任务被取消"}
+        except Exception as e:
+            self.logger.error(f"语音合成错误: {e}")
+            return {"success": False, "message": f"系统错误: {str(e)}"}
+    
+    def _clear_speech_queue(self):
+        """清空语音队列"""
+        with self.speech_lock:
+            while not self.speech_queue.empty():
+                try:
+                    task = self.speech_queue.get_nowait()
+                    if task and len(task) == 2:
+                        _, future = task
+                        if not future.cancelled():
+                            future.cancel()
+                except queue.Empty:
+                    break
+            self.logger.info("语音队列已清空")
+    
+    async def _synthesize_and_play(self, text: str) -> Dict[str, Any]:
+        """
+        实际的语音合成和播放逻辑
+        
+        Args:
+            text: 要合成的文本
+            
+        Returns:
+            Dict: 操作结果
+        """
+        try:
+            # 生成唯一的文件名
+            timestamp = int(time.time() * 1000)
+            pcm_file = os.path.join(self.output_dir, f"tts_{timestamp}.pcm")
+            
+            self.logger.info(f"开始合成语音: {text}")
+            
+            # 异步语音合成
+            success = await self.tts_engine.synthesize_speech(text, pcm_file)
+            
+            if not success:
+                return {"success": False, "message": "语音合成失败"}
+            
+            # 发送音频到网络扬声器
+            if self.speech_config:
+                send_success = await self._send_audio_to_speaker(pcm_file)
+                if not send_success:
+                    self.logger.warning("网络音频发送失败，但合成成功")
+            else:
+                self.logger.warning("缺少语音配置，跳过网络音频发送")
+            
+            # 清理临时文件
+            self._cleanup_files([pcm_file])
+            
+            return {
+                "success": True,
+                "message": "语音合成和发送完成",
+                "text": text
+            }
+            
+        except Exception as e:
+            self.logger.error(f"语音合成系统错误: {e}")
+            return {"success": False, "message": f"系统错误: {str(e)}"}
     
     async def _send_audio_to_speaker(self, pcm_file: str) -> bool:
         """发送音频到网络扬声器"""
@@ -375,7 +510,7 @@ class FixedSpeechSystem:
             return False
     
     def _send_audio_sync(self, pcm_file: str) -> bool:
-        """同步发送音频到网络扬声器"""
+        """同步发送音频到网络扬声器（优化版）"""
         try:
             # 读取PCM音频数据
             with open(pcm_file, 'rb') as f:
@@ -394,8 +529,19 @@ class FixedSpeechSystem:
                 sock.connect((self.speech_config.notebook_ip, self.speech_config.speaker_port))
                 self.logger.info("成功连接到扬声器服务器")
                 
-                # 发送音频数据
-                sock.sendall(audio_data)
+                # 分块发送音频数据以避免网络拥堵
+                chunk_size = 4096
+                bytes_sent = 0
+                
+                while bytes_sent < len(audio_data):
+                    chunk = audio_data[bytes_sent:bytes_sent + chunk_size]
+                    sock.sendall(chunk)
+                    bytes_sent += len(chunk)
+                    
+                    # 小延迟避免网络拥堵
+                    if bytes_sent < len(audio_data):
+                        time.sleep(0.001)  # 1ms延迟
+                
                 self.logger.info(f"成功发送音频数据: {len(audio_data)} 字节")
                 
                 return True
@@ -432,6 +578,7 @@ class FixedSpeechSystem:
     def stop_speech_system(self):
         """停止语音系统"""
         self.logger.info("停止语音系统...")
+        self._stop_speech_worker()
         if hasattr(self, 'executor'):
             self.executor.shutdown(wait=False)
     
@@ -444,34 +591,34 @@ class FixedSpeechSystem:
 
 
 # 测试功能
-async def test_fixed_speech_system(speech_config: Optional[ConfigSpeechConfig] = None):
-    """测试修复版语音系统"""
-    print("🎤 测试修复版语音合成系统...")
+async def test_speech_system(speech_config: Optional[ConfigSpeechConfig] = None):
+    """测试语音系统"""
+    print("🎤 测试语音合成系统...")
     
     # 使用配置创建语音系统
-    speech_system = FixedSpeechSystem(speech_config)
+    speech_system = SpeechSystem(speech_config)
     
     # 测试基本功能
     test_texts = [
-        "第一条语音测试",
-        "第二条语音测试",
-        "第三条语音测试"
+        "语音合成系统测试正常",
+        "欢迎使用智慧零售机器人助手",
+        "语音播放功能工作正常"
     ]
     
     for i, text in enumerate(test_texts, 1):
         print(f"\n测试 {i}/{len(test_texts)}: {text}")
-        start_time = time.time()
         result = await speech_system.say(text)
-        end_time = time.time()
         print(f"结果: {result}")
-        print(f"耗时: {end_time - start_time:.2f}秒")
         
         if result["success"]:
             print("✅ 成功")
         else:
             print(f"❌ 失败: {result['message']}")
+        
+        # 等待一下再继续
+        await asyncio.sleep(1)
     
-    print("\n🎤 修复版语音系统测试完成")
+    print("\n🎤 语音系统测试完成")
 
 
 if __name__ == "__main__":
@@ -489,9 +636,9 @@ if __name__ == "__main__":
             print(f"加载配置失败，使用默认配置: {e}")
             speech_config = None
         
-        asyncio.run(test_fixed_speech_system(speech_config))
+        asyncio.run(test_speech_system(speech_config))
     else:
-        print("修复版智能语音合成系统")
+        print("智能语音合成系统")
         print("使用方法:")
-        print("  python speech_fixed.py test     - 测试语音合成")
-        print("  或在代码中导入FixedSpeechSystem类使用")
+        print("  python speech.py test     - 测试语音合成")
+        print("  或在代码中导入SpeechSystem类使用")

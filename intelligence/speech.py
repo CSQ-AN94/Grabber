@@ -11,13 +11,13 @@ import asyncio
 import os
 import time
 import logging
-import socket
-import wave
+# import socket  # 移除网络依赖
+# import wave  # 移除wave依赖
 from typing import Optional, Dict, Any
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
-import queue
-import threading
+# import queue  # 移除队列依赖
+# import threading  # 移除线程依赖
 
 # iFlytek WebAPI dependencies
 import websocket

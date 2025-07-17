@@ -29,6 +29,8 @@ RUN apt-get update && apt-get install -y \
     libasound2-dev \
     libudev-dev \
     alsa-utils \
+    pulseaudio-utils \
+    libpulse-dev \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 

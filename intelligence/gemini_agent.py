@@ -9,7 +9,7 @@ from google import genai
 from google.genai import types
 
 from utils.config import AgentConfig, LLMConfig
-from sensors.microphone_thread import MicrophoneThread
+from sensors.local_microphone import LocalMicrophoneInput
 
 
 @dataclass
@@ -40,9 +40,8 @@ class GeminiAgent:
         self.client = genai.Client(api_key=llm_config.gemini_api_key)
         self.model = "gemini-2.0-flash-live-001"  # Semi-cascade model, supports tool calling, more stable
         
-        # Simplified audio input using MicrophoneThread
-        self.microphone = MicrophoneThread(
-            port=8888,  # Fixed port for network audio
+        # Local audio input using LocalMicrophoneInput
+        self.microphone = LocalMicrophoneInput(
             sample_rate=agent_config.audio_sample_rate,  # 16000Hz for Gemini
             chunk_size=agent_config.audio_chunk_size
         )
@@ -92,8 +91,8 @@ class GeminiAgent:
         self.is_running = True
         
         try:
-            # Start microphone thread for network audio input
-            await self.microphone.start_server()
+            # Start local microphone recording
+            await self.microphone.start_recording()
             
             # Create Live API session with proper config
             config_dict = self._create_session_config()
@@ -101,7 +100,7 @@ class GeminiAgent:
             async with self.client.aio.live.connect(model=self.model, config=config) as session:
                 self.session = session
                 self.logger.info("Gemini Live API session established")
-                self.logger.info(f"等待网络音频输入，端口: {self.microphone.port}")
+                self.logger.info("等待本地麦克风音频输入")
                 
                 # Run concurrent tasks
                 await asyncio.gather(
@@ -272,7 +271,7 @@ class GeminiAgent:
     async def stop_session(self):
         """Stop the interactive session"""
         self.is_running = False
-        await self.microphone.stop_server()
+        await self.microphone.stop_recording()
         if self.session:
             self.session = None
         self.logger.info("Gemini Agent session stopped")

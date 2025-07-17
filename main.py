@@ -17,7 +17,7 @@ from controllers.arm_controller import ArmController
 from controllers.rail_controller import RailController
 from sensors.camera_thread import CameraThread
 from intelligence.vision import VisionAnalyzer
-from intelligence.speech import SpeechSystem
+from intelligence.speech_local import LocalSpeechSystem
 from intelligence.gemini_agent import GeminiAgent
 from intelligence.robot_tools import MockRobotTools, ToolRegistry
 from utils.state import WorldState
@@ -171,9 +171,9 @@ class GrabberSystem:
             self.logger.info("视觉分析器初始化成功")
             
             # 初始化语音系统
-            self.logger.info("初始化语音系统...")
-            self.speech_system = SpeechSystem()
-            self.logger.info("语音系统初始化成功")
+            self.logger.info("初始化本地语音系统...")
+            self.speech_system = LocalSpeechSystem(self.config.speech)
+            self.logger.info("本地语音系统初始化成功")
             
         except Exception as e:
             self.logger.error(f"AI组件初始化失败: {e}")

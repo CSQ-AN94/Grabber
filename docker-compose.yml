@@ -19,6 +19,10 @@ services:
       - .:/app
       - /tmp/.X11-unix:/tmp/.X11-unix:rw # 挂载X11 socket
       - ~/.Xauthority:/root/.Xauthority:ro # 挂载X11授权文件
+      # 音频系统挂载
+      - /run/user/1000/pulse:/run/user/1000/pulse:rw # 挂载PulseAudio socket
+      - /run/user/1000:/run/user/1000:rw # 挂载用户运行时目录
+      - ~/.config/pulse:/root/.config/pulse:rw # 挂载PulseAudio用户配置
       
     # 这里定义容器运行时的环境变量
     environment:
@@ -31,6 +35,13 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=all
       - NVIDIA_VISIBLE_DEVICES=all
       - NO_AT_BRIDGE=1 # 禁用AT-Bridge
+      # 音频系统环境变量 - 修复音频配置
+      - PULSE_RUNTIME_PATH=/run/user/1000/pulse
+      - PULSE_SERVER=unix:/run/user/1000/pulse/native
+      - XDG_RUNTIME_DIR=/run/user/1000
+      # ALSA配置
+      - ALSA_PCM_CARD=1
+      - ALSA_PCM_DEVICE=0
 
     # 设置网络模式为host
     network_mode: "host"

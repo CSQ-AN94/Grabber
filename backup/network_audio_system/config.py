@@ -60,6 +60,8 @@ class CalibrationConfig:
 @dataclass
 class SpeechConfig:
     """语音系统配置"""
+    notebook_ip: str
+    speaker_port: int
     app_id: str
     api_key: str
     api_secret: str
@@ -257,6 +259,8 @@ def load_config(path: str = 'config.ini') -> AppConfig:
 
         # Speech配置
         speech_config = SpeechConfig(
+            notebook_ip=_get_config_value('speech', 'notebook_ip'),
+            speaker_port=_get_config_value('speech', 'speaker_port', parser.getint),
             app_id=_get_config_value('speech', 'app_id'),
             api_key=_get_config_value('speech', 'api_key'),
             api_secret=_get_config_value('speech', 'api_secret')
