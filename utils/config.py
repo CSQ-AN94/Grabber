@@ -53,7 +53,14 @@ class CalibrationConfig:
     T_end_to_camera: np.ndarray
 
 
-# SpeechConfig 已删除 - 语音系统使用硬编码配置
+@dataclass
+class SpeechConfig:
+    """语音系统配置"""
+    notebook_ip: str
+    speaker_port: int
+    app_id: str
+    api_key: str
+    api_secret: str
 
 
 @dataclass
@@ -95,6 +102,7 @@ class AppConfig:
     gripper: GripperConfig
     rail: RailConfig
     calibration: CalibrationConfig
+    speech: SpeechConfig
     llm: LLMConfig
     agent: AgentConfig
     vision: VisionConfig
@@ -245,6 +253,15 @@ def load_config(path: str = 'config.ini') -> AppConfig:
             T_end_to_camera=T_end_to_camera
         )
 
+        # Speech配置
+        speech_config = SpeechConfig(
+            notebook_ip=_get_config_value('speech', 'notebook_ip'),
+            speaker_port=_get_config_value('speech', 'speaker_port', parser.getint),
+            app_id=_get_config_value('speech', 'app_id'),
+            api_key=_get_config_value('speech', 'api_key'),
+            api_secret=_get_config_value('speech', 'api_secret')
+        )
+
         # LLM配置
         llm_config = LLMConfig(
             gemini_api_key=_get_config_value('llm', 'gemini_api_key'),
@@ -276,6 +293,7 @@ def load_config(path: str = 'config.ini') -> AppConfig:
             gripper=gripper_config,
             rail=rail_config,
             calibration=calibration_config,
+            speech=speech_config,
             llm=llm_config,
             agent=agent_config,
             vision=vision_config,

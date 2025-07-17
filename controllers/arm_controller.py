@@ -11,6 +11,7 @@ class ArmController:
         self.config = arm_config
         self.arm = RoboticArm(rm_thread_mode_e.RM_TRIPLE_MODE_E)
         self.handle = self.arm.rm_create_robot_arm(conn_config.arm_ip, conn_config.arm_port)
+        self.gripper_config = gripper_config
         self._init_gripper(gripper_config)  # 初始化夹爪
         print(f"机械臂连接句柄: {self.handle.id}")
 
@@ -113,4 +114,7 @@ class ArmController:
         # 0.0(全开)~1.0(全关)
         with self.lock:
             pos = int(openness * 256000)
-            return self._write_gripper_reg(43, pos)
+            # 全步长是256000，需要等待的时间为 (256000 / run_speed) * openness 秒
+            res = self._write_gripper_reg(43, pos)
+            time.sleep(25600 / self.gripper_config.run_speed)
+            return res
