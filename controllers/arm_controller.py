@@ -116,5 +116,5 @@ class ArmController:
             pos = int(openness * 256000)
             # 全步长是256000，需要等待的时间为 (256000 / run_speed) * openness 秒
             res = self._write_gripper_reg(43, pos)
-            time.sleep(256000 / self.gripper_config.run_speed * openness)
+            time.sleep(openness * 256000 / self.gripper_config.run_speed)
             return res
