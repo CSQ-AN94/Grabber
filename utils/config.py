@@ -26,7 +26,11 @@ class ArmConfig:
     zero_pose: List[float]
     dropoff_pose: List[float]
     checkout_scan_pose: List[float]
-    
+    scanning_pose_cartesian: List[float]
+    zero_pose_cartesian: List[float]
+    dropoff_pose_cartesian: List[float]
+    checkout_scan_pose_cartesian: List[float]
+
 @dataclass
 class GripperConfig:
     """夹爪配置"""
@@ -82,10 +86,6 @@ class AgentConfig:
 class VisionConfig:
     """计算机视觉配置"""
     model_path: str
-
-
-# LoggingConfig 已删除 - 使用默认日志配置
-
 
 @dataclass
 class SystemConfig:
@@ -228,7 +228,11 @@ def load_config(path: str = 'config.ini') -> AppConfig:
             scanning_pose=_parse_joint_angles(_get_config_value('arm', 'scanning_pose')),
             zero_pose=_parse_joint_angles(_get_config_value('arm', 'zero_pose')),
             dropoff_pose=_parse_joint_angles(_get_config_value('arm', 'dropoff_pose')),
-            checkout_scan_pose=_parse_joint_angles(_get_config_value('arm', 'checkout_scan_pose'))
+            checkout_scan_pose=_parse_joint_angles(_get_config_value('arm', 'checkout_scan_pose')),
+            scanning_pose_cartesian=_parse_list(_get_config_value('arm', 'scanning_pose_cartesian')),
+            zero_pose_cartesian=_parse_list(_get_config_value('arm', 'zero_pose_cartesian')),
+            dropoff_pose_cartesian=_parse_list(_get_config_value('arm', 'dropoff_pose_cartesian')),
+            checkout_scan_pose_cartesian=_parse_list(_get_config_value('arm', 'checkout_scan_pose_cartesian'))
         )
 
         # 夹爪配置
