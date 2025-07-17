@@ -102,7 +102,6 @@ Thumbs.db
 *.mp4
 *.avi
 demo.*
-diagnose_*
 error_info.txt
 voice_test_output.txt
 microphone_test.wav
