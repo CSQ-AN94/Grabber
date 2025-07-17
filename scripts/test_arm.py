@@ -42,9 +42,9 @@ def test_gripper_control(arm: ArmController):
     """测试夹爪控制"""
     print("\n--- [Test] Gripper Control ---")
     print("Opening gripper...")
-    arm.set_gripper_openness(0.0)
-    print("Closing gripper...")
     arm.set_gripper_openness(1.0)
+    print("Closing gripper...")
+    arm.set_gripper_openness(0.0)
     print("--- Gripper Control Test PASSED ---")
 
 

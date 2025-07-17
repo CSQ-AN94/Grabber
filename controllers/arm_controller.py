@@ -12,7 +12,7 @@ class ArmController:
         self.arm = RoboticArm(rm_thread_mode_e.RM_TRIPLE_MODE_E)
         self.handle = self.arm.rm_create_robot_arm(conn_config.arm_ip, conn_config.arm_port)
         self.gripper_config = gripper_config
-        self._init_gripper(gripper_config)  # 初始化夹爪
+        self.openness = self._init_gripper(gripper_config)  # 初始化夹爪，初始的openness为0.0，表示全闭
         print(f"机械臂连接句柄: {self.handle.id}")
 
     def move_to_joints(self, joint_angles, speed=30, radius=0, wait=True):
@@ -93,6 +93,9 @@ class ArmController:
         time.sleep(0.2)
         self._write_gripper_reg(40, gripper_config.run_speed)   # 运行速度
         time.sleep(0.2)
+        self._write_gripper_reg(43, 256000)  # 设置夹爪初始位置为全闭
+        time.sleep(5)
+        return 0.0
 
     def _write_gripper_reg(self, address, value):
         """
@@ -111,12 +114,13 @@ class ArmController:
         return self.arm.rm_write_modbus_rtu_registers(param)
 
     def set_gripper_openness(self, openness):
-        # 0.0(全开)~1.0(全关)
+        # 0.0(全关)~1.0(全开)
         with self.lock:
-            pos = int(openness * 256000)
-            # 全步长是256000，需要等待的时间为 (256000 / run_speed) * openness 秒
+            pos = int((1 - openness) * 256000)
+            # 全步长是256000，需要等待的时间为 (256000 / run_speed) * abs(self.openness - openness) 秒
             res = self._write_gripper_reg(43, pos)
-            sleep_time = openness * 256000 / self.gripper_config.run_speed
+            sleep_time = abs(self.openness - openness) * 256000 / self.gripper_config.run_speed
+            self.openness = openness  # 更新当前开度
             print(pos, res, sleep_time)
             time.sleep(sleep_time)
             return res
