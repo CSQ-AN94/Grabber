@@ -61,13 +61,14 @@ class ArmController:
             if pose_raw is None:
                 print("无法获取末端位姿")
                 return None
-            # 单位转换
-            x_m = pose_raw[0] / 1000000.0  # 0.001mm -> m
-            y_m = pose_raw[1] / 1000000.0  # 0.001mm -> m
-            z_m = pose_raw[2] / 1000000.0  # 0.001mm -> m
-            rx_rad = pose_raw[3] / 1000.0    # 0.001rad -> rad
-            ry_rad = pose_raw[4] / 1000.0    # 0.001rad -> rad
-            rz_rad = pose_raw[5] / 1000.0    # 0.001rad -> rad
+            # 正确单位：rm_get_current_arm_state() 返回的数据已经是正确单位
+            # 位置：米(m)，姿态：弧度(rad) - 无需转换
+            x_m = pose_raw[0]    # 已经是米
+            y_m = pose_raw[1]    # 已经是米  
+            z_m = pose_raw[2]    # 已经是米
+            rx_rad = pose_raw[3] # 已经是弧度
+            ry_rad = pose_raw[4] # 已经是弧度
+            rz_rad = pose_raw[5] # 已经是弧度
             # 构造4x4位姿矩阵
             T = np.eye(4)
             try:
