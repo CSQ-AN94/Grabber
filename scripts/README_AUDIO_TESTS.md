@@ -55,11 +55,14 @@ python scripts/test_speaker_system.py
 
 **在笔记本上运行扬声器服务器:**
 ```bash
-# 启动扬声器服务器（接收并播放音频）
-python sensors/speaker_thread.py
+# 方法1: 使用专用的笔记本扬声器服务器（推荐）
+python scripts/notebook_speaker_server.py
 
-# 或启动完整音频服务器
-python sensors/audio_server_tcp.py
+# 方法2: 测试音频播放功能
+python scripts/notebook_speaker_server.py --test-audio
+
+# 方法3: 使用项目内的扬声器线程（如果可用）
+python sensors/speaker_thread.py
 ```
 
 ## 测试步骤
@@ -70,7 +73,7 @@ python sensors/audio_server_tcp.py
 3. 对着笔记本麦克风说话，观察Jetson控制台的音频数据接收情况
 
 ### 第二步：验证扬声器输出
-1. 在笔记本上运行: `python sensors/speaker_thread.py`
+1. 在笔记本上运行: `python scripts/notebook_speaker_server.py`
 2. 在Jetson容器内运行: `python scripts/test_speaker_system.py --complete`
 3. 确认笔记本扬声器能够播放来自Jetson的合成语音
 

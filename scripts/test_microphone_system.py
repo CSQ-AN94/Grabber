@@ -32,8 +32,8 @@ async def test_microphone_server():
         
         # 创建麦克风线程
         mic_thread = MicrophoneThread(
+            port=8888,
             sample_rate=config.agent.audio_sample_rate,
-            channels=config.agent.audio_channels,
             chunk_size=config.agent.audio_chunk_size
         )
         
@@ -89,8 +89,8 @@ async def test_audio_data_quality():
     try:
         config = load_config("config.ini")
         mic_thread = MicrophoneThread(
+            port=8888,
             sample_rate=config.agent.audio_sample_rate,
-            channels=config.agent.audio_channels,
             chunk_size=config.agent.audio_chunk_size
         )
         
