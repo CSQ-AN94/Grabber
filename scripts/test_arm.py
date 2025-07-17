@@ -22,19 +22,19 @@ def test_arm_movement(arm: ArmController, arm_config):
     arm.move_to_joints(arm_config.scanning_pose) 
     time.sleep(1.5)
     print("Scanning pose in joint space:", arm.get_current_joint_angles())
-    print("Scanning pose in cartesian space:", arm.get_base_to_end_pose_matrix)
+    print("Scanning pose in cartesian space:", arm.get_base_to_end_pose_matrix())
     
     print("Moving to dropoff pose...")
     arm.move_to_joints(arm_config.dropoff_pose)
     time.sleep(1.5)
     print("Dropoff pose in joint space:", arm.get_current_joint_angles())
-    print("Dropoff pose in cartesian space:", arm.get_base_to_end_pose_matrix)
+    print("Dropoff pose in cartesian space:", arm.get_base_to_end_pose_matrix())
     
     print("Moving to zero pose...")
     arm.move_to_joints(arm_config.zero_pose)
     time.sleep(1.5)
     print("Zero pose in joint space:", arm.get_current_joint_angles())
-    print("Zero pose in cartesian space:", arm.get_base_to_end_pose_matrix)
+    print("Zero pose in cartesian space:", arm.get_base_to_end_pose_matrix())
     print("--- Arm Movement Test PASSED ---")
 
 

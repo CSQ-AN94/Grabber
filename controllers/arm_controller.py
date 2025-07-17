@@ -121,6 +121,6 @@ class ArmController:
             res = self._write_gripper_reg(43, pos)
             sleep_time = abs(self.openness - openness) * 256000 / self.gripper_config.run_speed
             self.openness = openness  # 更新当前开度
-            print(pos, res, sleep_time)
+            print(f"pos:{pos}, 返回值(0 for success):{res}, 休眠时间:{sleep_time}")
             time.sleep(sleep_time)
             return res
