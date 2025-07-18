@@ -54,29 +54,45 @@ class LocalMicrophoneInput:
         """配置最佳输入设备"""
         try:
             devices = sd.query_devices()
+            self.logger.info("扫描可用音频设备...")
             
             # 寻找支持16000Hz的输入设备
             best_input_device = None
             
             for device_id, device in enumerate(devices):
                 if device['max_input_channels'] > 0:
+                    self.logger.debug(f"检查输入设备 [{device_id}]: {device['name']} ({device['max_input_channels']} channels)")
                     try:
-                        sd.check_input_settings(device=device_id, samplerate=16000)
+                        # 尝试更宽松的配置检查
+                        sd.check_input_settings(
+                            device=device_id, 
+                            samplerate=16000,
+                            channels=1
+                        )
                         best_input_device = device_id
-                        self.logger.info(f"选择输入设备: [{device_id}] {device['name']} @ 16000Hz")
+                        self.logger.info(f"✅ 选择输入设备: [{device_id}] {device['name']} @ 16000Hz")
                         break
-                    except:
+                    except Exception as e:
+                        self.logger.debug(f"设备 {device_id} 不支持16000Hz: {e}")
                         continue
             
             if best_input_device is None:
-                self.logger.warning("未找到支持16000Hz的输入设备，使用默认设备")
-                best_input_device = sd.default.device[0]
+                # 如果没有找到理想设备，尝试使用第一个可用的输入设备
+                for device_id, device in enumerate(devices):
+                    if device['max_input_channels'] > 0:
+                        self.logger.warning(f"使用备选输入设备: [{device_id}] {device['name']}")
+                        best_input_device = device_id
+                        break
+                
+                if best_input_device is None:
+                    self.logger.warning("未找到任何输入设备，使用默认设备")
+                    best_input_device = sd.default.device[0] if isinstance(sd.default.device, tuple) else None
             
             self.input_device = best_input_device
             
         except Exception as e:
             self.logger.error(f"配置输入设备失败: {e}")
-            self.input_device = sd.default.device[0]
+            self.input_device = None
         
     def _audio_callback(self, indata, frames, time, status):
         """音频输入回调函数"""

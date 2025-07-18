@@ -44,6 +44,19 @@ class HandEyeCalibrator:
             raise RuntimeError("Failed to get arm pose matrix")
         return T_base_to_end
 
+    def _find_pattern_in_image(self, image):
+        # 在图像中定位标定板
+        corners, ids, _ = cv2.aruco.detectMarkers(image, self.aruco_dict, parameters=self.aruco_params)
+        if ids is not None and len(ids) > 4: # 至少看到4个标记才估计标定板位姿
+            retval, rvec, tvec = cv2.aruco.estimatePoseBoard(corners, ids, self.board, self.camera_matrix, self.dist_coeffs, rvec=None, tvec=None)
+            if retval > 0:
+                R, _ = cv2.Rodrigues(rvec)
+                T_camera_to_marker = np.eye(4)
+                T_camera_to_marker[:3, :3] = R
+                T_camera_to_marker[:3, 3] = tvec.flatten()
+                return T_camera_to_marker
+        return None
+    
     def run_calibration_process(self):
         """
         执行完整的手眼标定流程

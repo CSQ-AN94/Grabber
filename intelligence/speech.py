@@ -11,7 +11,10 @@ import asyncio
 import os
 import time
 import logging
-# import socket  # 移除网络依赖
+import re
+import threading
+import queue
+import subprocess
 # import wave  # 移除wave依赖
 from typing import Optional, Dict, Any
 from dataclasses import dataclass
@@ -43,6 +46,104 @@ except ImportError:
 current_output_file = None
 synthesis_complete = False
 synthesis_success = False
+
+
+class SentenceBuffer:
+    """
+    一个用于处理流式文本并将其重组为完整句子的缓冲区。
+
+    这个类被设计用来解决一个常见问题：当从语言模型（如Gemini）接收流式文本时，
+    文本经常在不自然的断点处被分割（例如，在逗号后或句子中间）。
+    如果直接将这些片段送入TTS（文本转语音）系统，会导致生成的语音断断续续，听起来非常不自然。
+
+    此类通过以下方式解决该问题：
+    1.  **累积文本**: 它有一个内部缓冲区，用于累积传入的文本片段。
+    2.  **后台处理**: 一个专用的后台线程持续监控这个缓冲区。
+    3.  **句子切分**: 使用正则表达式，它会根据常见的句子结束标点（如。、！、？）来智能地切分文本，形成完整的句子。
+    4.  **输出队列**: 切分出的完整句子被放入一个输出队列中，等待消费者（如TTS系统）来获取。
+    5.  **生产者-消费者模式**: 它充当了文本流（生产者）和语音合成（消费者）之间的中间件，
+        将不规则的文本流转化为规则的、以句子为单位的输出流。
+
+    使用��法:
+    -   生产者（例如，Gemini的响应处理程序）调用 `add_text()` 来添加文本片段。
+    -   消费者（例如，一个专门的TTS任务处理器）调用 `get_sentence()` 来获取一个完整的句子进行处理。
+    -   在对话结束时，调用 `flush()` 来确保缓冲区中剩余的任何文本都被处理。
+    -   调用 `stop()` 来安全地终止后台线程。
+    """
+    def __init__(self):
+        self.buffer = ""
+        self.sentence_queue = queue.Queue()
+        self.lock = threading.Lock()
+        self.running = True
+        self.processing_thread = threading.Thread(target=self._process_buffer)
+        self.processing_thread.daemon = True
+        self.processing_thread.start()
+        self.logger = logging.getLogger(__name__)
+
+    def add_text(self, text_fragment: str):
+        """向缓冲区添加文本片段。"""
+        with self.lock:
+            self.buffer += text_fragment
+
+    def _process_buffer(self):
+        """后台线程，持续处理缓冲区中的文本。"""
+        while self.running:
+            with self.lock:
+                if self.buffer:
+                    # 使用正则表达式按标点符号分割句子
+                    # 这个正则表达式会在分割后保留分隔符
+                    sentences = re.split(r'(。|！|？|……)', self.buffer)
+                    
+                    # sentences会是这样的列表: ['第一句', '。', '第二句', '！', '']
+                    # 我们需要将句子和它的标点重新组合起来
+                    processed_text = ""
+                    if len(sentences) > 1:
+                        # 成对处理句子和它的结束标点
+                        for i in range(0, len(sentences) - 1, 2):
+                            if i + 1 < len(sentences):
+                                sentence = sentences[i]
+                                delimiter = sentences[i+1]
+                                if sentence and sentence.strip() and delimiter:
+                                    full_sentence = sentence + delimiter
+                                    self.logger.debug(f"[SENTENCE_BUFFER] 句子入队: '{full_sentence.strip()}'")
+                                    self.sentence_queue.put(full_sentence.strip())
+                                    processed_text += full_sentence
+                        
+                        # 更新缓冲区，移除已处理的部分
+                        self.buffer = self.buffer[len(processed_text):]
+                    
+                    # 处理没有标准结尾标点的文本 - 按长度或者特殊情况处理
+                    elif self.buffer.strip() and len(self.buffer) > 50:
+                        # 如果缓冲区文本较长且没有标准结尾，可能是完整句子
+                        self.logger.debug(f"[SENTENCE_BUFFER] 长句子入队: '{self.buffer.strip()}'")
+                        self.sentence_queue.put(self.buffer.strip())
+                        self.buffer = ""
+
+            time.sleep(0.1)  # 避免CPU空转
+
+    def get_sentence(self, block=True, timeout=None) -> Optional[str]:
+        """从队列中获取一个完整的句子。"""
+        try:
+            return self.sentence_queue.get(block=block, timeout=timeout)
+        except queue.Empty:
+            return None
+
+    def flush(self):
+        """将缓冲区中剩余的任何文本作为最后一个句子推送到队列中。"""
+        self.logger.info("Flushing sentence buffer...")
+        with self.lock:
+            if self.buffer.strip():
+                self.sentence_queue.put(self.buffer.strip())
+                self.buffer = ""
+        self.logger.info("Sentence buffer flushed.")
+
+    def stop(self):
+        """停止后台处理线程。"""
+        self.logger.info("Stopping sentence buffer...")
+        self.running = False
+        # 不再需要join，因为daemon线程会随主程序退出
+        # self.processing_thread.join()
+        self.logger.info("Sentence buffer stopped.")
 
 
 @dataclass 
@@ -471,13 +572,10 @@ class SpeechSystem:
             if not success:
                 return {"success": False, "message": "语音合成失败"}
             
-            # 发送音频到网络扬声器
-            if self.speech_config:
-                send_success = await self._send_audio_to_speaker(pcm_file)
-                if not send_success:
-                    self.logger.warning("网络音频发送失败，但合成成功")
-            else:
-                self.logger.warning("缺少语音配置，跳过网络音频发送")
+            # 本地音频播放
+            play_success = await self._play_audio_locally(pcm_file)
+            if not play_success:
+                self.logger.warning("本地音频播放失败，但合成成功")
             
             # 清理临时文件
             self._cleanup_files([pcm_file])
@@ -492,71 +590,51 @@ class SpeechSystem:
             self.logger.error(f"语音合成系统错误: {e}")
             return {"success": False, "message": f"系统错误: {str(e)}"}
     
-    async def _send_audio_to_speaker(self, pcm_file: str) -> bool:
-        """发送音频到网络扬声器"""
-        if not self.speech_config:
-            self.logger.error("缺少语音配置，无法发送网络音频")
-            return False
-            
+    async def _play_audio_locally(self, pcm_file: str) -> bool:
+        """使用aplay本地播放PCM音频文件"""
         try:
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(
                 self.executor,
-                self._send_audio_sync,
+                self._play_audio_sync,
                 pcm_file
             )
         except Exception as e:
-            self.logger.error(f"网络音频发送错误: {e}")
+            self.logger.error(f"本地音频播放错误: {e}")
             return False
     
-    def _send_audio_sync(self, pcm_file: str) -> bool:
-        """同步发送音频到网络扬声器（优化版）"""
+    def _play_audio_sync(self, pcm_file: str) -> bool:
+        """同步播放PCM音频文件"""
         try:
-            # 读取PCM音频数据
-            with open(pcm_file, 'rb') as f:
-                audio_data = f.read()
-            
-            if not audio_data:
-                self.logger.error("音频文件为空")
+            if not os.path.exists(pcm_file):
+                self.logger.error(f"音频文件不存在: {pcm_file}")
                 return False
             
-            # 连接到笔记本扬声器服务器
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(10)  # 10秒超时
+            # 使用ffplay播放PCM音频文件 (支持PulseAudio)
+            # PCM格式: 16bit, 16kHz, 单声道
+            cmd = [
+                'ffplay',
+                '-f', 's16le',       # 16-bit little-endian format
+                '-ar', '16000',      # 16kHz sample rate
+                '-ac', '1',          # 单声道
+                '-nodisp',           # 不显示视频窗口
+                '-autoexit',         # 播放完自动退出
+                '-loglevel', 'quiet', # 静默模式
+                pcm_file
+            ]
             
-            try:
-                self.logger.info(f"尝试连接到扬声器服务器: {self.speech_config.notebook_ip}:{self.speech_config.speaker_port}")
-                sock.connect((self.speech_config.notebook_ip, self.speech_config.speaker_port))
-                self.logger.info("成功连接到扬声器服务器")
-                
-                # 分块发送音频数据以避免网络拥堵
-                chunk_size = 4096
-                bytes_sent = 0
-                
-                while bytes_sent < len(audio_data):
-                    chunk = audio_data[bytes_sent:bytes_sent + chunk_size]
-                    sock.sendall(chunk)
-                    bytes_sent += len(chunk)
-                    
-                    # 小延迟避免网络拥堵
-                    if bytes_sent < len(audio_data):
-                        time.sleep(0.001)  # 1ms延迟
-                
-                self.logger.info(f"成功发送音频数据: {len(audio_data)} 字节")
-                
+            self.logger.info(f"播放音频文件: {pcm_file}")
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                self.logger.info("音频播放成功")
                 return True
+            else:
+                self.logger.error(f"ffplay播放失败: {result.stderr}")
+                return False
                 
-            finally:
-                sock.close()
-                
-        except ConnectionRefusedError:
-            self.logger.error(f"连接被拒绝: {self.speech_config.notebook_ip}:{self.speech_config.speaker_port} - 扬声器服务器可能未启动")
-            return False
-        except socket.timeout:
-            self.logger.error("连接超时 - 检查网络连接和扬声器服务器状态")
-            return False
         except Exception as e:
-            self.logger.error(f"网络音频发送失败: {e}")
+            self.logger.error(f"本地音频播放失败: {e}")
             return False
     
     def _cleanup_files(self, files: list):
