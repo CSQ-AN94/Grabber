@@ -17,42 +17,9 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.config import load_config
 from utils.state import WorldState
 from utils.calibration import Calibration
-from sensors.camera_thread import CameraThread
+from sensors.camera_thread import CameraThread, DisplayThread
 from controllers.arm_controller import ArmController
 from controllers.rail_controller import RailController
-
-
-class DisplayThread(threading.Thread):
-    """实时显示相机画面的线程"""
-    def __init__(self, state: WorldState, exit_event: threading.Event):
-        super().__init__()
-        self.state = state
-        self.exit_event = exit_event
-        self.daemon = True
-
-    def run(self):
-        print("[DisplayThread] Started. Press 'q' IN THE OPENCV WINDOW to close visualization.")
-        try:
-            while not self.exit_event.is_set():
-                color, depth = self.state.get_latest_frames()
-                if color is None:
-                    time.sleep(0.01)
-                    continue
-                color = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)  # OpenCV默认BGR格式
-                cv2.imshow('Color Feed', color)
-                
-                if depth is not None:
-                    d_vis = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
-                    d_vis = cv2.applyColorMap(d_vis, cv2.COLORMAP_JET)
-                    cv2.imshow('Depth Feed', d_vis)
-
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    print("[DisplayThread] 'q' pressed. Closing visualization windows...")
-                    break
-        finally:
-            cv2.destroyAllWindows()
-            print("[DisplayThread] Windows closed.")
-
 
 def test_camera_capture(state: WorldState):
     """测试相机捕获"""
