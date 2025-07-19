@@ -9,7 +9,7 @@ from google import genai
 from google.genai import types
 
 from utils.config import AgentConfig, LLMConfig
-from sensors.local_microphone import LocalMicrophoneInput
+from sensors.smart_microphone import SmartMicrophoneInput
 
 
 @dataclass
@@ -40,10 +40,12 @@ class GeminiAgent:
         self.client = genai.Client(api_key=llm_config.gemini_api_key)
         self.model = "gemini-2.0-flash-live-001"  # Semi-cascade model, supports tool calling, more stable
         
-        # Local audio input using LocalMicrophoneInput
-        self.microphone = LocalMicrophoneInput(
+        # Smart audio input using SmartMicrophoneInput with VAD
+        self.microphone = SmartMicrophoneInput(
             sample_rate=agent_config.audio_sample_rate,  # 16000Hz for Gemini
-            chunk_size=agent_config.audio_chunk_size
+            chunk_size=agent_config.audio_chunk_size,
+            silence_threshold=1.0,  # 1秒静音阈值
+            speech_threshold=800    # 语音检测阈值
         )
         
         # Session management
@@ -91,7 +93,19 @@ class GeminiAgent:
         self.is_running = True
         
         try:
-            # Start local microphone recording
+            # Set up microphone event callbacks
+            def on_speech_start():
+                self.logger.debug("🎤 检测到语音开始")
+            
+            def on_silence_end():
+                self.logger.debug("🤫 检测到静音结束")
+            
+            self.microphone.set_event_callbacks(
+                speech_start=on_speech_start,
+                silence_end=on_silence_end
+            )
+            
+            # Start smart microphone recording with VAD
             await self.microphone.start_recording()
             
             # Create Live API session with proper config
@@ -100,7 +114,7 @@ class GeminiAgent:
             async with self.client.aio.live.connect(model=self.model, config=config) as session:
                 self.session = session
                 self.logger.info("Gemini Live API session established")
-                self.logger.info("等待本地麦克风音频输入")
+                self.logger.info("智能麦克风已启动，支持VAD和实时音频流处理")
                 
                 # Run concurrent tasks
                 await asyncio.gather(
@@ -116,36 +130,51 @@ class GeminiAgent:
             await self.stop_session()
     
     async def _audio_input_loop(self):
-        """Continuously send audio input to Gemini Live API"""
+        """Continuously process audio events and send to Gemini Live API"""
         while self.is_running and self.session:
-            audio_chunk = await self.microphone.get_audio_chunk()
-            if audio_chunk:
+            audio_event = await self.microphone.get_audio_event()
+            if audio_event:
+                event_type, data = audio_event
+                
                 try:
-                    # Validate audio data size - Gemini has requirements for audio chunk size
-                    if len(audio_chunk) < 64:  # Increase minimum audio chunk size to avoid 1007 errors
-                        continue
-                    
-                    # Ensure audio data is even bytes (16-bit PCM requirement)
-                    if len(audio_chunk) % 2 != 0:
-                        audio_chunk = audio_chunk[:-1]  # Remove last byte
-                    
-                    # Validate audio data is not empty and reasonable size
-                    if len(audio_chunk) == 0 or len(audio_chunk) > 8192:  # Max 8KB to avoid oversized chunks
-                        continue
-                    
-                    await self.session.send_realtime_input(
-                        audio=types.Blob(
-                            data=audio_chunk,
-                            mime_type="audio/pcm;rate=16000"  # Fix 1007 error: must include sample rate
+                    if event_type == 'audio' and data:
+                        # Validate audio data size - Gemini has requirements for audio chunk size
+                        if len(data) < 64:  # Increase minimum audio chunk size to avoid 1007 errors
+                            continue
+                        
+                        # Ensure audio data is even bytes (16-bit PCM requirement)
+                        if len(data) % 2 != 0:
+                            data = data[:-1]  # Remove last byte
+                        
+                        # Validate audio data is not empty and reasonable size
+                        if len(data) == 0 or len(data) > 8192:  # Max 8KB to avoid oversized chunks
+                            continue
+                        
+                        # Send audio data to Gemini Live API
+                        await self.session.send_realtime_input(
+                            audio=types.Blob(
+                                data=data,
+                                mime_type="audio/pcm;rate=16000"  # Fix 1007 error: must include sample rate
+                            )
                         )
-                    )
+                        
+                    elif event_type == 'silence_end':
+                        # Send silence end signal to Gemini Live API
+                        self.logger.debug("发送静音结束信号到Gemini Live API")
+                        try:
+                            await self.session.send_client_content(
+                                turns=[{"role": "user", "parts": [{"audio_stream_end": {}}]}],
+                                turn_complete=True
+                            )
+                        except Exception as e:
+                            self.logger.debug(f"静音结束信号发送错误: {e}")
                     
                 except Exception as e:
-                    self.logger.error(f"Audio sending error: {e}")
+                    self.logger.error(f"Audio processing error: {e}")
                     # If it's a 1007 error, audio format is problematic, stop session
                     if "1007" in str(e):
                         self.logger.error("Detected 1007 error - audio format issue:")
-                        self.logger.error(f"  - Audio chunk size: {len(audio_chunk) if 'audio_chunk' in locals() else 'N/A'}")
+                        self.logger.error(f"  - Audio chunk size: {len(data) if 'data' in locals() else 'N/A'}")
                         self.logger.error(f"  - MIME type: audio/pcm;rate=16000")
                         self.logger.error("  - Stopping session to avoid continuous errors")
                         self.is_running = False
@@ -157,11 +186,25 @@ class GeminiAgent:
     
     async def _response_processing_loop(self):
         """Process JSON text responses from Gemini Live API"""
-        try:
-            async for response in self.session.receive():
-                await self._handle_response(response)
-        except Exception as e:
-            self.logger.error(f"Error processing responses: {e}")
+        while self.is_running and self.session:
+            try:
+                async for response in self.session.receive():
+                    if not self.is_running:
+                        break
+                    await self._handle_response(response)
+                    
+                # 如果 async for 循环正常结束，说明会话可能已断开
+                # 在循环模式下，我们应该尝试重新连接或保持等待
+                if self.is_running:
+                    self.logger.warning("Response stream ended, but session should continue...")
+                    await asyncio.sleep(0.5)  # 等待一下再检查
+                    
+            except Exception as e:
+                self.logger.error(f"Error processing responses: {e}")
+                if self.is_running:
+                    await asyncio.sleep(1)  # 遇到错误时等待重试
+                else:
+                    break
     
     async def _handle_response(self, response):
         """Handle individual response from Gemini Live API - text and function calls"""
@@ -284,30 +327,3 @@ class GeminiAgent:
 
 
 # Utility function for testing
-async def test_gemini_agent():
-    """Test function for Gemini Agent"""
-    from utils.config import load_config
-    
-    def command_handler(command: RobotCommand):
-        print(f"\n=== Received Command ===")
-        print(f"Action: {command.action}")
-        print(f"Parameters: {command.parameters}")
-        print(f"Response text: {command.response_text}")
-        print(f"Confidence: {command.confidence}")
-        print("=======================\n")
-    
-    config = load_config()
-    agent = GeminiAgent(config.llm, config.agent)
-    
-    try:
-        print("Starting Gemini Agent test...")
-        print("Please speak to test voice recognition and command parsing...")
-        await agent.start_interactive_session(command_handler)
-    except KeyboardInterrupt:
-        print("Stopping test...")
-        await agent.stop_session()
-
-
-if __name__ == "__main__":
-    # Test the agent
-    asyncio.run(test_gemini_agent())

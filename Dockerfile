@@ -14,7 +14,7 @@ ENV PYTHONUNBUFFERED=1
 
 # --- 安装系统依赖 ---
 RUN apt-get update && apt-get install -y \
-    tmux htop net-tools nmap tree xclip curl wget vim\
+    tmux htop net-tools nmap tree xclip curl wget vim \
     python3-pip \
     python3-dev \
     python3-venv \
@@ -29,9 +29,14 @@ RUN apt-get update && apt-get install -y \
     libasound2-dev \
     libudev-dev \
     alsa-utils \
-    pulseaudio-utils \
     libpulse-dev \
     ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- 单独安装PulseAudio工具（修复基镜像不一致问题）---
+RUN apt-get update && apt-get install -y \
+    pulseaudio-utils \
+    libpulsedsp \
     && rm -rf /var/lib/apt/lists/*
 
 # --- 设置工作目录并拷贝pip依赖相关文件 ---

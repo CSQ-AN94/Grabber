@@ -3,6 +3,7 @@ import time
 import numpy as np
 from pyorbbecsdk import *
 from external.pyorbbecsdk.examples.utils import frame_to_bgr_image
+from utils.state import WorldState
 import cv2
 
 class CameraThread(threading.Thread):
