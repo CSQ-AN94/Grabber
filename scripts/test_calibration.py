@@ -190,7 +190,7 @@ def run_calibration_tests():
                 try:
                     app_config = load_config("config.ini")
                     T_end_to_camera = app_config.calibration.T_end_to_camera
-                    calibration = Calibration(dh_params, T_end_to_camera, K, dist)
+                    calibration = Calibration(T_end_to_camera, K, dist)
                     print("标定矩阵已更新")
                 except Exception as e:
                     print(f"标定矩阵更新失败: {e}")

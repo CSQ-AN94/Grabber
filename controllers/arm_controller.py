@@ -15,6 +15,9 @@ class ArmController:
         self.gripper_config = gripper_config
         self.openness = self._init_gripper(gripper_config)  # 初始化夹爪，初始的openness为0.0，表示全闭
         print(f"机械臂连接句柄: {self.handle.id}")
+        
+        # 自动设置TCP（如果配置了非零TCP位姿）
+        self._setup_tcp()
 
     def move_to_joints(self, joint_angles_deg, speed=30, radius=0, wait=True):
         # joint_angles_deg: list of 6 floats (单位: 度)
@@ -73,14 +76,14 @@ class ArmController:
             if pose_raw is None:
                 print("无法获取末端位姿")
                 return None
-            # 正确单位：rm_get_current_arm_state() 返回的数据已经是正确单位
-            # 位置：米(m)，姿态：弧度(rad) - 无需转换
-            x_m = pose_raw[0]    # 已经是米
-            y_m = pose_raw[1]    # 已经是米  
-            z_m = pose_raw[2]    # 已经是米
-            rx_rad = pose_raw[3] # 已经是弧度
-            ry_rad = pose_raw[4] # 已经是弧度
-            rz_rad = pose_raw[5] # 已经是弧度
+            # rm_get_current_arm_state() 返回的单位是米，姿态是弧度
+            # 所以无需转换
+            x_m = pose_raw[0]
+            y_m = pose_raw[1]
+            z_m = pose_raw[2]
+            rx_rad = pose_raw[3]
+            ry_rad = pose_raw[4]
+            rz_rad = pose_raw[5]
             # 构造4x4位姿矩阵
             T = np.eye(4)
             try:
@@ -141,3 +144,49 @@ class ArmController:
     async def set_gripper_openness_async(self, openness):
         """ set_gripper_openness的异步版本 """
         return await asyncio.to_thread(self.set_gripper_openness, openness)
+
+    def _setup_tcp(self):
+        """
+        根据配置自动设置工具坐标系（TCP）
+        如果tcp_pose不为全零，则设置TCP并激活
+        """
+        tcp_pose = self.config.tcp_pose
+        
+        # 检查是否配置了有效的TCP（不全为0）
+        if not tcp_pose or all(abs(x) < 1e-6 for x in tcp_pose):
+            print("[TCP] 未配置TCP偏移，使用默认法兰坐标系")
+            return
+        
+        print(f"[TCP] 设置工具坐标系，偏移: {tcp_pose}")
+        
+        with self.lock:
+            try:
+                # 先尝试删除可能存在的同名工具坐标系
+                self.arm.rm_delete_tool_frame("tcp")
+                
+                pose_m_rad = [
+                    tcp_pose[0],               # x: 保持米单位
+                    tcp_pose[1],               # y: 保持米单位
+                    tcp_pose[2],               # z: 保持米单位 
+                    tcp_pose[3],               # rx: rad
+                    tcp_pose[4],               # ry: rad
+                    tcp_pose[5]                # rz: rad
+                ]
+                
+                # 创建工具坐标系结构（使用官方构造方式）
+                frame = rm_frame_t("tcp", pose_m_rad, 0.0, 0.0, 0.0, 0.0)
+                
+                # 设置工具坐标系
+                result = self.arm.rm_set_manual_tool_frame(frame)
+                if result == 0:
+                    # 激活工具坐标系
+                    result = self.arm.rm_change_tool_frame("tcp")
+                    if result == 0:
+                        print("[TCP] 工具坐标系设置并激活成功")
+                    else:
+                        print(f"[TCP] 激活工具坐标系失败，错误码: {result}")
+                else:
+                    print(f"[TCP] 创建工具坐标系失败，错误码: {result}")
+                    
+            except Exception as e:
+                print(f"[TCP] 设置工具坐标系时发生异常: {e}")

@@ -88,13 +88,10 @@ class HandEyeCalibrator:
             
         ]
         
-        # 将度转换为弧度
-        calibration_poses = [[np.deg2rad(angle) for angle in pose] for pose in calibration_poses_deg]
-
         base_to_end_transforms = []
         camera_to_marker_transforms = []
-        for i, pose in enumerate(calibration_poses):
-            print(f"\nMoving to calibration pose {i+1}/{len(calibration_poses)}...")
+        for i, pose in enumerate(calibration_poses_deg):
+            print(f"\nMoving to calibration pose {i+1}/{len(calibration_poses_deg)}...")
             self.arm_controller.move_to_joints(pose)
             time.sleep(3.5) # 确保机械臂完全静止再拍照
             

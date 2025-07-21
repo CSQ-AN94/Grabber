@@ -27,6 +27,7 @@ class ArmConfig:
     zero_pose: List[float]
     dropoff_pose: List[float]
     checkout_scan_pose: List[float]
+    tcp_pose: List[float]
     scanning_pose_cartesian: List[float]
     zero_pose_cartesian: List[float]
     dropoff_pose_cartesian: List[float]
@@ -228,6 +229,7 @@ def load_config(path: str = 'config.ini') -> AppConfig:
             zero_pose=_parse_joint_angles(_get_config_value('arm', 'zero_pose')),
             dropoff_pose=_parse_joint_angles(_get_config_value('arm', 'dropoff_pose', fallback='0,0,0,0,0,0')),
             checkout_scan_pose=_parse_joint_angles(_get_config_value('arm', 'checkout_scan_pose')),
+            tcp_pose=_parse_list(_get_config_value('arm', 'tcp_pose', fallback='0.0, 0.0, 0.0, 0.0, 0.0, 0.0')),
             scanning_pose_cartesian=_parse_list(_get_config_value('arm', 'scanning_pose_cartesian')),
             zero_pose_cartesian=_parse_list(_get_config_value('arm', 'zero_pose_cartesian')),
             dropoff_pose_cartesian=_parse_list(_get_config_value('arm', 'dropoff_pose_cartesian')),
