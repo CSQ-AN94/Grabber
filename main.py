@@ -138,7 +138,7 @@ class GrabberSystem:
             # 等待相机稳定
             self.logger.info("等待相机稳定...")
             time.sleep(3)
-            if self.world_state.get_latest_frames()[0] is None:
+            if self.camera_thread.get_latest_frames()[0] is None:
                 raise RuntimeError("相机无法获取图像帧")
             
             # 初始化标定
@@ -455,7 +455,7 @@ class GrabberSystem:
         # 2. [arm_ctrl] 机械臂到结算扫描位
         self.arm_ctrl.move_to_joints(self.config.arm.checkout_scan_pose)
         # 3. [vision] YOLOv8静态图片检测结算区商品
-        image = self.world_state.get_latest_frames()[0]
+        image = self.camera_thread.get_latest_frames()[0]
         items = self.vision_analyzer.detect_items_in_checkout_area(image)
         # 4. [vision] 统计价格
         if not items:
@@ -485,7 +485,7 @@ class GrabberSystem:
         self.arm_ctrl.plan_and_move_to_pre_grasp_pose(target_world_pose, self.rail_ctrl)
         # 4. [vision] 在预备位置，进行一次性的精确位姿估计。
         print("In pre-grasp position. Performing fine-tuning perception...")
-        latest_image = self.world_state.get_latest_frames()[0]
+        latest_image = self.camera_thread.get_latest_frames()[0]
         fine_tuned_pose = self.vision_analyzer.get_precise_grasp_pose(latest_image, target_world_pose)
         # 5. [arm_ctrl] 执行最终的、短距离的、精确的抓取序列。
         success = self.arm_ctrl.execute_final_grasp_sequence(fine_tuned_pose)

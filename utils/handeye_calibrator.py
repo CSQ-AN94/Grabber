@@ -98,7 +98,7 @@ class HandEyeCalibrator:
             self.arm_controller.move_to_joints(pose)
             time.sleep(3.5) # 确保机械臂完全静止再拍照
             
-            color_image, _ = self.world_state.get_latest_frames()
+            color_image, _ = self.camera_thread.get_latest_frames()
             if color_image is None:
                 print(f"Pose {i+1}: Could not get image. Skipping.")
                 continue

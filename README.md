@@ -100,8 +100,6 @@ python3 scripts/test_calibration.py # 手眼标定测试
 
 **软件测试**（容器内可运行）：
 ```bash
-python3 scripts/test_gemini_live.py      # Gemini API连接测试
-python3 scripts/test_real_gemini_agent.py # 智能体集成测试
 python3 scripts/collect_images.py        # 数据采集工具
 ```
 

@@ -52,7 +52,7 @@ class ImageCollector:
         """初始化相机"""
         try:
             print("初始化相机...")
-            self.camera_thread = CameraThread(self.world_state, None)
+            self.camera_thread = CameraThread()
             self.camera_thread.start()
             
             # 等待相机稳定
@@ -60,7 +60,7 @@ class ImageCollector:
             time.sleep(3)
             
             # 验证相机是否正常工作
-            color_frame, depth_frame = self.world_state.get_latest_frames()
+            color_frame, depth_frame = self.camera_thread.get_latest_frames()
             if color_frame is None:
                 raise RuntimeError("相机初始化失败：无法获取彩色图像")
             
@@ -114,7 +114,7 @@ class ImageCollector:
         try:
             while True:
                 # 获取最新图像
-                color_frame, depth_frame = self.world_state.get_latest_frames()
+                color_frame, depth_frame = self.camera_thread.get_latest_frames()
                 
                 if color_frame is not None:
                     # 显示RGB图像

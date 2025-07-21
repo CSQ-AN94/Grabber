@@ -19,7 +19,7 @@ from utils.config import load_config
 from utils.state import WorldState
 from utils.calibration import Calibration
 from utils.handeye_calibrator import HandEyeCalibrator
-from sensors.camera_thread import CameraThread, DisplayThread
+from sensors.camera_thread import CameraThread, DisplayMode
 from controllers.arm_controller import ArmController
 
 
@@ -148,11 +148,10 @@ def run_calibration_tests():
         state = WorldState()
         
         # 启动相机线程
-        cam_thread = CameraThread(state, None)
+        cam_thread = CameraThread()
         cam_thread.start()
         print("相机线程启动成功")
-        display_thread = DisplayThread(state, exit_event)
-        display_thread.start()
+        cam_thread.start_display(DisplayMode.COLOR_DEPTH)
         
         # 等待相机稳定
         print("等待相机初始化...")

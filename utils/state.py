@@ -1,4 +1,4 @@
-# utils/state.py - 世界状态管理器
+# utils/state.py - 全局状态管理
 
 import threading
 from typing import Dict, List, Optional, Any
@@ -13,38 +13,40 @@ class ItemStatus(Enum):
 
 @dataclass
 class ItemInfo:
-    """商品信息数据结构"""
+    """存储单个物品信息的结构体"""
     item_name: str
     price: float
-    description: Dict[str, Any]  # shape, color, category等
-    world_position: List[float]  # [x, y, z, rx, ry, rz] 6DOF世界坐标
+    description: Dict[str, Any]  # 描述信息，如形状、颜色、类别
+    world_position: List[float]  # 世界坐标系下的6D位姿 [x, y, z, rx, ry, rz]
     status: ItemStatus = ItemStatus.ON_SHELF
 
 class WorldState:
     """
-    强化的世界状态管理器 - 物理世界的数字孪生
+    线程安全的世界状态管理器。
+    - 维护机械臂、导轨、货架物品等所有动态信息。
+    - 提供统一的接口供其他模块（如Agent、控制器）查询和更新状态。
     
-    管理：
-    1. 机器人状态（继承原有功能）
-    2. 世界地图（商品位置和状态）
-    3. 动态状态更新
+    主要功能:
+    1. 机器人状态管理: 跟踪关节角度、导轨位置、机械臂运动状态��
+    2. 世界模型管理: 维护一个包含所有货架物品信息的“地图”。
+    3. 业务逻辑: 处理物品抓取、放置、结账等核心流程。
+    
+    此类不直接与硬件交互，而是通过控制器和传感器线程（如CameraThread）接收更新。
     """
     
     def __init__(self):
         self.lock = threading.Lock()
         
-        # --- 原有机器人状态 ---
-        self.latest_color_frame = None
-        self.latest_depth_frame = None
-        self.new_frame_available = False
+        # --- 机器人状态 ---
         self.current_joint_angles = None
         self.is_arm_moving = False
         self.gripper_openness = None
+        self.rail_position = 0.0
         
-        # --- 新增世界地图 ---
-        self.world_map: Dict[int, ItemInfo] = {}  # 位置ID -> 商品信息
+        # --- 世界模型 ---
+        self.world_map: Dict[int, ItemInfo] = {}  # 位置ID -> 物品信息
         self.map_initialized = False
-        self.checkout_items: List[str] = []  # 结算区商品列表
+        self.checkout_items: List[str] = []  # 已放入结账区的物品列表
         
         # --- 预定义商品信息库 ---
         self.item_database = {
@@ -66,17 +68,7 @@ class WorldState:
             "红牛": {"price": 6, "description": {"shape": "罐装", "color": "蓝色", "category": "饮料"}}
         }
     
-    # --- 原有功能保持不变 ---
-    def update_frames(self, color, depth):
-        with self.lock:
-            self.latest_color_frame = color
-            self.latest_depth_frame = depth
-            self.new_frame_available = True
-
-    def get_latest_frames(self):
-        with self.lock:
-            self.new_frame_available = False
-            return self.latest_color_frame, self.latest_depth_frame
+    # --- 机器人状态接口 ---
 
     def update_joint_angles(self, joint_angles):
         with self.lock:
@@ -102,12 +94,22 @@ class WorldState:
         with self.lock:
             return self.gripper_openness
     
-    # --- 新增世界地图管理功能 ---
+    def get_rail_position(self) -> float:
+        """获取导轨当前位置"""
+        with self.lock:
+            return self.rail_position
+    
+    def set_rail_position(self, position: float):
+        """更新导轨位置"""
+        with self.lock:
+            self.rail_position = position
+    
+    # --- 世界模型接口 ---
     def initialize_world_map(self, mock_data: bool = True):
-        """初始化世界地图（测试阶段使用mock数据）"""
+        """初始化世界地图，目前使用mock数据"""
         with self.lock:
             if mock_data:
-                # 测试用的模拟货架布局（2层×4个=8个位置）
+                # 模拟一个2层、每层4个位置的货架布局
                 mock_layout = [
                     "可口可乐", "薯片", "农夫山泉矿泉水", "红牛",  # 第1层
                     "雀巢咖啡", "苹果", "奥利奥饼干", "橘子"      # 第2层
@@ -116,12 +118,12 @@ class WorldState:
                 for i, item_name in enumerate(mock_layout, 1):
                     if item_name in self.item_database:
                         item_info = self.item_database[item_name]
-                        # 模拟3D位置（实际使用时从视觉系统获取）
+                        # 模拟物品在世界坐标系中的3D位置
                         mock_position = [
-                            100 + (i % 4) * 150,  # x: 货架水平位置
-                            200 if i <= 4 else 400,  # y: 第1层或第2层
-                            300,  # z: 固定高度
-                            0, 0, 0  # 旋转角度
+                            100 + (i % 4) * 150,  # x: 沿货架横向排列
+                            200 if i <= 4 else 400,  # y: 第1层和第2层
+                            300,  # z: 高度
+                            0, 0, 0  # 姿态（暂不使用）
                         ]
                         
                         self.world_map[i] = ItemInfo(
@@ -135,7 +137,7 @@ class WorldState:
             self.map_initialized = True
     
     def get_world_map(self) -> Dict[int, Dict[str, Any]]:
-        """获取完整世界地图（Agent查询用）"""
+        """获取完整的世界地图，供Agent决策使用"""
         with self.lock:
             result = {}
             for pos_id, item_info in self.world_map.items():
@@ -145,13 +147,13 @@ class WorldState:
                     "description": item_info.description,
                     "world_position": item_info.world_position,
                     "status": item_info.status.value,
-                    "layer": 1 if pos_id <= 4 else 2,  # 货架层数
-                    "shelf_position": ((pos_id - 1) % 4) + 1  # 层内位置
+                    "layer": 1 if pos_id <= 4 else 2,  # 所在层
+                    "shelf_position": ((pos_id - 1) % 4) + 1  # 在该层的位置 (1-4)
                 }
             return result
     
     def query_item_by_name(self, item_name: str) -> Optional[Dict[str, Any]]:
-        """根据商品名查询位置信息"""
+        """根据物品名称查询货架上的物品信息"""
         with self.lock:
             for pos_id, item_info in self.world_map.items():
                 if item_info.item_name == item_name and item_info.status == ItemStatus.ON_SHELF:
@@ -166,7 +168,7 @@ class WorldState:
             return None
     
     def query_items_by_category(self, category: str) -> List[Dict[str, Any]]:
-        """根据分类查询商品"""
+        """根据类别查询所有物品"""
         with self.lock:
             results = []
             for pos_id, item_info in self.world_map.items():
@@ -182,19 +184,19 @@ class WorldState:
             return results
     
     def query_relative_position(self, reference_position: int, direction: str) -> Optional[Dict[str, Any]]:
-        """查询相对位置的商品"""
+        """查询某个位置旁边的物品（上/下/左/右）"""
         with self.lock:
-            # 计算相对位置逻辑
+            # 计算目标位置ID
             target_pos = None
             
-            if direction == "上方":
+            if direction == "下方":
                 target_pos = reference_position + 4 if reference_position <= 4 else None
-            elif direction == "下方":
+            elif direction == "上方":
                 target_pos = reference_position - 4 if reference_position > 4 else None
-            elif direction == "左边":
+            elif direction == "左侧":
                 if (reference_position - 1) % 4 > 0:
                     target_pos = reference_position - 1
-            elif direction == "右边":
+            elif direction == "右侧":
                 if (reference_position - 1) % 4 < 3:
                     target_pos = reference_position + 1
             
@@ -210,7 +212,7 @@ class WorldState:
             return None
     
     def mark_item_grabbed(self, position_id: int) -> bool:
-        """标记商品被抓取"""
+        """标记一个物品已被机械臂抓取"""
         with self.lock:
             if position_id in self.world_map:
                 self.world_map[position_id].status = ItemStatus.ON_GRIPPER
@@ -218,7 +220,7 @@ class WorldState:
             return False
     
     def move_item_to_checkout(self, position_id: int) -> bool:
-        """将商品移动到结算区"""
+        """将被抓取的物品移动到结账区"""
         with self.lock:
             if position_id in self.world_map:
                 item_info = self.world_map[position_id]
@@ -228,7 +230,7 @@ class WorldState:
             return False
     
     def get_checkout_summary(self) -> Dict[str, Any]:
-        """获取结算区摘要"""
+        """获取结账区物品的摘要信息"""
         with self.lock:
             items = []
             total_price = 0
@@ -246,10 +248,10 @@ class WorldState:
             }
     
     def get_inventory_announcement(self) -> str:
-        """生成货架播报文本"""
+        """生成用于语音播报的库存清单"""
         with self.lock:
             if not self.map_initialized:
-                return "货架信息未初始化"
+                return "货架信息尚未初始化。"
             
             layer1_items = []
             layer2_items = []
@@ -262,5 +264,5 @@ class WorldState:
                     else:
                         layer2_items.append(item_name)
             
-            announcement = f"第1层: {', '.join(layer1_items)}; 第2层: {', '.join(layer2_items)}"
+            announcement = f"货架第一层有: {', '.join(layer1_items)}; 第二层有: {', '.join(layer2_items)}"
             return announcement

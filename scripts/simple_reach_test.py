@@ -17,11 +17,11 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.config import load_config
 from utils.state import WorldState
 from utils.calibration import Calibration
-from sensors.camera_thread import CameraThread, DisplayThread
+from sensors.camera_thread import CameraThread, DisplayMode
 from controllers.arm_controller import ArmController
 
 
-def test_simple_reach(arm: ArmController, state: WorldState, calibration: Calibration, exit_event: threading.Event):
+def test_simple_reach(arm: ArmController, camera_thread: CameraThread, calibration: Calibration, exit_event: threading.Event):
     """
     一个简单的测试，用于大致验证手眼标定的方向是否正确。
     """
@@ -41,7 +41,7 @@ def test_simple_reach(arm: ArmController, state: WorldState, calibration: Calibr
     target_depth_m = 0.2 # 20cm
 
     while not exit_event.is_set():
-        color_image, _ = state.get_latest_frames()
+        color_image, _ = camera_thread.get_latest_frames()
         if color_image is None:
             time.sleep(0.01)
             continue
@@ -111,7 +111,7 @@ def run_test():
         state = WorldState()
         
         # 启动相机线程
-        cam_thread = CameraThread(state, None)
+        cam_thread = CameraThread()
         cam_thread.start()
         print("相机线程启动成功")
         
@@ -132,7 +132,7 @@ def run_test():
         print("标定对象初始化成功")
         
         # 运行测试
-        test_simple_reach(arm, state, calibration, exit_event)
+        test_simple_reach(arm, cam_thread, calibration, exit_event)
 
     except Exception as e:
         print(f"测试失败: {e}")

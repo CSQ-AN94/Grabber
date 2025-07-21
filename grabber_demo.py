@@ -70,10 +70,10 @@ class VisionDisplayThread(threading.Thread):
     """
     一个专门用于在后台运行视觉分析并显示结果的线程。
     """
-    def __init__(self, analyzer: VisionAnalyzer, state: WorldState, exit_event: threading.Event):
+    def __init__(self, analyzer: VisionAnalyzer, camera_thread: CameraThread, exit_event: threading.Event):
         super().__init__()
         self.analyzer = analyzer
-        self.state = state
+        self.camera_thread = camera_thread
         self.exit_event = exit_event
         self.daemon = True
 
@@ -83,7 +83,7 @@ class VisionDisplayThread(threading.Thread):
         cv2.namedWindow(window_name)
         
         while not self.exit_event.is_set():
-            color_frame, depth_frame = self.state.get_latest_frames()
+            color_frame, depth_frame = self.camera_thread.get_latest_frames()
             color_frame = cv2.cvtColor(color_frame, cv2.COLOR_BGR2RGB)
             
             if color_frame is not None:
@@ -175,7 +175,7 @@ async def main_demo():
     try:
         # 1. 初始化所有模块
         state = WorldState()
-        cam_thread = CameraThread(state, None)
+        cam_thread = CameraThread()
         
         arm = ArmController(app_config.connections, app_config.arm, app_config.gripper)
         tts = LocalSpeechSystem(app_config.speech)
@@ -184,7 +184,7 @@ async def main_demo():
         # 确保TTS队列处理器在异步环境中启动
         tts._start_queue_processor()
         
-        vision_thread = VisionDisplayThread(analyzer, state, exit_event)
+        vision_thread = VisionDisplayThread(analyzer, cam_thread, exit_event)
 
         print("模块初始化成功 (Arm, TTS, Vision, Camera, State)")
 

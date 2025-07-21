@@ -246,15 +246,15 @@ if __name__ == '__main__':
         elif choice == '2':
             print("Starting live video analysis... (Press 'q' in the window to stop)")
             
-            # 初始化相机线程和共享状态
+            # 初始化相机线程
             # 这是vision.py与系统其他部分唯一的连接点
             world_state = WorldState()
-            camera_thread = CameraThread(world_state, None)
+            camera_thread = CameraThread()
             camera_thread.start()
             
             # 等待相机启动
             time.sleep(3) 
-            if world_state.get_latest_frames()[0] is None:
+            if camera_thread.get_latest_frames()[0] is None:
                 print("Error: Failed to start camera stream.")
                 camera_thread.stop()
                 camera_thread.join()
@@ -263,7 +263,7 @@ if __name__ == '__main__':
             try:
                 while True:
                     # 从共享状态获取最新的彩色图和深度图
-                    color_frame, depth_frame = world_state.get_latest_frames()
+                    color_frame, depth_frame = camera_thread.get_latest_frames()
                     color_frame = cv2.cvtColor(color_frame, cv2.COLOR_BGR2RGB)
                     
                     if color_frame is not None:
