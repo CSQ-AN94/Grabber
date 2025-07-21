@@ -195,8 +195,8 @@ class ImageCollector:
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(description="图像采集脚本")
-    parser.add_argument("--interval", type=int, default=0.5, 
-                      help="图像保存间隔（秒），默认0.5秒")
+    parser.add_argument("--interval", type=int, default=5, 
+                      help="图像保存间隔（秒），默认5秒")
     parser.add_argument("--output", type=str, default="intelligence/data",
                       help="图像保存目录，默认intelligence/data")
     parser.add_argument("--config", type=str, default="config.ini",

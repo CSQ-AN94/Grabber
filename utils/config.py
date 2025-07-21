@@ -22,6 +22,7 @@ class ConnectionsConfig:
 @dataclass
 class ArmConfig:
     """机械臂配置"""
+    home_pose: List[float]
     scanning_pose: List[float]
     zero_pose: List[float]
     dropoff_pose: List[float]
@@ -173,10 +174,9 @@ def load_config(path: str = 'config.ini') -> AppConfig:
             raise ConfigError(f"Failed to parse list: {s}, error: {e}")
     
     def _parse_joint_angles(s: str) -> List[float]:
-        """解析关节角度并转换为弧度"""
+        """解析关节角度（度）为浮点数列表"""
         try:
-            degrees = [float(x.strip()) for x in s.split(',')]
-            return [np.deg2rad(deg) for deg in degrees]
+            return [float(x.strip()) for x in s.split(',')]
         except ValueError as e:
             raise ConfigError(f"Failed to parse joint angles: {s}, error: {e}")
     
@@ -223,9 +223,10 @@ def load_config(path: str = 'config.ini') -> AppConfig:
 
         # 机械臂配置
         arm_config = ArmConfig(
+            home_pose=_parse_joint_angles(_get_config_value('arm', 'home_pose')),
             scanning_pose=_parse_joint_angles(_get_config_value('arm', 'scanning_pose')),
             zero_pose=_parse_joint_angles(_get_config_value('arm', 'zero_pose')),
-            dropoff_pose=_parse_joint_angles(_get_config_value('arm', 'dropoff_pose')),
+            dropoff_pose=_parse_joint_angles(_get_config_value('arm', 'dropoff_pose', fallback='0,0,0,0,0,0')),
             checkout_scan_pose=_parse_joint_angles(_get_config_value('arm', 'checkout_scan_pose')),
             scanning_pose_cartesian=_parse_list(_get_config_value('arm', 'scanning_pose_cartesian')),
             zero_pose_cartesian=_parse_list(_get_config_value('arm', 'zero_pose_cartesian')),

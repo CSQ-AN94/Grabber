@@ -584,10 +584,16 @@ class LocalSpeechSystem:
         self._start_queue_processor()
     
     def _start_queue_processor(self):
-        """启动队列处理任务"""
+        """启动队列处理任务，仅在有事件循环时启动"""
         if self.queue_task is None or self.queue_task.done():
-            self.queue_task = asyncio.create_task(self._process_speech_queue())
-            self.logger.info("语音队列处理器已启动")
+            try:
+                loop = asyncio.get_running_loop()
+                if loop.is_running():
+                    self.queue_task = asyncio.create_task(self._process_speech_queue())
+                    self.logger.info("语音队列处理器已启动")
+            except RuntimeError:
+                self.logger.warning("没有正在运行的事件循环，语音队列处理器未启动。")
+                self.queue_task = None
     
     async def _process_speech_queue(self):
         """处理语音队列中的所有任务"""

@@ -165,8 +165,7 @@ def run_calibration_tests():
         # 初始化标定对象
         K, dist = cam_thread.get_camera_intrinsics()
         T_end_to_camera = app_config.calibration.T_end_to_camera
-        dh_params = arm.arm.rm_get_DH_data()[1]
-        calibration = Calibration(dh_params, T_end_to_camera, K, dist)
+        calibration = Calibration(T_end_to_camera, K, dist)
         print("标定对象初始化成功")
         
         # 运行测试菜单
