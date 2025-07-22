@@ -84,7 +84,7 @@ def collect_calibration_poses_interactively(arm: ArmController, exit_event: thre
                 
                 # 提取位置(m)和欧拉角(rad)
                 position_m = pose_matrix[:3, 3]
-                euler_rad = Rotation.from_matrix(pose_matrix[:3, :3]).as_euler('xyz')
+                euler_rad = Rotation.from_matrix(pose_matrix[:3, :3]).as_euler('ZYX')
                 
                 # 转换为对人类友好的格式
                 joint_angles_deg = [round(np.rad2deg(j), 2) for j in joint_angles]

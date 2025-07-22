@@ -144,12 +144,7 @@ class GrabberSystem:
             # 初始化标定
             self.logger.info("初始化手眼标定...")
             K, dist = self.camera_thread.get_camera_intrinsics()
-            dh_params = self.arm_ctrl.arm.rm_get_DH_data()[1]
-            self.calibration = Calibration(
-                dh_params, 
-                self.config.calibration.T_end_to_camera, 
-                K, dist
-            )
+            self.calibration = Calibration(self.config.calibration.T_end_to_camera, K, dist)
             self.logger.info("手眼标定初始化成功")
             
             # 移动到初始安全位置

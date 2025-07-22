@@ -34,16 +34,6 @@ class HandEyeCalibrator:
         self.camera_matrix = None
         self.dist_coeffs = None
 
-    def _get_arm_pose_matrix(self):
-        """
-        获取当前机械臂末端在base frame下的位姿矩阵
-        """
-        T_base_to_end = self.arm_controller.get_base_to_end_pose_matrix()
-        if T_base_to_end is None:
-            print("Error: Could not get arm pose matrix. Aborting.")
-            raise RuntimeError("Failed to get arm pose matrix")
-        return T_base_to_end
-
     def _find_pattern_in_image(self, image):
         # 在图像中定位标定板
         corners, ids, _ = cv2.aruco.detectMarkers(image, self.aruco_dict, parameters=self.aruco_params)
@@ -100,13 +90,14 @@ class HandEyeCalibrator:
                 print(f"Pose {i+1}: Could not get image. Skipping.")
                 continue
             T_base_to_end = self.arm_controller.get_base_to_end_pose_matrix()
+            print(f"T_base_to_end:{T_base_to_end}")
             T_camera_to_marker = self._find_pattern_in_image(color_image)
             
             if T_camera_to_marker is not None:
-                print(f"Pose {i+1}: Pattern found!")
+                print(f"Pose {i+1}: Pattern found\nT_camera_to_marker:{T_camera_to_marker}\n")
                 base_to_end_transforms.append(T_base_to_end)
                 camera_to_marker_transforms.append(T_camera_to_marker)
-            else:
+            else: 
                 print(f"Pose {i+1}: Pattern NOT found. Skipping.")
         
         # 确保收集到足够的有效位姿

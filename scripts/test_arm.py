@@ -135,7 +135,7 @@ def test_tcp_precision_movement(arm: ArmController, arm_config: ArmConfig):
     # 提取当前位置和姿态
     from scipy.spatial.transform import Rotation
     current_pos = current_matrix[:3, 3]
-    current_rot = Rotation.from_matrix(current_matrix[:3, :3]).as_euler('xyz')
+    current_rot = Rotation.from_matrix(current_matrix[:3, :3]).as_euler('ZYX')
     
     print(f"当前TCP位置: [{current_pos[0]:.3f}, {current_pos[1]:.3f}, {current_pos[2]:.3f}] m")
     

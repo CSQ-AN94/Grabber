@@ -237,8 +237,7 @@ def init_calibration_system(cam_thread: CameraThread, arm: ArmController):
         
         if K is not None and dist is not None:
             T_end_to_camera = config.calibration.T_end_to_camera
-            dh_params = arm.arm.rm_get_DH_data()[1]
-            calibration = Calibration(dh_params, T_end_to_camera, K, dist)
+            calibration = Calibration(T_end_to_camera, K, dist)
             print("标定系统初始化成功")
             return calibration
         else:

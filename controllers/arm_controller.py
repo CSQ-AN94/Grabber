@@ -87,7 +87,7 @@ class ArmController:
             # 构造4x4位姿矩阵
             T = np.eye(4)
             try:
-                rotation_matrix = Rotation.from_euler('xyz', [rx_rad, ry_rad, rz_rad], degrees=False).as_matrix()
+                rotation_matrix = Rotation.from_euler('ZYX', [rx_rad, ry_rad, rz_rad], degrees=False).as_matrix()
                 T[:3, :3] = rotation_matrix
                 T[:3, 3] = [x_m, y_m, z_m]
                 return T

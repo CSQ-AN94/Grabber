@@ -81,7 +81,7 @@ def test_simple_reach(arm: ArmController, camera_thread: CameraThread, calibrati
 
             # 3. 命令机械臂移动
             # 我们保持机械臂末端的姿态不变，只移动位置
-            current_orientation_rad = Rotation.from_matrix(T_base_to_end[:3, :3]).as_euler('xyz')
+            current_orientation_rad = Rotation.from_matrix(T_base_to_end[:3, :3]).as_euler('ZYX')
             
             target_pose = [
                 world_coords[0],
