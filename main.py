@@ -14,7 +14,7 @@ from typing import Optional
 
 # 核心模块导入
 from controllers.arm_controller import ArmController
-from controllers.rail_controller import RailController
+from controllers.ugv_controller import RailController
 from sensors.camera_thread import CameraThread
 from intelligence.vision import VisionAnalyzer
 from intelligence.speech_local import LocalSpeechSystem

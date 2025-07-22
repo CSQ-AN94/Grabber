@@ -53,7 +53,7 @@ class ArmController:
 
     def get_current_joint_angles(self):
         """
-        返回当前6个关节角度 (���位: 弧度)
+        返回当前6个关节角度 (单位: 弧度)
         """
         with self.lock:
             code, joints_deg = self.arm.rm_get_joint_degree() # 返回值是度

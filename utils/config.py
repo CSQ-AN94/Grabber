@@ -45,13 +45,10 @@ class GripperConfig:
 
 
 @dataclass
-class RailConfig:
-    """导轨配置"""
-    home_position: float
-    scan_start: float
-    scan_end: float
-    scan_speed: float
-
+class UGVConfig:
+    """UGV配置"""
+    max_dist: float
+    speed: float
 
 @dataclass
 class CalibrationConfig:
@@ -100,7 +97,7 @@ class AppConfig:
     connections: ConnectionsConfig
     arm: ArmConfig
     gripper: GripperConfig
-    rail: RailConfig
+    ugv: UGVConfig
     calibration: CalibrationConfig
     speech: SpeechConfig
     llm: LLMConfig
@@ -141,10 +138,6 @@ def validate_config(config: AppConfig) -> None:
     ]:
         if len(pose) != 6:
             raise ConfigError(f"Invalid {pose_name}: must have 6 joint angles, got {len(pose)}")
-    
-    # 验证导轨位置范围
-    if config.rail.scan_start > config.rail.scan_end:
-        raise ConfigError("Rail scan_start must be <= scan_end")
     
     # 验证手眼标定矩阵
     if config.calibration.T_end_to_camera.shape != (4, 4):
@@ -244,11 +237,9 @@ def load_config(path: str = 'config.ini') -> AppConfig:
         )
 
         # 导轨配置
-        rail_config = RailConfig(
-            home_position=_get_config_value('rail', 'home_position', parser.getfloat, 0.0),
-            scan_start=_get_config_value('rail', 'scan_start', parser.getfloat, 0.0),
-            scan_end=_get_config_value('rail', 'scan_end', parser.getfloat, 1.0),
-            scan_speed=_get_config_value('rail', 'scan_speed', parser.getfloat, 0.1)
+        ugv_config = UGVConfig(
+            max_dist=_get_config_value('ugv', 'max_dist', parser.getfloat, 0.0),
+            speed=_get_config_value('ugv', 'speed', parser.getfloat, 0.0)
         )
 
         # 标定配置
@@ -294,7 +285,7 @@ def load_config(path: str = 'config.ini') -> AppConfig:
             connections=conn_config,
             arm=arm_config,
             gripper=gripper_config,
-            rail=rail_config,
+            ugv=ugv_config,
             calibration=calibration_config,
             speech=speech_config,
             llm=llm_config,

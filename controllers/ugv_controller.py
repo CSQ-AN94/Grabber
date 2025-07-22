@@ -1,0 +1,186 @@
+import time
+import threading
+import atexit
+from typing import Optional
+from utils.config import UGVConfig
+import pyagxrobots
+
+
+class UGVController:
+    """AgileX Ranger Mini 3 UGV控制器，具有完善的资源管理功能"""
+    
+    def __init__(self, ugv_config: UGVConfig):
+        # 基本配置参数
+        self.max_dist = ugv_config.max_dist  # 最大移动距离
+        self.speed = ugv_config.speed        # 移动速度
+        
+        # 状态变量
+        self._is_moving = False              # 是否正在移动
+        self._position = 0.0                 # 当前位置 (0.0-1.0)
+        self._movement_lock = threading.Lock()  # 线程锁
+        self._connected = False              # 连接状态
+        self._emergency_stop = False         # 紧急停止状态
+        
+        # 初始化UGV硬件连接
+        self.ugv: Optional[pyagxrobots.pysdkugv.RangerBase] = None
+        self._initialize_ugv()
+        
+        # 注册退出时的清理函数
+        atexit.register(self.disconnect)
+    
+    def _initialize_ugv(self) -> bool:
+        """初始化UGV连接，包含错误处理"""
+        try:
+            self.ugv = pyagxrobots.pysdkugv.RangerBase()
+            self._connected = True
+            print("UGV初始化成功")
+            return True
+        except Exception as e:
+            print(f"UGV初始化失败: {e}")
+            print("提示：如果是CAN接口问题，请拔掉USB CAN适配器，等3秒后重新插入")
+            self._connected = False
+            return False
+    
+    def emergency_stop(self) -> bool:
+        """立即停止所有运动"""
+        self._emergency_stop = True
+        if not self._connected or self.ugv is None:
+            return False
+        
+        try:
+            # 按照官方模式发送全零停止命令
+            self.ugv.SetMotionCommand(linear_vel=0.0, lateral_vel=0.0, angular_vel=0.0, steer_angle=0.0)
+            with self._movement_lock:
+                self._is_moving = False
+            return True
+        except Exception as e:
+            print(f"紧急停止失败: {e}")
+            return False
+    
+    def move_to(self, position: float, wait: bool = True) -> bool:
+        """移动到指定位置，支持可控的直线运动
+        
+        参数:
+            position: 目标位置 (0.0到1.0范围)
+            wait: 是否阻塞等待移动完成
+            
+        返回:
+            bool: 移动是否成功启动
+        """
+        if not self._connected or self.ugv is None:
+            print("UGV未连接")
+            return False
+        
+        if self._emergency_stop:
+            print("UGV处于紧急停止状态")
+            return False
+        
+        # 验证位置范围
+        position = max(0.0, min(1.0, position))
+        
+        with self._movement_lock:
+            if self._is_moving:
+                print("UGV正在移动中，停止当前运动")
+                self.emergency_stop()
+                time.sleep(0.1)  # 短暂暂停等待停止命令
+            
+            self._is_moving = True
+        
+        try:
+            # 计算移动参数
+            distance = abs(position - self._position)
+            travel_time = self.max_dist * distance / max(self.speed, 1e-3)
+            
+            # 确定移动方向（负值 = 朝向放置区域）
+            linear_velocity = -self.speed if position > self._position else self.speed
+            
+            # 执行移动
+            self.ugv.SetMotionCommand(linear_vel=linear_velocity, lateral_vel=0.0, angular_vel=0.0, steer_angle=0.0)
+            
+            if wait:
+                # 监控移动过程，支持紧急停止
+                start_time = time.time()
+                while time.time() - start_time < travel_time:
+                    if self._emergency_stop:
+                        break
+                    time.sleep(0.05)  # 短暂休眠保持响应性
+                
+                # 确保完全停止
+                self.ugv.SetMotionCommand(linear_vel=0.0, lateral_vel=0.0, angular_vel=0.0, steer_angle=0.0)
+                
+                with self._movement_lock:
+                    self._is_moving = False
+                    if not self._emergency_stop:
+                        self._position = position
+            else:
+                # 非阻塞：立即更新位置
+                self._position = position
+            
+            return True
+            
+        except Exception as e:
+            print(f"UGV移动错误: {e}")
+            with self._movement_lock:
+                self._is_moving = False
+            self.emergency_stop()
+            return False
+    
+    def is_moving(self) -> bool:
+        """检查UGV是否正在移动"""
+        with self._movement_lock:
+            return self._is_moving
+    
+    def get_current_position(self) -> float:
+        """获取当前位置（0.0到1.0范围）"""
+        return self._position
+    
+    def is_connected(self) -> bool:
+        """检查UGV是否已连接且可操作"""
+        return self._connected and not self._emergency_stop
+    
+    def reset_emergency_stop(self) -> bool:
+        """重置紧急停止状态"""
+        if not self._connected:
+            return False
+        
+        self._emergency_stop = False
+        with self._movement_lock:
+            self._is_moving = False
+        return True
+    
+    def disconnect(self) -> None:
+        """正确断开UGV连接并清理资源"""
+        if not self._connected or self.ugv is None:
+            return
+        
+        try:
+            # 确保完全停止
+            self.ugv.SetMotionCommand(linear_vel=0.0, lateral_vel=0.0, angular_vel=0.0, steer_angle=0.0)
+            time.sleep(0.1)  # 等待停止命令处理
+            
+            # 标记为已断开
+            with self._movement_lock:
+                self._connected = False
+                self._is_moving = False
+            
+            # 尝试显式关闭底层CAN连接（如果存在）
+            try:
+                if hasattr(self.ugv, 'rangerbase') and hasattr(self.ugv.rangerbase, 'device'):
+                    if hasattr(self.ugv.rangerbase.device, 'canport'):
+                        self.ugv.rangerbase.device.canport = None
+            except:
+                pass
+            
+            # 显式销毁UGV对象并强制垃圾回收
+            self.ugv = None
+            import gc
+            gc.collect()  # 强制垃圾回收，清理CAN socket连接
+            time.sleep(0.1)  # 给系统时间清理资源
+            
+        except Exception:
+            # 抑制清理操作的异常信息
+            pass
+        finally:
+            # 确保状态重置
+            self._connected = False
+            self._is_moving = False

@@ -31,6 +31,9 @@ RUN apt-get update && apt-get install -y \
     alsa-utils \
     libpulse-dev \
     ffmpeg \
+    can-utils \
+    iproute2 \
+    kmod \
     && rm -rf /var/lib/apt/lists/*
 
 # --- 单独安装PulseAudio工具（修复基镜像不一致问题）---

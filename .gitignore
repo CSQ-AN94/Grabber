@@ -110,6 +110,7 @@ robot_log.txt
 # Log files
 logs/
 *.log
+*.asc  # CAN bus log files
 
 # Temporary files
 temp/
@@ -176,6 +177,7 @@ keys/
 certificates/
 CLAUDE.md
 .claude/
+refs/
 
 # Runtime files
 *.pid

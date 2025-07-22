@@ -7,12 +7,13 @@ services:
       args: # 设置构建时需要的代理参数
         http_proxy: "http://192.168.3.7:7897"
         https_proxy: "http://192.168.3.7:7897"
-    # privileged: true 
+    privileged: true  # 需要访问网络接口和CAN设备
     
     container_name: grabber_container
     devices:
       - /dev/bus/usb:/dev/bus/usb
       - /dev/snd:/dev/snd # 挂载声卡
+      - /dev/can0:/dev/can0  # 底盘需要的CAN设备接口
 
     # 挂载卷
     volumes:

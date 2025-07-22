@@ -18,7 +18,7 @@ from utils.config import load_config
 from utils.calibration import Calibration
 from sensors.camera_thread import CameraThread, DisplayMode
 from controllers.arm_controller import ArmController
-from controllers.rail_controller import RailController
+from controllers.ugv_controller import RailController
 from intelligence.vision import VisionAnalyzer
 
 def test_camera_capture(cam_thread: CameraThread):
