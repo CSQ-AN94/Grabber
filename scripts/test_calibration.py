@@ -76,11 +76,12 @@ def collect_calibration_poses_interactively(arm: ArmController, exit_event: thre
                 print("ERROR: Could not get joint angles.")
                 continue
             
-            # 计算笛卡尔空间坐标 (需要FK)
+            # 获取当前机械臂位姿
             try:
-                temp_dh = arm.arm.rm_get_DH_data()[1]
-                fk_solver = Calibration(temp_dh, np.eye(4))
-                pose_matrix = fk_solver.calculate_fk(joint_angles)
+                pose_matrix = arm.get_base_to_end_pose_matrix()
+                if pose_matrix is None:
+                    print("ERROR: Could not get current arm pose.")
+                    continue
                 
                 # 提取位置(m)和欧拉角(rad)
                 position_m = pose_matrix[:3, 3]
@@ -118,7 +119,6 @@ def test_calibration_matrix(calibration: Calibration):
     try:
         # 显示当前标定参数
         print("Current calibration parameters:")
-        print(f"DH Parameters: {len(calibration.dh_params)} joints")
         print(f"T_end_to_camera matrix:\n{calibration.T_end_to_camera}")
         
         if hasattr(calibration, 'K') and calibration.K is not None:
