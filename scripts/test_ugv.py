@@ -16,13 +16,13 @@ from controllers.ugv_controller import UGVController
 
 def test_ugv_movement(ugv_ctrl: UGVController):
     """测试直线运动"""
-    print("\n--- [Test] Rail Movement ---")
+    print("\n--- [Test] UGV Movement ---")
     print(f"Current position: {ugv_ctrl.get_current_position()}. \n\
           Current distance from home: {ugv_ctrl.max_dist * ugv_ctrl._position}.")
     target_position = float(input("Enter the target position (0.0 ~ 1.0): "))
     ugv_ctrl.move_to(target_position)
     print(f"Arrived position {target_position}")
-    print("--- Rail Movement Test PASSED ---")
+    print("--- UGV Movement Test PASSED ---")
 
 def run_ugv_tests():
     print("=== UGV控制测试 ===")

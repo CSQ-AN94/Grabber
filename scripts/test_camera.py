@@ -18,7 +18,7 @@ from utils.config import load_config
 from utils.calibration import Calibration
 from sensors.camera_thread import CameraThread, DisplayMode
 from controllers.arm_controller import ArmController
-from controllers.ugv_controller import RailController
+from controllers.ugv_controller import UGVController
 from intelligence.vision import VisionAnalyzer
 
 def test_camera_capture(cam_thread: CameraThread):
@@ -146,7 +146,7 @@ def test_display_modes(cam_thread: CameraThread, vision_analyzer=None):
     print("--- 显示模式测试完成 ---")
     return True
 
-def test_coordinate_transform(calibration: Calibration, cam_thread: CameraThread, arm: ArmController, rail: RailController):
+def test_coordinate_transform(calibration: Calibration, cam_thread: CameraThread, arm: ArmController, ugv: UGVController):
     """测试像素坐标到世界坐标的转换"""
     print("\n--- [测试] 坐标转换 ---")
     
@@ -158,13 +158,13 @@ def test_coordinate_transform(calibration: Calibration, cam_thread: CameraThread
         print("机械臂控制器不可用")
         return False
     
-    if not rail:
-        print("导轨控制器不可用")
+    if not ugv:
+        print("UGV控制器不可用")
         return False
     
     # 获取当前状态
     joint_angles = arm.get_current_joint_angles()
-    rail_position = rail.get_current_position()
+    ugv_position = ugv.get_current_position()
     _, depth_map = cam_thread.get_latest_frames()
     
     if depth_map is None:
@@ -174,7 +174,7 @@ def test_coordinate_transform(calibration: Calibration, cam_thread: CameraThread
     h, w = depth_map.shape
     pixel_coords = (w // 2, h // 2)
     
-    world_point = calibration.transform_pixel_to_world(pixel_coords, depth_map, joint_angles, rail_position)
+    world_point = calibration.transform_pixel_to_world(pixel_coords, depth_map, joint_angles, ugv_position)
     
     if world_point is not None:
         print(f" 像素 ({pixel_coords}) -> 世界坐标 ({np.round(world_point, 3)})")
@@ -215,15 +215,15 @@ def init_vision_analyzer():
         return None
 
 def init_arm_system():
-    """初始化机械臂和导轨系统"""
+    """初始化机械臂和UGV系统"""
     try:
         config = load_config("config.ini")
         arm = ArmController(config.connections, config.arm, config.gripper)
-        rail = RailController(config.rail)
-        print("机械臂和导轨系统初始化成功")
-        return arm, rail
+        ugv = UGVController(config.ugv)
+        print("机械臂和UGV系统初始化成功")
+        return arm, ugv
     except Exception as e:
-        print(f"机械臂和导轨系统初始化失败: {e}")
+        print(f"机械臂和UGV系统初始化失败: {e}")
         return None, None
 
 def init_calibration_system(cam_thread: CameraThread, arm: ArmController):
@@ -294,9 +294,9 @@ def run_camera_tests():
                 test_display_modes(cam_thread, vision_analyzer)
             elif choice == '5':
                 print("正在初始化机械臂和标定系统...")
-                arm, rail = init_arm_system()
+                arm, ugv = init_arm_system()
                 calibration = init_calibration_system(cam_thread, arm)
-                test_coordinate_transform(calibration, cam_thread, arm, rail)
+                test_coordinate_transform(calibration, cam_thread, arm, ugv)
             elif choice == '6':
                 print("\n开始运行所有自动化测试...")
                 tests = [
@@ -307,11 +307,11 @@ def run_camera_tests():
                 
                 # 尝试运行依赖硬件的测试
                 print("正在初始化机械臂和标定系统...")
-                arm, rail = init_arm_system()
+                arm, ugv = init_arm_system()
                 calibration = init_calibration_system(cam_thread, arm)
                 
-                if calibration and arm and rail:
-                    tests.append(test_coordinate_transform(calibration, cam_thread, arm, rail))
+                if calibration and arm and ugv:
+                    tests.append(test_coordinate_transform(calibration, cam_thread, arm, ugv))
                 
                 passed = sum(tests)
                 total = len(tests)

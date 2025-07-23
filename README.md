@@ -1,6 +1,6 @@
 # Grabber - 智能零售机器人系统
 
-一个智能零售机器人系统，结合6自由度机械臂（Realman RM-65B）与导轨系统，实现自动库存扫描、物体识别和精确抓取。使用Google Gemini Live API进行实时语音交互，采用"感知-决策分离，执行可中断"的架构设计。
+一个智能零售机器人系统，结合6自由度机械臂（Realman RM-65B）与UGV底盘（AgileX Ranger Mini 3），实现自动库存扫描、物体识别和精确抓取。使用Google Gemini Live API进行实时语音交互，采用"感知-决策分离，执行可中断"的架构设计。
 
 ## 当前状态
 
@@ -30,7 +30,7 @@
 
 **硬件控制层 (`controllers/`)**
 - `arm_controller.py`: Realman RM-65B机械臂控制，集成Modbus RTU夹爪接口
-- `rail_controller.py`: 线性导轨定位系统（可能用底盘模拟）
+- `ugv_controller.py`: AgileX Ranger Mini 3 UGV控制系统
 
 **传感器层 (`sensors/`)**
 - `camera_thread.py`: Orbbec相机连续帧捕获和缓冲管理
@@ -93,7 +93,7 @@ git submodule update --init --recursive
 **硬件测试**（需要真实硬件）：
 ```bash
 python3 scripts/test_arm.py         # 机械臂和夹爪测试
-python3 scripts/test_rail.py        # 导轨控制测试
+python3 scripts/test_ugv.py         # UGV控制测试
 python3 scripts/test_camera.py      # 相机捕获测试
 python3 scripts/test_calibration.py # 手眼标定测试
 ```
@@ -107,7 +107,7 @@ python3 scripts/collect_images.py        # 数据采集工具
 
 所有系统配置集中在`config.ini`中：
 
-- **硬件连接**: 机械臂IP、相机设置、导轨参数
+- **硬件连接**: 机械臂IP、相机设置、UGV参数
 - **AI配置**: Gemini API密钥、音频设置、模型路径
 - **标定数据**: 手眼变换矩阵（T_end_to_camera）
 - **操作参数**: 关节姿态、速度、阈值
@@ -130,7 +130,7 @@ python3 scripts/collect_images.py        # 数据采集工具
 5. **真实grasp_by_id()**: 替换Mock实现
 
 ### 坐标系统
-- **世界坐标**: 导轨零点
+- **世界坐标**: UGV零点
 - **基座坐标系**：机械臂基座，目前与世界坐标系是同一个
 - **相机坐标**: Orbbec相机光心坐标系
     - `transform_pixel_to_world()`, 相机坐标系到世界坐标系
@@ -144,7 +144,7 @@ Grabber/
 ├── config.ini               # 系统配置文件
 ├── controllers/             # 硬件控制模块
 │   ├── arm_controller.py    # 机械臂控制
-│   └── rail_controller.py   # 导轨控制
+│   └── ugv_controller.py    # UGV控制
 ├── intelligence/            # AI/视觉/语音模块
 │   ├── gemini_agent.py      # Gemini语音交互代理
 │   ├── robot_tools.py       # 机器人工具函数

@@ -2,7 +2,7 @@
 
 ## 概述
 
-Grabber 是一个智能零售机器人系统，采用模块化、可扩展的架构设计。系统集成了6自由度机械臂、线性导轨、深度相机和AI语音交互功能，专为智能零售比赛任务而设计。
+Grabber 是一个智能零售机器人系统，采用模块化、可扩展的架构设计。系统集成了6自由度机械臂、UGV底盘、深度相机和AI语音交互功能，专为智能零售比赛任务而设计。
 
 ## 架构原则
 
@@ -111,8 +111,8 @@ class ArmController:
     def set_gripper_openness(openness)
 ```
 
-#### 3.2 导轨控制器 (rail_controller.py)
-**职责**: 线性导轨定位控制
+#### 3.2 UGV控制器 (ugv_controller.py)
+**职责**: AgileX Ranger Mini 3 UGV移动控制
 
 **主要功能**:
 - 精确位置控制

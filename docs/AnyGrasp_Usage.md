@@ -14,7 +14,7 @@
     *   **组合:** 将计算出的位置和姿态组合成一个完整的**6D世界坐标系位姿** `pre_grasp_world_pose`。
 3.  **执行移动:**
     *   函数调用`arm_controller.move_to_cartesian_pose(pre_grasp_world_pose)`。
-    *   `arm_controller`内部驱动机械臂和导轨（7-DOF协同运动）移动到该位姿。
+    *   `arm_controller`内部驱动机械臂和UGV（7-DOF协同运动）移动到该位姿。
     *   **移动的主体:** 此时移动的目标是让**相机**到达预想的观察位置，因此`move_to_cartesian_pose`内部使用的参考点是相机光心。
 
 #### **第三步：精细感知与抓取规划 (YOLOv8 + AnyGrasp)**

@@ -70,7 +70,7 @@ def test_simple_reach(arm: ArmController, camera_thread: CameraThread, calibrati
                 pixel_coords=center_pixel,
                 depth_in_meters=target_depth_m,
                 T_base_to_end=T_base_to_end,
-                rail_position=0.0 # 假设导轨在原点
+                ugv_position=0.0 # 假设UGV在原点
             )
 
             if world_coords is None:

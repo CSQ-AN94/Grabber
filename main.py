@@ -14,7 +14,7 @@ from typing import Optional
 
 # 核心模块导入
 from controllers.arm_controller import ArmController
-from controllers.ugv_controller import RailController
+from controllers.ugv_controller import UGVController
 from sensors.camera_thread import CameraThread
 from intelligence.vision import VisionAnalyzer
 from intelligence.speech_local import LocalSpeechSystem
@@ -41,7 +41,7 @@ class GrabberSystem:
         # 组件引用
         self.world_state: Optional[WorldState] = None
         self.arm_ctrl: Optional[ArmController] = None
-        self.rail_ctrl: Optional[RailController] = None
+        self.ugv_ctrl: Optional[UGVController] = None
         self.camera_thread: Optional[CameraThread] = None
         self.vision_analyzer: Optional[VisionAnalyzer] = None
         self.speech_system: Optional[SpeechSystem] = None
@@ -124,10 +124,10 @@ class GrabberSystem:
             )
             self.logger.info("机械臂初始化成功")
             
-            # 初始化导轨
-            self.logger.info("初始化导轨控制器...")
-            self.rail_ctrl = RailController(self.config.rail)
-            self.logger.info("导轨初始化成功")
+            # 初始化UGV
+            self.logger.info("初始化UGV控制器...")
+            self.ugv_ctrl = UGVController(self.config.ugv)
+            self.logger.info("UGV初始化成功")
             
             # 初始化相机
             self.logger.info("初始化相机线程...")
@@ -150,7 +150,7 @@ class GrabberSystem:
             # 移动到初始安全位置
             self.logger.info("移动到安全位置...")
             self.arm_ctrl.move_to_joints(self.config.arm.zero_pose)
-            self.rail_ctrl.move_to(self.config.rail.home_position)
+            self.ugv_ctrl.move_to(0.0)
             self.logger.info("硬件就绪")
             
         except Exception as e:
@@ -401,17 +401,17 @@ class GrabberSystem:
         self.arm_ctrl.move_to_joints(self.config.arm.scanning_pose)
         # 2. [vision] 启动YOLOv8的流式检测模式。
         print("Starting stream-based detection...")
-        self.vision_analyzer.start_world_building_scan(self.world_state, self.rail_ctrl)
-        # 3. [rail_ctrl] 平滑地、非阻塞地移动导轨，完成整个扫描行程。
-        self.rail_ctrl.move_to(self.config.getfloat('rail', 'scan_end_pos'), wait=True)
+        self.vision_analyzer.start_world_building_scan(self.world_state, self.ugv_ctrl)
+        # 3. [ugv_ctrl] 平滑地、非阻塞地移动UGV，完成整个扫描行程。
+        self.ugv_ctrl.move_to(1.0, wait=True)
         # 4. [vision] 停止流式检测，并进行数据后处理。
         print("Scan complete. Processing data to build final world map...")
         world_map = self.vision_analyzer.stop_and_process_scan()
         # 5. [state] 将最终的世界地图存入共享状态，供所有后续任务使用。
         self.world_state.update_item_world_map(world_map)
         print("World map successfully built and stored.")
-        # 6. [rail_ctrl] 导轨返回结算区，为可能的后续任务做准备。
-        self.rail_ctrl.move_to(0)
+        # 6. [ugv_ctrl] UGV返回起始位置，为可能的后续任务做准备。
+        self.ugv_ctrl.move_to(0)
         # 7. [speech] 根据这份精确的地图，生成分层播报。
         announcement = self._generate_layered_announcement(world_map)
         print(f"Announcement: {announcement}")
@@ -445,8 +445,8 @@ class GrabberSystem:
 
     def task_d_tally_settlement(self):
         """任务D: 商品结算。这是一个独立的流程，不依赖世界地图。"""
-        # 1. [rail_ctrl] 导轨归零
-        self.rail_ctrl.move_to(0)
+        # 1. [ugv_ctrl] UGV归零
+        self.ugv_ctrl.move_to(0)
         # 2. [arm_ctrl] 机械臂到结算扫描位
         self.arm_ctrl.move_to_joints(self.config.arm.checkout_scan_pose)
         # 3. [vision] YOLOv8静态图片检测结算区商品
@@ -476,30 +476,30 @@ class GrabberSystem:
             self.speech_system.say(f"抱歉，{item_name}似乎已经卖完了。")
             return False
         self.speech_system.say(f"好的，已在地图上定位到{item_name}，正在规划路径。")
-        # 3. [arm_ctrl & rail_ctrl] 协同规划并移动到目标的“预备抓取位”。
-        self.arm_ctrl.plan_and_move_to_pre_grasp_pose(target_world_pose, self.rail_ctrl)
+        # 3. [arm_ctrl & ugv_ctrl] 协同规划并移动到目标的"预备抓取位"。
+        self.arm_ctrl.plan_and_move_to_pre_grasp_pose(target_world_pose, self.ugv_ctrl)
         # 4. [vision] 在预备位置，进行一次性的精确位姿估计。
         print("In pre-grasp position. Performing fine-tuning perception...")
         latest_image = self.camera_thread.get_latest_frames()[0]
         fine_tuned_pose = self.vision_analyzer.get_precise_grasp_pose(latest_image, target_world_pose)
         # 5. [arm_ctrl] 执行最终的、短距离的、精确的抓取序列。
         success = self.arm_ctrl.execute_final_grasp_sequence(fine_tuned_pose)
-        # 6. [arm_ctrl & rail_ctrl] 抓取成功后，移动到放置区并释放。
+        # 6. [arm_ctrl & ugv_ctrl] 抓取成功后，移动到放置区并释放。
         if success:
             self.speech_system.say(f"抓取{item_name}成功")
             self.move_to_dropoff_and_release()
         else:
             self.speech_system.say(f"抓取{item_name}失败，可能是最终定位或夹爪出现问题。")
-        # 7. [arm_ctrl & rail_ctrl] 返回初始状态。
+        # 7. [arm_ctrl & ugv_ctrl] 返回初始状态。
         self.arm_ctrl.move_to_joints(self.config.arm.scanning_pose)
-        self.rail_ctrl.move_to(0)
+        self.ugv_ctrl.move_to(0)
         return success
 
     def move_to_dropoff_and_release(self):
         """
-        放置流程：导轨归零，机械臂到放置位并松开夹爪。
+        放置流程：UGV归零，机械臂到放置位并松开夹爪。
         """
-        self.rail_ctrl.move_to(0)
+        self.ugv_ctrl.move_to(0)
         self.arm_ctrl.move_to_joints(self.config.arm.dropoff_pose)
         self.arm_ctrl.set_gripper_openness(1.0)  # 松开夹爪
 
@@ -552,16 +552,16 @@ class GrabberSystem:
                 except Exception as e:
                     self.logger.warning(f"机械臂关闭时出错: {e}")
             
-            # 导轨回到原点并断开连接
-            if self.rail_ctrl:
-                self.logger.info("导轨回到原点...")
+            # UGV回到原点并断开连接
+            if self.ugv_ctrl:
+                self.logger.info("UGV回到原点...")
                 try:
-                    self.rail_ctrl.move_to(self.config.rail.home_position)
-                    if hasattr(self.rail_ctrl, 'disconnect'):
-                        self.rail_ctrl.disconnect()
-                    self.logger.info("导轨安全关闭")
+                    self.ugv_ctrl.move_to(0.0)
+                    if hasattr(self.ugv_ctrl, 'disconnect'):
+                        self.ugv_ctrl.disconnect()
+                    self.logger.info("UGV安全关闭")
                 except Exception as e:
-                    self.logger.warning(f"导轨关闭时出错: {e}")
+                    self.logger.warning(f"UGV关闭时出错: {e}")
             
             self.logger.info("系统关闭完成")
             print("系统已安全关闭")

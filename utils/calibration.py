@@ -13,7 +13,7 @@ class Calibration:
         self.K = camera_matrix
         self.dist = distortion_coeffs
 
-    def transform_pixel_to_world(self, pixel_coords, depth_in_meters, T_base_to_end, rail_position=0.0):
+    def transform_pixel_to_world(self, pixel_coords, depth_in_meters, T_base_to_end, ugv_position=0.0):
         """
         像素到世界坐标转换流程
         
@@ -21,7 +21,7 @@ class Calibration:
             pixel_coords (tuple): (u, v) color像素坐标。
             depth_in_meters (float): 该像素点的深度值，单位为米。
             T_base_to_end (np.ndarray): 机械臂基座到末端的4x4变换矩阵。
-            rail_position (float): 导轨的当前位置 (米)。
+            ugv_position (float): UGV的当前位置 (米)。
 
         Returns:
             np.ndarray: 在世界坐标系下的3D点 [x, y, z]，如果无效则返回None。
@@ -55,7 +55,7 @@ class Calibration:
         # 3. 核心变换：
         T_base_to_camera = T_base_to_end @ self.T_end_to_camera
         T_world_to_base = np.eye(4)
-        T_world_to_base[0, 3] = rail_position
+        T_world_to_base[0, 3] = ugv_position
         T_world_to_camera = T_world_to_base @ T_base_to_camera
         
         # 4. 将相机坐标系下的点变换到世界坐标系

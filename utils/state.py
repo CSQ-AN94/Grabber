@@ -23,11 +23,11 @@ class ItemInfo:
 class WorldState:
     """
     线程安全的世界状态管理器。
-    - 维护机械臂、导轨、货架物品等所有动态信息。
+    - 维护机械臂、UGV、货架物品等所有动态信息。
     - 提供统一的接口供其他模块（如Agent、控制器）查询和更新状态。
     
     主要功能:
-    1. 机器人状态管理: 跟踪关节角度、导轨位置、机械臂运动状态��
+    1. 机器人状态管理: 跟踪关节角度、UGV位置、机械臂运动状态。
     2. 世界模型管理: 维护一个包含所有货架物品信息的“地图”。
     3. 业务逻辑: 处理物品抓取、放置、结账等核心流程。
     
@@ -41,7 +41,7 @@ class WorldState:
         self.current_joint_angles = None
         self.is_arm_moving = False
         self.gripper_openness = None
-        self.rail_position = 0.0
+        self.ugv_position = 0.0
         
         # --- 世界模型 ---
         self.world_map: Dict[int, ItemInfo] = {}  # 位置ID -> 物品信息
@@ -94,15 +94,15 @@ class WorldState:
         with self.lock:
             return self.gripper_openness
     
-    def get_rail_position(self) -> float:
-        """获取导轨当前位置"""
+    def get_ugv_position(self) -> float:
+        """获取UGV当前位置"""
         with self.lock:
-            return self.rail_position
+            return self.ugv_position
     
-    def set_rail_position(self, position: float):
-        """更新导轨位置"""
+    def set_ugv_position(self, position: float):
+        """更新UGV位置"""
         with self.lock:
-            self.rail_position = position
+            self.ugv_position = position
     
     # --- 世界模型接口 ---
     def initialize_world_map(self, mock_data: bool = True):

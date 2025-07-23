@@ -236,7 +236,7 @@ def load_config(path: str = 'config.ini') -> AppConfig:
             run_speed=_get_config_value('gripper', 'run_speed', parser.getint)
         )
 
-        # 导轨配置
+        # UGV配置
         ugv_config = UGVConfig(
             max_dist=_get_config_value('ugv', 'max_dist', parser.getfloat, 0.0),
             speed=_get_config_value('ugv', 'speed', parser.getfloat, 0.0)
