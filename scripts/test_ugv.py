@@ -61,10 +61,9 @@ def run_ugv_tests():
     finally:
         try:
             ugv_ctrl.disconnect()
-        except:
-            pass
+        except Exception as e:
+            print(f"退出失败：{e}")
         print("测试结束")
-
 
 if __name__ == "__main__":
     run_ugv_tests()

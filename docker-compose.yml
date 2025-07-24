@@ -13,7 +13,7 @@ services:
     devices:
       - /dev/bus/usb:/dev/bus/usb
       - /dev/snd:/dev/snd # 挂载声卡
-      - /dev/can0:/dev/can0  # 底盘需要的CAN设备接口
+      # CAN设备通过SocketCAN网络接口访问，不需要/dev设备挂载
 
     # 挂载卷
     volumes:

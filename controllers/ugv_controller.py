@@ -1,6 +1,7 @@
 import time
 import threading
 import atexit
+import subprocess
 from typing import Optional
 from utils.config import UGVConfig
 import pyagxrobots
@@ -28,18 +29,103 @@ class UGVController:
         # 注册退出时的清理函数
         atexit.register(self.disconnect)
     
-    def _initialize_ugv(self) -> bool:
-        """初始化UGV连接，包含错误处理"""
+    def _ensure_can_interface_ready(self) -> bool:
+        """清理上一次连接并重新配置CAN接口"""
         try:
+            print("准备CAN接口...")
+            
+            # 步骤1: 清理上一次的连接（先DOWN）
+            print("  步骤1: 清理上一次连接...")
+            result = subprocess.run(
+                ['ip', 'link', 'set', 'can0', 'down'],
+                capture_output=True, text=True, timeout=10
+            )
+            # 不检查返回码，因为接口可能已经是DOWN状态
+            print("  上一次连接已清理")
+            
+            # 步骤2: 配置CAN接口参数
+            print("  步骤2: 配置CAN接口参数...")
+            result = subprocess.run(
+                ['ip', 'link', 'set', 'can0', 'type', 'can', 'bitrate', '500000'],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode != 0:
+                print(f"  CAN接口配置失败: {result.stderr}")
+                return False
+            print("  CAN接口参数配置成功")
+            
+            # 步骤3: 启动CAN接口
+            print("  步骤3: 启动CAN接口...")
+            result = subprocess.run(
+                ['ip', 'link', 'set', 'can0', 'up'],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode != 0:
+                print(f"  CAN接口启动失败: {result.stderr}")
+                return False
+            print("  CAN接口启动成功")
+            
+            # 步骤4: 验证接口状态为UP
+            print("  步骤4: 验证接口状态...")
+            result = subprocess.run(
+                ['ip', 'link', 'show', 'can0'],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode != 0:
+                print(f"  无法获取CAN接口状态: {result.stderr}")
+                return False
+            
+            # 检查输出中是否包含"UP"
+            if "UP" in result.stdout:
+                print("  CAN接口状态验证: UP")
+                return True
+            else:
+                print(f"  CAN接口状态异常:")
+                for line in result.stdout.split('\n'):
+                    if line.strip():
+                        print(f"    {line.strip()}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            print("  CAN接口配置超时")
+            return False
+        except Exception as e:
+            print(f"  CAN接口配置异常: {e}")
+            return False
+    
+    def _initialize_ugv(self) -> bool:
+        """初始化UGV连接，包含CAN接口自动配置和错误处理"""
+        print("开始UGV初始化...")
+        
+        # 首先确保CAN接口就绪
+        if not self._ensure_can_interface_ready():
+            print("CAN接口配置失败，UGV初始化终止")
+            self._connected = False
+            return False
+        
+        # CAN接口就绪后，初始化pyagxrobots
+        try:
+            print("初始化pyagxrobots.RangerBase...")
             self.ugv = pyagxrobots.pysdkugv.RangerBase()
             self._connected = True
             print("UGV初始化成功")
             return True
         except Exception as e:
-            print(f"UGV初始化失败: {e}")
-            print("提示：如果是CAN接口问题，请拔掉USB CAN适配器，等3秒后重新插入")
-            self._connected = False
-            return False
+            try:
+                print("重试UGV初始化")
+                self.ugv = pyagxrobots.pysdkugv.RangerBase()
+                self._connected = True
+                print("第二次UGV初始化成功")
+                return True
+            except Exception as e:
+                print(f"第二次UGV初始化失败: {e}")
+                print("可能的解决方案:")
+                print("  1. 检查USB CAN适配器连接")
+                print("  2. 确认AgileX底盘已开机")
+                print("  3. 验证CAN线缆连接")
+                print("  4. 重新插拔USB CAN适配器")
+                self._connected = False
+                return False
     
     def emergency_stop(self) -> bool:
         """立即停止所有运动"""
@@ -98,12 +184,21 @@ class UGVController:
             self.ugv.SetMotionCommand(linear_vel=linear_velocity, lateral_vel=0.0, angular_vel=0.0, steer_angle=0.0)
             
             if wait:
-                # 监控移动过程，支持紧急停止
+                # 在移动过程中持续发送命令以维持运动状态
                 start_time = time.time()
                 while time.time() - start_time < travel_time:
                     if self._emergency_stop:
                         break
-                    time.sleep(0.05)  # 短暂休眠保持响应性
+                    
+                    # 持续发送运动命令 - CAN接口需要频繁发送命令才能维持运动
+                    self.ugv.SetMotionCommand(
+                        linear_vel=linear_velocity, 
+                        lateral_vel=0.0, 
+                        angular_vel=0.0, 
+                        steer_angle=0.0
+                    )
+                    
+                    time.sleep(0.02)  # 50Hz频率发送命令，对应ROS2版本的update_rate
                 
                 # 确保完全停止
                 self.ugv.SetMotionCommand(linear_vel=0.0, lateral_vel=0.0, angular_vel=0.0, steer_angle=0.0)
@@ -149,38 +244,22 @@ class UGVController:
         return True
     
     def disconnect(self) -> None:
-        """正确断开UGV连接并清理资源"""
-        if not self._connected or self.ugv is None:
-            return
+        """断开UGV连接"""
+        print("断开UGV连接...")
         
-        try:
-            # 确保完全停止
-            self.ugv.SetMotionCommand(linear_vel=0.0, lateral_vel=0.0, angular_vel=0.0, steer_angle=0.0)
-            time.sleep(0.1)  # 等待停止命令处理
-            
-            # 标记为已断开
-            with self._movement_lock:
-                self._connected = False
-                self._is_moving = False
-            
-            # 尝试显式关闭底层CAN连接（如果存在）
+        # 发送停止命令（如果连接正常）
+        if self._connected and self.ugv is not None:
             try:
-                if hasattr(self.ugv, 'rangerbase') and hasattr(self.ugv.rangerbase, 'device'):
-                    if hasattr(self.ugv.rangerbase.device, 'canport'):
-                        self.ugv.rangerbase.device.canport = None
-            except:
-                pass
-            
-            # 显式销毁UGV对象并强制垃圾回收
-            self.ugv = None
-            import gc
-            gc.collect()  # 强制垃圾回收，清理CAN socket连接
-            time.sleep(0.1)  # 给系统时间清理资源
-            
-        except Exception:
-            # 抑制清理操作的异常信息
-            pass
-        finally:
-            # 确保状态重置
+                print("  发送停止命令...")
+                self.ugv.SetMotionCommand(linear_vel=0.0, lateral_vel=0.0, angular_vel=0.0, steer_angle=0.0)
+                time.sleep(0.1)  # 等待命令处理
+            except Exception as e:
+                print(f"  停止命令发送失败: {e}")
+        
+        # 清理UGV对象和状态
+        self.ugv = None
+        with self._movement_lock:
             self._connected = False
             self._is_moving = False
+        
+        print("UGV断开完成")

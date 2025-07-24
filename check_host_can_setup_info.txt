@@ -1,0 +1,64 @@
+宿主机CAN配置全面检查
+==================================================
+基于 refs/setup_can2usb.bash 和 refs/bringup_can2usb.bash
+==================================================
+=== 运行环境检查 ===
+✅ 运行在宿主机环境
+\n=== Sudo权限检查 ===
+✅ 具有sudo权限
+\n=============== USB设备检查 ===============
+\n=== USB设备检查 ===
+📋 当前USB设备:
+  Bus 004 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub
+Bus 003 Device 005: ID 1532:00a6 Razer USA, Ltd Razer Viper V2 Pro
+Bus 003 Device 010: ID 1d50:606f OpenMoko, Inc. Geschwister Schneider CAN adapter
+Bus 003 Device 003: ID 30c9:00a9 Luxvisions Innotech Limited Integrated RGB Camera
+Bus 003 Device 002: ID 27c6:659a Shenzhen Goodix Technology Co.,Ltd. Goodix USB2.0 MISC
+Bus 003 Device 006: ID 8087:0026 Intel Corp. AX201 Bluetooth
+Bus 003 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+Bus 002 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub
+Bus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+\n✅ 检测到可能的CAN适配器: 1个
+  🔌 Bus 004 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub
+Bus 003 Device 005: ID 1532:00a6 Razer USA, Ltd Razer Viper V2 Pro
+Bus 003 Device 010: ID 1d50:606f OpenMoko, Inc. Geschwister Schneider CAN adapter
+Bus 003 Device 003: ID 30c9:00a9 Luxvisions Innotech Limited Integrated RGB Camera
+Bus 003 Device 002: ID 27c6:659a Shenzhen Goodix Technology Co.,Ltd. Goodix USB2.0 MISC
+Bus 003 Device 006: ID 8087:0026 Intel Corp. AX201 Bluetooth
+Bus 003 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+Bus 002 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub
+Bus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+\n=============== 加载内核模块 ===============
+\n=== 加载内核模块 gs_usb ===
+✅ gs_usb模块已加载
+\n=============== 配置CAN接口 ===============
+\n=== 配置CAN接口 ===
+✅ can0接口存在
+🔧 配置can0接口（500k波特率）...
+✅ can0接口配置成功
+📡 can0接口状态:
+  13: can0: <NOARP,UP,LOWER_UP,ECHO> mtu 16 qdisc pfifo_fast state UP mode DEFAULT group default qlen 10
+    link/can
+✅ can0接口已启动
+\n=============== 安装CAN工具 ===============
+\n=== 安装CAN工具 ===
+✅ cansend 已安装
+✅ candump 已安装
+❌ canecho 未安装
+🔧 安装can-utils...
+✅ can-utils安装成功
+\n=============== 测试CAN通信 ===============
+\n=== CAN通信测试 ===
+🔧 测试发送CAN消息...
+✅ CAN消息发送成功
+🔧 测试CAN消息监听（2秒）...
+❌ CAN消息监听失败: 
+\n==================================================
+🏁 宿主机CAN配置检查完成
+==================================================
+❌ 失败的步骤: 测试CAN通信
+\n💡 接下来的建议:
+1. 解决上述失败的步骤
+2. 重新插拔USB CAN适配器
+3. 重启后重新运行此脚本
+4. 确认硬件兼容性
