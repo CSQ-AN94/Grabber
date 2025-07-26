@@ -4,4 +4,4 @@
 [submodule "external/pyorbbecsdk"]
 	path = external/pyorbbecsdk
 	url = https://github.com/orbbec/pyorbbecsdk.git
-	
+	branch = v2-main
