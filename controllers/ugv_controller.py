@@ -96,19 +96,18 @@ class UGVController:
     def _initialize_ugv(self) -> bool:
         """初始化UGV连接，包含CAN接口自动配置和错误处理"""
         print("开始UGV初始化...")
-        
-        # 首先确保CAN接口就绪
-        if not self._ensure_can_interface_ready():
-            print("CAN接口配置失败，UGV初始化终止")
-            self._connected = False
-            return False
-        
-        # 关键：在接口UP之后，给予硬件和驱动一点稳定时间
-        print("等待CAN接口稳定...")
-        time.sleep(0.5)
-        
+             
         # CAN接口就绪后，初始化pyagxrobots
         try:
+            # 首先确保CAN接口就绪
+            if not self._ensure_can_interface_ready():
+                print("CAN接口配置失败，UGV初始化终止")
+                self._connected = False
+                return False
+            # 关键：在接口UP之后，给予硬件和驱动一点稳定时间
+            print("等待CAN接口稳定...")
+            time.sleep(0.5)
+
             print("初始化pyagxrobots.RangerBase...")
             self.ugv = pyagxrobots.pysdkugv.RangerBase()
             self._connected = True
@@ -116,6 +115,13 @@ class UGVController:
             return True
         except Exception as e:
             try:
+                if not self._ensure_can_interface_ready():
+                    print("重试CAN接口配置失败，UGV初始化终止")
+                    self._connected = False
+                    return False
+                print("等待CAN接口稳定...")
+                time.sleep(0.5)   
+
                 print("重试UGV初始化")
                 self.ugv = pyagxrobots.pysdkugv.RangerBase()
                 self._connected = True
@@ -248,7 +254,7 @@ class UGVController:
         return True
     
     def disconnect(self) -> None:
-        """断开UGV连接"""
+        """断开UGV连接并尝试优雅地关闭CAN总线"""
         print("断开UGV连接...")
         
         # 发送停止命令（如果连接正常）
@@ -259,6 +265,15 @@ class UGVController:
                 time.sleep(0.1)  # 等待命令处理
             except Exception as e:
                 print(f"  停止命令发送失败: {e}")
+
+        # 尝试访问并关闭底层的CAN总线
+        if hasattr(self.ugv, 'rangerbase') and hasattr(self.ugv.rangerbase, 'device') and hasattr(self.ugv.rangerbase.device, 'bus'):
+            try:
+                print("  正在关闭底层CAN总线...")
+                self.ugv.rangerbase.device.bus.shutdown()
+                print("  底层CAN总线已关闭")
+            except Exception as e:
+                print(f"  关闭底层CAN总线失败: {e}")
         
         # 清理UGV对象和状态
         self.ugv = None

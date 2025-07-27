@@ -59,10 +59,9 @@ def run_ugv_tests():
     except KeyboardInterrupt:
         print("\n用户中断测试")
     finally:
-        try:
+        if 'ugv_ctrl' in locals() and ugv_ctrl.is_connected():
+            print("\n正在断开UGV连接...")
             ugv_ctrl.disconnect()
-        except Exception as e:
-            print(f"退出失败：{e}")
         print("测试结束")
 
 if __name__ == "__main__":

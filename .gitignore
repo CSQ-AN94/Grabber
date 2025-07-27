@@ -177,7 +177,6 @@ keys/
 certificates/
 CLAUDE.md
 .claude/
-refs/
 
 # Runtime files
 *.pid
