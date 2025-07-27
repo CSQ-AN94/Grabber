@@ -31,6 +31,7 @@
 **硬件控制层 (`controllers/`)**
 - `arm_controller.py`: Realman RM-65B机械臂控制，集成Modbus RTU夹爪接口
 - `ugv_controller.py`: AgileX Ranger Mini 3 UGV控制系统
+- `pyagxrobots/`: 修正版pyagxrobots库，解决了原库的资源泄漏和线程死锁问题
 
 **传感器层 (`sensors/`)**
 - `camera_thread.py`: Orbbec相机连续帧捕获和缓冲管理
@@ -85,13 +86,18 @@ git submodule update --init --recursive
 
 **依赖管理**：
 - 系统依赖：通过Dockerfile中的`apt install`
-- Python依赖：通过`requirements.txt`统一管理
+- Python依赖：通过`requirements.txt`统一管理（已移除pyagxrobots）
 - SDK依赖：通过`external/`目录的git子模块
+- UGV控制：使用fork版本的git子模块`external/pyagxrobots/`（Adrian-NM/pyagxrobots）
 
 ### 系统测试
 
 **硬件测试**（需要真实硬件）：
 ```bash
+# UGV测试需要先初始化CAN接口
+ip link set can0 type can bitrate 500000
+ip link set can0 up
+
 python3 scripts/test_arm.py         # 机械臂和夹爪测试
 python3 scripts/test_ugv.py         # UGV控制测试
 python3 scripts/test_camera.py      # 相机捕获测试
@@ -102,6 +108,49 @@ python3 scripts/test_calibration.py # 手眼标定测试
 ```bash
 python3 scripts/collect_images.py        # 数据采集工具
 ```
+
+## 修正版pyagxrobots库
+
+### 背景
+
+原版pyagxrobots库存在严重的资源管理问题，导致：
+- `SocketcanBus was not properly shut down` 警告
+- 线程死锁，需要Ctrl+C强制退出程序
+- CAN总线资源泄漏，影响多次运行
+
+### 修正内容
+
+**位置**: `external/pyagxrobots/`（git子模块，fork版本）
+
+**核心修复**:
+1. **DeviceCan类重构**: 移除无限循环和复杂async架构，使用简单的`can.Notifier`模式
+2. **资源清理链**: UGV → RangerBase → DeviceCan 全部添加`shutdown()`和`__del__()`方法
+3. **安全版本检测**: 用`_get_base_version_safely()`替换有问题的`GetBaseVersion()`
+4. **导入修复**: 修正相对导入，确保使用本地修改版本
+
+**效果对比**:
+```
+修复前: 需要Ctrl+C强制退出 + 资源泄漏警告
+修复后: 程序正常退出 + 完全资源清理
+```
+
+**使用方式**: 
+```python
+# 在UGV控制器中自动使用fork版本的git子模块
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'external', 'pyagxrobots', 'src'))
+import pyagxrobots
+
+ugv = pyagxrobots.pysdkugv.RangerBase()
+ugv.shutdown()  # 正常资源清理
+```
+
+### 向上游贡献
+
+这些修复已经准备就绪，可以向AgileX官方提交PR。目前使用的是fork版本（Adrian-NM/pyagxrobots），在充分测试后将向上游提交改进。
+
+**仓库链接**: https://github.com/Adrian-NM/pyagxrobots
 
 ## 配置管理
 
@@ -144,7 +193,7 @@ Grabber/
 ├── config.ini               # 系统配置文件
 ├── controllers/             # 硬件控制模块
 │   ├── arm_controller.py    # 机械臂控制
-│   └── ugv_controller.py    # UGV控制
+│   └── ugv_controller.py    # UGV控制（使用external/pyagxrobots）
 ├── intelligence/            # AI/视觉/语音模块
 │   ├── gemini_agent.py      # Gemini语音交互代理
 │   ├── robot_tools.py       # 机器人工具函数
@@ -166,6 +215,7 @@ Grabber/
 ├── docs/                    # 项目文档
 ├── external/                # Git子模块
 │   ├── RM_API2/             # 睿尔曼机械臂SDK
-│   └── pyorbbecsdk/         # Orbbec相机SDK
+│   ├── pyorbbecsdk/         # Orbbec相机SDK
+│   └── pyagxrobots/         # 修正版pyagxrobots库（fork版本）
 └── grabber_demo.py          # 硬编码的演示脚本
 ```

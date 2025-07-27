@@ -1,14 +1,19 @@
 import time
 import threading
 import atexit
-import subprocess
 from typing import Optional
 from utils.config import UGVConfig
-from controllers import pyagxrobots
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'external', 'pyagxrobots', 'src'))
+import pyagxrobots
 
 
 class UGVController:
-    """AgileX Ranger Mini 3 UGV控制器，具有完善的资源管理功能"""
+    """
+    AgileX Ranger Mini 3 UGV控制器，具有完善的资源管理功能
+    运行前需确保当前环境已经使用 ip link set can0 up 初始化CAN接口
+    """
     
     def __init__(self, ugv_config: UGVConfig):
         # 基本配置参数
@@ -24,119 +29,30 @@ class UGVController:
         
         # 初始化UGV硬件连接
         self.ugv: Optional[pyagxrobots.pysdkugv.RangerBase] = None
-        print(pyagxrobots.__file__)
         self._initialize_ugv()
         
         # 注册退出时的清理函数
         atexit.register(self.disconnect)
     
-    def _ensure_can_interface_ready(self) -> bool:
-        """清理上一次连接并重新配置CAN接口"""
-        try:
-            print("准备CAN接口...")
-            
-            # 步骤1: 清理上一次的连接（先DOWN）
-            print("  步骤1: 清理上一次连接...")
-            result = subprocess.run(
-                ['ip', 'link', 'set', 'can0', 'down'],
-                capture_output=True, text=True, timeout=10
-            )
-            # 不检查返回码，因为接口可能已经是DOWN状态
-            print("  上一次连接已清理")
-            
-            # 步骤2: 配置CAN接口参数
-            print("  步骤2: 配置CAN接口参数...")
-            result = subprocess.run(
-                ['ip', 'link', 'set', 'can0', 'type', 'can', 'bitrate', '500000'],
-                capture_output=True, text=True, timeout=10
-            )
-            if result.returncode != 0:
-                print(f"  CAN接口配置失败: {result.stderr}")
-                return False
-            print("  CAN接口参数配置成功")
-            
-            # 步骤3: 启动CAN接口
-            print("  步骤3: 启动CAN接口...")
-            result = subprocess.run(
-                ['ip', 'link', 'set', 'can0', 'up'],
-                capture_output=True, text=True, timeout=10
-            )
-            if result.returncode != 0:
-                print(f"  CAN接口启动失败: {result.stderr}")
-                return False
-            print("  CAN接口启动成功")
-            
-            # 步骤4: 验证接口状态为UP
-            print("  步骤4: 验证接口状态...")
-            result = subprocess.run(
-                ['ip', 'link', 'show', 'can0'],
-                capture_output=True, text=True, timeout=10
-            )
-            if result.returncode != 0:
-                print(f"  无法获取CAN接口状态: {result.stderr}")
-                return False
-            
-            # 检查输出中是否包含"UP"
-            if "UP" in result.stdout:
-                print("  CAN接口状态验证: UP")
-                return True
-            else:
-                print(f"  CAN接口状态异常:")
-                for line in result.stdout.split('\n'):
-                    if line.strip():
-                        print(f"    {line.strip()}")
-                return False
-                
-        except subprocess.TimeoutExpired:
-            print("  CAN接口配置超时")
-            return False
-        except Exception as e:
-            print(f"  CAN接口配置异常: {e}")
-            return False
-    
     def _initialize_ugv(self) -> bool:
-        """初始化UGV连接，包含CAN接口自动配置和错误处理"""
+        """初始化UGV连接"""
         print("开始UGV初始化...")
-             
-        # CAN接口就绪后，初始化pyagxrobots
+        
         try:
-            # 首先确保CAN接口就绪
-            if not self._ensure_can_interface_ready():
-                print("CAN接口配置失败，UGV初始化终止")
-                self._connected = False
-                return False
-            # 关键：在接口UP之后，给予硬件和驱动一点稳定时间
-            print("等待CAN接口稳定...")
-            time.sleep(0.5)
-
             print("初始化pyagxrobots.RangerBase...")
             self.ugv = pyagxrobots.pysdkugv.RangerBase()
             self._connected = True
             print("UGV初始化成功")
             return True
         except Exception as e:
-            try:
-                if not self._ensure_can_interface_ready():
-                    print("重试CAN接口配置失败，UGV初始化终止")
-                    self._connected = False
-                    return False
-                print("等待CAN接口稳定...")
-                time.sleep(0.5)   
-
-                print("重试UGV初始化")
-                self.ugv = pyagxrobots.pysdkugv.RangerBase()
-                self._connected = True
-                print("第二次UGV初始化成功")
-                return True
-            except Exception as e:
-                print(f"第二次UGV初始化失败: {e}")
-                print("可能的解决方案:")
-                print("  1. 检查USB CAN适配器连接")
-                print("  2. 确认AgileX底盘已开机")
-                print("  3. 验证CAN线缆连接")
-                print("  4. 重新插拔USB CAN适配器")
-                self._connected = False
-                return False
+            print(f"UGV初始化失败: {e}")
+            print("可能的解决方案:")
+            print("  1. 检查USB CAN适配器连接")
+            print("  2. 确认AgileX底盘已开机")
+            print("  3. 验证CAN线缆连接")
+            print("  4. 重新插拔USB CAN适配器")
+            self._connected = False
+            return False
     
     def emergency_stop(self) -> bool:
         """立即停止所有运动"""
