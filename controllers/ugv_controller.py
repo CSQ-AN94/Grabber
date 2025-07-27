@@ -37,7 +37,7 @@ class UGVController:
             # 步骤1: 清理上一次的连接（先DOWN）
             print("  步骤1: 清理上一次连接...")
             result = subprocess.run(
-                ['ip', 'link', 'set', 'can0', 'down'],
+                ['ip', 'link', 'set', 'can1', 'down'],
                 capture_output=True, text=True, timeout=10
             )
             # 不检查返回码，因为接口可能已经是DOWN状态
@@ -46,7 +46,7 @@ class UGVController:
             # 步骤2: 配置CAN接口参数
             print("  步骤2: 配置CAN接口参数...")
             result = subprocess.run(
-                ['ip', 'link', 'set', 'can0', 'type', 'can', 'bitrate', '500000'],
+                ['ip', 'link', 'set', 'can1', 'type', 'can', 'bitrate', '500000'],
                 capture_output=True, text=True, timeout=10
             )
             if result.returncode != 0:
@@ -57,7 +57,7 @@ class UGVController:
             # 步骤3: 启动CAN接口
             print("  步骤3: 启动CAN接口...")
             result = subprocess.run(
-                ['ip', 'link', 'set', 'can0', 'up'],
+                ['ip', 'link', 'set', 'can1', 'up'],
                 capture_output=True, text=True, timeout=10
             )
             if result.returncode != 0:
@@ -68,7 +68,7 @@ class UGVController:
             # 步骤4: 验证接口状态为UP
             print("  步骤4: 验证接口状态...")
             result = subprocess.run(
-                ['ip', 'link', 'show', 'can0'],
+                ['ip', 'link', 'show', 'can1'],
                 capture_output=True, text=True, timeout=10
             )
             if result.returncode != 0:
@@ -102,6 +102,10 @@ class UGVController:
             print("CAN接口配置失败，UGV初始化终止")
             self._connected = False
             return False
+        
+        # 关键：在接口UP之后，给予硬件和驱动一点稳定时间
+        print("等待CAN接口稳定...")
+        time.sleep(0.5)
         
         # CAN接口就绪后，初始化pyagxrobots
         try:
