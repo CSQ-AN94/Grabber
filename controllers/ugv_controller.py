@@ -37,7 +37,7 @@ class UGVController:
             # 步骤1: 清理上一次的连接（先DOWN）
             print("  步骤1: 清理上一次连接...")
             result = subprocess.run(
-                ['ip', 'link', 'set', 'can1', 'down'],
+                ['ip', 'link', 'set', 'can0', 'down'],
                 capture_output=True, text=True, timeout=10
             )
             # 不检查返回码，因为接口可能已经是DOWN状态
@@ -46,7 +46,7 @@ class UGVController:
             # 步骤2: 配置CAN接口参数
             print("  步骤2: 配置CAN接口参数...")
             result = subprocess.run(
-                ['ip', 'link', 'set', 'can1', 'type', 'can', 'bitrate', '500000'],
+                ['ip', 'link', 'set', 'can0', 'type', 'can', 'bitrate', '500000'],
                 capture_output=True, text=True, timeout=10
             )
             if result.returncode != 0:
@@ -57,7 +57,7 @@ class UGVController:
             # 步骤3: 启动CAN接口
             print("  步骤3: 启动CAN接口...")
             result = subprocess.run(
-                ['ip', 'link', 'set', 'can1', 'up'],
+                ['ip', 'link', 'set', 'can0', 'up'],
                 capture_output=True, text=True, timeout=10
             )
             if result.returncode != 0:
@@ -68,7 +68,7 @@ class UGVController:
             # 步骤4: 验证接口状态为UP
             print("  步骤4: 验证接口状态...")
             result = subprocess.run(
-                ['ip', 'link', 'show', 'can1'],
+                ['ip', 'link', 'show', 'can0'],
                 capture_output=True, text=True, timeout=10
             )
             if result.returncode != 0:
