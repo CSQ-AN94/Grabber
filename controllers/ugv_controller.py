@@ -4,7 +4,7 @@ import atexit
 import subprocess
 from typing import Optional
 from utils.config import UGVConfig
-import pyagxrobots
+from controllers import pyagxrobots
 
 
 class UGVController:
@@ -24,6 +24,7 @@ class UGVController:
         
         # 初始化UGV硬件连接
         self.ugv: Optional[pyagxrobots.pysdkugv.RangerBase] = None
+        print(pyagxrobots.__file__)
         self._initialize_ugv()
         
         # 注册退出时的清理函数
@@ -254,26 +255,21 @@ class UGVController:
         return True
     
     def disconnect(self) -> None:
-        """断开UGV连接并尝试优雅地关闭CAN总线"""
+        """断开UGV连接并确保底层资源被释放"""
         print("断开UGV连接...")
         
-        # 发送停止命令（如果连接正常）
         if self._connected and self.ugv is not None:
             try:
                 print("  发送停止命令...")
                 self.ugv.SetMotionCommand(linear_vel=0.0, lateral_vel=0.0, angular_vel=0.0, steer_angle=0.0)
-                time.sleep(0.1)  # 等待命令处理
-            except Exception as e:
-                print(f"  停止命令发送失败: {e}")
+                time.sleep(0.1)
+                
+                print("  正在关闭UGV底层接口...")
+                self.ugv.shutdown()
+                print("  UGV底层接口已关闭")
 
-        # 尝试访问并关闭底层的CAN总线
-        if hasattr(self.ugv, 'rangerbase') and hasattr(self.ugv.rangerbase, 'device') and hasattr(self.ugv.rangerbase.device, 'bus'):
-            try:
-                print("  正在关闭底层CAN总线...")
-                self.ugv.rangerbase.device.bus.shutdown()
-                print("  底层CAN总线已关闭")
             except Exception as e:
-                print(f"  关闭底层CAN总线失败: {e}")
+                print(f"  断开连接时出错: {e}")
         
         # 清理UGV对象和状态
         self.ugv = None
