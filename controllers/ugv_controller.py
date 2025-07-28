@@ -41,6 +41,7 @@ class UGVController:
         try:
             print("初始化pyagxrobots.RangerBase...")
             self.ugv = pyagxrobots.pysdkugv.RangerBase()
+            self.ugv.EnableCAN()
             self._connected = True
             print("UGV初始化成功")
             return True
