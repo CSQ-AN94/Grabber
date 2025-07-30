@@ -199,15 +199,12 @@ def main():
                       help="图像保存间隔（秒），默认5秒")
     parser.add_argument("--output", type=str, default="intelligence/data",
                       help="图像保存目录，默认intelligence/data")
-    parser.add_argument("--config", type=str, default="config.ini",
-                      help="配置文件路径，默认config.ini")
+    parser.add_argument("--config", type=str, default="config.yaml",
+                      help="配置文件路径，默认config.yaml")
     
     args = parser.parse_args()
     
     try:
-        # 加载配置
-        print("加载配置...")
-        config = load_config(args.config)
         
         # 创建图像采集器
         collector = ImageCollector(

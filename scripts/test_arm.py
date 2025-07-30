@@ -185,7 +185,7 @@ def run_arm_tests():
     
     try:
         # 加载配置
-        app_config = load_config("config.ini")
+        app_config = load_config()
         
         # 初始化机械臂控制器
         arm = ArmController(app_config.connections, app_config.arm, app_config.gripper)

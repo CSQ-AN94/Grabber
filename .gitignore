@@ -137,11 +137,6 @@ robotics_env/
 docker-data/
 .docker/
 
-# Configuration backup
-config.ini.bak
-config.ini.orig
-config_local.ini
-
 # Test artifacts
 test_results/
 test_reports/
@@ -184,4 +179,4 @@ CLAUDE.md
 
 # Keep project documentation and configuration
 !docs/
-!config.ini
+!config.yaml

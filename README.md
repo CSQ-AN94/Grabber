@@ -154,7 +154,7 @@ ugv.shutdown()  # 正常资源清理
 
 ## 配置管理
 
-所有系统配置集中在`config.ini`中：
+所有系统配置集中在`config.yaml`中：
 
 - **硬件连接**: 机械臂IP、相机设置、UGV参数
 - **AI配置**: Gemini API密钥、音频设置、模型路径
@@ -190,7 +190,7 @@ ugv.shutdown()  # 正常资源清理
 ```
 Grabber/
 ├── main.py                   # 主入口点
-├── config.ini               # 系统配置文件
+├── config.yaml              # 系统配置文件
 ├── controllers/             # 硬件控制模块
 │   ├── arm_controller.py    # 机械臂控制
 │   └── ugv_controller.py    # UGV控制（使用external/pyagxrobots）

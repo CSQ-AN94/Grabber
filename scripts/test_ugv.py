@@ -29,7 +29,7 @@ def run_ugv_tests():
     
     try:
         # 加载配置
-        app_config = load_config("config.ini")
+        app_config = load_config()
         
         # 初始化UGV控制器
         ugv_ctrl = UGVController(app_config.ugv)

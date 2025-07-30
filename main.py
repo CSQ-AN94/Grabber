@@ -30,7 +30,7 @@ class GrabberSystem:
     优化版本：完善错误处理、资源管理和组件生命周期管理
     """
     
-    def __init__(self, config_path: str = 'config.ini'):
+    def __init__(self, config_path: str = 'config.yaml'):
         """
         初始化系统组件
         """
@@ -582,7 +582,7 @@ def main():
         
         # 加载配置并设置日志
         print("正在初始化系统...")
-        config = load_config('config.ini')
+        config = load_config('config.yaml')
         setup_logging()
         
         logger = logging.getLogger(__name__)

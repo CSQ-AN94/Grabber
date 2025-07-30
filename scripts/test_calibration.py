@@ -41,7 +41,7 @@ def run_handeye_calibration(arm: ArmController, cam_thread: CameraThread, state:
         calibrator = HandEyeCalibrator(arm, cam_thread, state)
         calibrator.run_calibration_process()
         print("\n--- Hand-Eye Calibration Process Finished ---")
-        print("Please check `config.ini` for the updated `T_end_to_camera` matrix.")
+        print("Please check `config.yaml` for the updated `T_end_to_camera` matrix.")
         return True
     except Exception as e:
         print(f"手眼标定失败: {e}")
@@ -144,7 +144,7 @@ def run_calibration_tests():
     
     try:
         # 加载配置
-        app_config = load_config("config.ini")
+        app_config = load_config()
         state = WorldState()
         
         # 启动相机线程
@@ -188,7 +188,7 @@ def run_calibration_tests():
                 run_handeye_calibration(arm, cam_thread, state)
                 # 重新加载配置以获取更新的标定矩阵
                 try:
-                    app_config = load_config("config.ini")
+                    app_config = load_config()
                     T_end_to_camera = app_config.calibration.T_end_to_camera
                     calibration = Calibration(T_end_to_camera, K, dist)
                     print("标定矩阵已更新")

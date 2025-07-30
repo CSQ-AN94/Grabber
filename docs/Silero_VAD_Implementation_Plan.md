@@ -49,7 +49,7 @@ pip install silero-vad torch torchaudio onnxruntime
 - [ ] 延迟vs准确率平衡
 
 #### 2.3 配置管理
-- [ ] 更新`config.ini`添加Silero VAD配置
+- [ ] 更新`config.yaml`添加Silero VAD配置
 - [ ] 环境变量和运行时配置
 
 ### 第三阶段: 测试和验证 (2-3天)

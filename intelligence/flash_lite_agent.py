@@ -221,7 +221,7 @@ class FlashLiteAgent:
             # 初始化TTS系统
             if not self.tts_system:
                 from utils.config import load_config
-                config = load_config("config.ini")
+                config = load_config()
                 self.tts_system = iFlyTekTTS(config.speech)
                 self.logger.info("TTS系统初始化完成")
             

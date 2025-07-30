@@ -23,9 +23,9 @@ from sensors.camera_thread import CameraThread
 from utils.state import WorldState
 # --- 全局配置 ---
 try:
-    app_config = load_config("config.ini")
+    app_config = load_config()
 except Exception as e:
-    print(f"错误: 无法加载 config.ini。请确保文件存在且格式正确。 {e}")
+    print(f"错误: 无法加载 config.yaml。请确保文件存在且格式正确。 {e}")
     sys.exit(1)
 
 # --- 商品抓取属性字典 ---

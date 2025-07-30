@@ -488,3 +488,4 @@ class CameraThread(threading.Thread):
             "max_points": 50000,  # 这是一个估计值
             "export_directory": "./exports"
         }
+    

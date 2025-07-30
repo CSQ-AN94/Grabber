@@ -28,7 +28,7 @@ Grabber 是一个智能零售机器人系统，采用模块化、可扩展的架
 **接口**:
 ```python
 class GrabberSystem:
-    def __init__(config_path: str = 'config.ini')
+    def __init__(config_path: str = 'config.yaml')
     def run_main_loop()
     def task_a_inventory_scan()
     def task_b_image_recommendation()

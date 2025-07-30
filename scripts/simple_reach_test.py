@@ -107,7 +107,7 @@ def run_test():
     
     try:
         # 加载配置
-        app_config = load_config("config.ini")
+        app_config = load_config()
         state = WorldState()
         
         # 启动相机线程

@@ -25,7 +25,7 @@ class FlashLiteIntegrationTester:
     def __init__(self):
         # 加载配置
         try:
-            config = load_config("config.ini")
+            config = load_config()
             self.llm_config = config.llm
             self.agent_config = config.agent
         except Exception as e:
@@ -149,7 +149,7 @@ class FlashLiteIntegrationTester:
         if not self.llm_config.gemini_api_key or self.llm_config.gemini_api_key == "your_api_key_here":
             print("⚠️ 警告: 未配置Gemini API密钥")
             print("将运行Mock模式，无法测试真实AI响应")
-            print("要测试完整功能，请在config.ini中配置正确的API密钥")
+            print("要测试完整功能，请在config.yaml中配置正确的API密钥")
             print()
         
         try:

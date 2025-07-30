@@ -206,7 +206,7 @@ def test_camera_properties(cam_thread: CameraThread):
 def init_vision_analyzer():
     """初始化视觉分析器"""
     try:
-        config = load_config("config.ini")
+        config = load_config()
         vision_analyzer = VisionAnalyzer(config.vision.model_path)
         print("视觉分析器初始化成功")
         return vision_analyzer
@@ -217,7 +217,7 @@ def init_vision_analyzer():
 def init_arm_system():
     """初始化机械臂和UGV系统"""
     try:
-        config = load_config("config.ini")
+        config = load_config()
         arm = ArmController(config.connections, config.arm, config.gripper)
         ugv = UGVController(config.ugv)
         print("机械臂和UGV系统初始化成功")
@@ -232,7 +232,7 @@ def init_calibration_system(cam_thread: CameraThread, arm: ArmController):
         return None
         
     try:
-        config = load_config("config.ini")
+        config = load_config()
         K, dist = cam_thread.get_camera_intrinsics()
         
         if K is not None and dist is not None:

@@ -1,0 +1,217 @@
+# Grabber机器人配置文件
+# 单位说明：
+# - 距离/位置：米(m)
+# - 角度：弧度(rad)  
+# - 速度：关节速度单位
+# - 夹爪张开度：0.0=完全闭合，1.0=完全张开
+# - 价格：元(￥)
+
+# 硬件连接配置
+connections:
+  arm_ip: "192.168.1.18"
+  arm_port: 8080
+
+# 机械臂配置 - 关节角度单位：度(deg)
+arm:
+  home_pose: [90, 90, -90, 0, -90, -180]
+  scanning_pose: [90, 90, -60, 0, -120, -180]  
+  zero_pose: [0, 0, 0, 0, 0, 0]
+  dropoff_pose: [0, 0, 0, 0, 0, 0]  # 默认值
+  checkout_scan_pose: [160, 6.5, -62, 5.5, -92, -180]
+  
+  # TCP工具中心点配置 - 单位：米(m)和弧度(rad)
+  tcp_pose: [0.0, 0.0, 0.15, 0.0, 0.0, 0.0]
+  
+  # 笛卡尔坐标位姿 - 单位：米(m)和弧度(rad)
+  scanning_pose_cartesian: [0.000000, -0.077722, 0.578500, 1.570590, 1.570593, 3.141590]
+  zero_pose_cartesian: [0.000030, 0.000000, 0.850500, 0.000000, 0.000000, -3.141185]
+  dropoff_pose_cartesian: [-0.487753, 0.085994, 0.129552, -3.141185, 1.501000, -0.175000]
+  checkout_scan_pose_cartesian: [0.000030, 0.000000, 0.850500, 0.000000, 0.000000, -3.141185]
+  lower_grasp_pose_cartesian: [-0.013926, 0.105030, 0.426080, -3.111000, 1.091997, -1.552000]
+
+# 夹爪配置
+gripper:
+  zero_speed: 25600
+  init_speed: 51200
+  run_speed: 51200
+
+# UGV移动底盘配置
+ugv:
+  max_dist: 1.0  # 最大移动距离，单位：米(m)
+  speed: 0.1     # 移动速度，单位：米/秒(m/s)
+
+# 手眼标定配置 - 4x4变换矩阵
+calibration:
+  # T_end_to_camera: 机械臂末端到相机的变换矩阵
+  T_end_to_camera:
+    - [-0.009793086512436489, 0.3431101026187897, -0.9392441391552483, -0.035945966640493675]
+    - [-0.9653703678406427, 0.24163975833477247, 0.09833758227216649, -0.05168278792973131]
+    - [0.2606993447475122, 0.907681488559085, 0.328861926916725, -0.026978015886304548]
+    - [0.0, 0.0, 0.0, 1.0]
+
+# 语音合成配置 - iFlytek WebAPI
+speech:
+  app_id: "aeb60378"
+  api_key: "e248b59b7b21d7291702b7808ba07257"
+  api_secret: "MjQ1ZmM3MjkwNmEzZTQyN2ZiNTYxN2Ey"
+
+# 大语言模型配置 - Google Gemini
+llm:
+  gemini_api_key: "AIzaSyDoRYk_kU61IIeEsCuAUaRft2iaeKXtoFE"
+  model_name: "gemini-2.0-flash-live-001"
+
+# 智能Agent配置 - 音频参数
+agent:
+  audio_sample_rate: 16000  # 采样率：16kHz
+  audio_channels: 1         # 声道数：单声道
+  audio_chunk_size: 1024    # 音频块大小
+
+# 计算机视觉配置
+vision:
+  model_path: "intelligence/models/7_19.pt"  # YOLOv8模型路径
+
+# 系统配置
+system:
+  debug_mode: false
+  environment: "development"
+
+# 物品抓取和价格配置
+# z_offset: 相对于检测中心的Z轴偏移，单位：米(m)，正值向上，负值向下
+# roll/pitch/yaw: 抓取姿态，单位：弧度(rad)，遵循move_to_cartesian_pose()的角度约定
+# gripper_openness: 夹爪张开度，0.0=完全闭合，1.0=完全张开
+# price: 物品价格，单位：元(￥)
+items:
+  # 饮料类 - 圆柱形罐装
+  可口可乐:
+    z_offset: 0.0
+    roll: 3.14159     # π弧度，180度
+    pitch: 0.0
+    yaw: 0.0
+    gripper_openness: 0.8
+    price: 3.5
+    
+  百事可乐:
+    z_offset: 0.0
+    roll: 3.14159
+    pitch: 0.0
+    yaw: 0.0
+    gripper_openness: 0.8
+    price: 3.5
+    
+  红牛:
+    z_offset: 0.0
+    roll: 3.14159
+    pitch: 0.0
+    yaw: 0.0
+    gripper_openness: 0.6  # 红牛罐较细
+    price: 6.0
+
+  # 瓶装饮料 - 细长形状
+  农夫山泉矿泉水:
+    z_offset: 0.02    # 稍高抓取
+    roll: 3.14159
+    pitch: 0.0
+    yaw: 0.0
+    gripper_openness: 0.7
+    price: 2.5
+    
+  营养快线:
+    z_offset: 0.0
+    roll: 3.14159
+    pitch: 0.0
+    yaw: 0.0
+    gripper_openness: 0.7
+    price: 6.0
+    
+  "娃哈哈 AD钙奶":  # 注意：包含空格的名称需要引号
+    z_offset: 0.0
+    roll: 3.14159
+    pitch: 0.0
+    yaw: 0.0
+    gripper_openness: 0.6
+    price: 5.5
+
+  # 盒装饮料/牛奶 - 方形包装
+  纯牛奶:
+    z_offset: -0.02   # 稍低抓取
+    roll: 3.14159
+    pitch: 0.0
+    yaw: 0.0
+    gripper_openness: 0.9
+    price: 2.5
+    
+  雀巢咖啡:
+    z_offset: -0.01
+    roll: 3.14159
+    pitch: 0.0
+    yaw: 0.0
+    gripper_openness: 1.0   # 较大包装，需要完全张开
+    price: 4.0
+
+  # 个护用品 - 瓶装
+  牙膏:
+    z_offset: 0.0
+    roll: 3.14159
+    pitch: 0.0
+    yaw: 0.0
+    gripper_openness: 0.8
+    price: 7.0
+    
+  洗发水:
+    z_offset: 0.01
+    roll: 3.14159
+    pitch: 0.0
+    yaw: 0.0
+    gripper_openness: 0.9
+    price: 12.0
+
+  # 零食类 - 包装袋，需要宽口抓取
+  薯片:
+    z_offset: 0.0
+    roll: 3.14159
+    pitch: 0.0
+    yaw: 0.0
+    gripper_openness: 1.0   # 包装袋较宽
+    price: 3.5
+    
+  洽洽瓜子:
+    z_offset: 0.0
+    roll: 3.14159
+    pitch: 0.0
+    yaw: 0.0
+    gripper_openness: 1.0
+    price: 5.0
+    
+  奥利奥饼干:
+    z_offset: 0.0
+    roll: 3.14159
+    pitch: 0.0
+    yaw: 0.0
+    gripper_openness: 1.0
+    price: 6.0
+
+  # 生活用品
+  维达纸巾:
+    z_offset: -0.01   # 稍低抓取
+    roll: 3.14159
+    pitch: 0.0
+    yaw: 0.0
+    gripper_openness: 1.0   # 纸巾盒较大
+    price: 4.0
+
+  # 水果类 - 球形，从上方抓取
+  橘子:
+    z_offset: 0.03    # 从上方抓取
+    roll: 3.14159
+    pitch: 0.0
+    yaw: 0.0
+    gripper_openness: 0.9
+    price: 1.5
+    
+  苹果:
+    z_offset: 0.03
+    roll: 3.14159
+    pitch: 0.0
+    yaw: 0.0
+    gripper_openness: 1.0   # 苹果稍大
+    price: 2.0

@@ -813,7 +813,7 @@ if __name__ == "__main__":
         # 测试模式 - 尝试加载配置
         try:
             from utils.config import load_config
-            config = load_config("config.ini")
+            config = load_config()
             speech_config = config.speech
             print("使用配置文件中的语音配置")
         except Exception as e:

@@ -203,12 +203,11 @@ if __name__ == '__main__':
 
     # --- 1. 加载配置和初始化 ---
     try:
-        # 假设模型路径在config.ini中定义
-        config = load_config('config.ini') # 注意路径，因为我们在intelligence目录下
+        config = load_config()
         model_path = config.vision.model_path # 假设config.py中会解析出vision部分
         analyzer = VisionAnalyzer(model_path=model_path)
     except Exception as e:
-        print(f"初始化失败，请检查config.ini和模型文件: {e}")
+        print(f"初始化失败，请检查config.yaml和模型文件: {e}")
         # 如果模型加载失败，后续测试无意义，直接退出
         exit()
 

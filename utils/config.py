@@ -1,10 +1,18 @@
-import configparser
+"""
+YAML配置系统 - 简洁、清晰、类型安全
+设计原则：
+1. 配置即文档 - YAML中直接注明单位和含义
+2. 最小中间层 - 直接映射到dataclass
+3. 类型安全 - 保持强类型检查
+4. 单位明确 - 避免隐式转换混乱
+"""
+
 import os
+import yaml
 import logging
-from dataclasses import dataclass
 import numpy as np
+from dataclasses import dataclass
 from typing import List, Optional, Any, Dict
-import ast
 
 
 class ConfigError(Exception):
@@ -22,16 +30,17 @@ class ConnectionsConfig:
 @dataclass
 class ArmConfig:
     """机械臂配置"""
-    home_pose: List[float]
-    scanning_pose: List[float]
-    zero_pose: List[float]
-    dropoff_pose: List[float]
-    checkout_scan_pose: List[float]
-    tcp_pose: List[float]
-    scanning_pose_cartesian: List[float]
-    zero_pose_cartesian: List[float]
-    dropoff_pose_cartesian: List[float]
-    checkout_scan_pose_cartesian: List[float]
+    home_pose: List[float]              # 关节角度，单位：度
+    scanning_pose: List[float]          # 关节角度，单位：度
+    zero_pose: List[float]              # 关节角度，单位：度
+    dropoff_pose: List[float]           # 关节角度，单位：度
+    checkout_scan_pose: List[float]     # 关节角度，单位：度
+    tcp_pose: List[float]               # TCP位姿，单位：米和弧度
+    scanning_pose_cartesian: List[float]  # 笛卡尔位姿，单位：米和弧度
+    zero_pose_cartesian: List[float]    # 笛卡尔位姿，单位：米和弧度
+    dropoff_pose_cartesian: List[float] # 笛卡尔位姿，单位：米和弧度
+    checkout_scan_pose_cartesian: List[float]  # 笛卡尔位姿，单位：米和弧度
+
 
 @dataclass
 class GripperConfig:
@@ -41,19 +50,17 @@ class GripperConfig:
     run_speed: int
 
 
-# CameraConfig 已删除 - 相机使用硬编码配置
-
-
 @dataclass
 class UGVConfig:
     """UGV配置"""
-    max_dist: float
-    speed: float
+    max_dist: float  # 最大移动距离，单位：米
+    speed: float     # 移动速度，单位：米/秒
+
 
 @dataclass
 class CalibrationConfig:
     """标定配置"""
-    T_end_to_camera: np.ndarray
+    T_end_to_camera: np.ndarray  # 4x4变换矩阵
 
 
 @dataclass
@@ -74,15 +81,46 @@ class LLMConfig:
 @dataclass
 class AgentConfig:
     """智能Agent配置"""
-    audio_sample_rate: int
-    audio_channels: int
-    audio_chunk_size: int
+    audio_sample_rate: int  # 采样率，单位：Hz
+    audio_channels: int     # 声道数
+    audio_chunk_size: int   # 音频块大小
 
 
 @dataclass
 class VisionConfig:
     """计算机视觉配置"""
-    model_path: str
+    model_path: str  # YOLOv8模型路径
+
+
+@dataclass
+class ItemConfig:
+    """单个物品配置"""
+    z_offset: float        # Z轴偏移量，单位：米
+    roll: float            # 抓取姿态roll角，单位：弧度  
+    pitch: float           # 抓取姿态pitch角，单位：弧度
+    yaw: float             # 抓取姿态yaw角，单位：弧度
+    gripper_openness: float # 夹爪张开度，0.0=完全闭合，1.0=完全张开
+    price: float           # 物品价格，单位：元
+
+
+@dataclass
+class ItemsConfig:
+    """物品配置容器"""
+    items: Dict[str, ItemConfig]
+    
+    def get_item_config(self, item_name: str) -> Optional[ItemConfig]:
+        """获取指定物品配置"""
+        return self.items.get(item_name)
+    
+    def get_all_items(self) -> List[str]:
+        """获取所有物品名称"""
+        return list(self.items.keys())
+    
+    def get_item_price(self, item_name: str) -> Optional[float]:
+        """获取物品价格"""
+        item_config = self.get_item_config(item_name)
+        return item_config.price if item_config else None
+
 
 @dataclass
 class SystemConfig:
@@ -103,7 +141,9 @@ class AppConfig:
     llm: LLMConfig
     agent: AgentConfig
     vision: VisionConfig
+    items: ItemsConfig
     system: SystemConfig
+
 
 def get_env_var(section: str, key: str, fallback: Any = None) -> Any:
     """
@@ -114,9 +154,196 @@ def get_env_var(section: str, key: str, fallback: Any = None) -> Any:
     return os.environ.get(env_var_name, fallback)
 
 
+def load_config(path: str = 'config.yaml') -> AppConfig:
+    """
+    加载YAML配置文件
+    
+    Args:
+        path: 配置文件路径
+        
+    Returns:
+        AppConfig: 解析后的配置对象
+        
+    Raises:
+        ConfigError: 配置文件不存在或解析失败
+    """
+    if not os.path.exists(path):
+        raise ConfigError(f"Configuration file not found: {path}")
+    
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            config_data = yaml.safe_load(f)
+        
+        if not config_data:
+            raise ConfigError("Configuration file is empty")
+        
+        # 解析各个配置段，支持环境变量覆盖
+        def _get_value(section_data: dict, key: str, section_name: str = "", env_converter=None) -> Any:
+            """获取配置值，支持环境变量覆盖"""
+            if section_name:
+                env_value = get_env_var(section_name, key)
+                if env_value is not None:
+                    if env_converter:
+                        try:
+                            return env_converter(env_value)
+                        except Exception as e:
+                            raise ConfigError(f"Failed to convert env var {section_name}.{key}: {e}")
+                    return env_value
+            
+            if key not in section_data:
+                raise ConfigError(f"Missing required config key: {key}")
+            
+            return section_data[key]
+        
+        # 解析连接配置
+        conn_data = config_data.get('connections', {})
+        connections = ConnectionsConfig(
+            arm_ip=_get_value(conn_data, 'arm_ip', 'connections'),
+            arm_port=_get_value(conn_data, 'arm_port', 'connections', int)
+        )
+        
+        # 解析机械臂配置
+        arm_data = config_data.get('arm', {})
+        arm = ArmConfig(
+            home_pose=_get_value(arm_data, 'home_pose'),
+            scanning_pose=_get_value(arm_data, 'scanning_pose'),
+            zero_pose=_get_value(arm_data, 'zero_pose'),
+            dropoff_pose=_get_value(arm_data, 'dropoff_pose'),
+            checkout_scan_pose=_get_value(arm_data, 'checkout_scan_pose'),
+            tcp_pose=_get_value(arm_data, 'tcp_pose'),
+            scanning_pose_cartesian=_get_value(arm_data, 'scanning_pose_cartesian'),
+            zero_pose_cartesian=_get_value(arm_data, 'zero_pose_cartesian'),
+            dropoff_pose_cartesian=_get_value(arm_data, 'dropoff_pose_cartesian'),
+            checkout_scan_pose_cartesian=_get_value(arm_data, 'checkout_scan_pose_cartesian')
+        )
+        
+        # 解析夹爪配置
+        gripper_data = config_data.get('gripper', {})
+        gripper = GripperConfig(
+            zero_speed=_get_value(gripper_data, 'zero_speed', 'gripper', int),
+            init_speed=_get_value(gripper_data, 'init_speed', 'gripper', int),
+            run_speed=_get_value(gripper_data, 'run_speed', 'gripper', int)
+        )
+        
+        # 解析UGV配置
+        ugv_data = config_data.get('ugv', {})
+        ugv = UGVConfig(
+            max_dist=_get_value(ugv_data, 'max_dist', 'ugv', float),
+            speed=_get_value(ugv_data, 'speed', 'ugv', float)
+        )
+        
+        # 解析标定配置
+        calibration_data = config_data.get('calibration', {})
+        T_matrix = _get_value(calibration_data, 'T_end_to_camera')
+        calibration = CalibrationConfig(
+            T_end_to_camera=np.array(T_matrix, dtype=float)
+        )
+        
+        # 解析语音配置
+        speech_data = config_data.get('speech', {})
+        speech = SpeechConfig(
+            app_id=_get_value(speech_data, 'app_id', 'speech'),
+            api_key=_get_value(speech_data, 'api_key', 'speech'),
+            api_secret=_get_value(speech_data, 'api_secret', 'speech')
+        )
+        
+        # 解析LLM配置
+        llm_data = config_data.get('llm', {})
+        llm = LLMConfig(
+            gemini_api_key=_get_value(llm_data, 'gemini_api_key', 'llm'),
+            model_name=_get_value(llm_data, 'model_name', 'llm')
+        )
+        
+        # 解析Agent配置
+        agent_data = config_data.get('agent', {})
+        agent = AgentConfig(
+            audio_sample_rate=_get_value(agent_data, 'audio_sample_rate', 'agent', int),
+            audio_channels=_get_value(agent_data, 'audio_channels', 'agent', int),
+            audio_chunk_size=_get_value(agent_data, 'audio_chunk_size', 'agent', int)
+        )
+        
+        # 解析视觉配置
+        vision_data = config_data.get('vision', {})
+        vision = VisionConfig(
+            model_path=_get_value(vision_data, 'model_path', 'vision')
+        )
+        
+        # 解析系统配置
+        system_data = config_data.get('system', {})
+        system = SystemConfig(
+            debug_mode=_get_value(system_data, 'debug_mode', 'system', bool),
+            environment=_get_value(system_data, 'environment', 'system')
+        )
+        
+        # 解析物品配置
+        items_data = config_data.get('items', {})
+        items_dict = {}
+        
+        for item_name, item_data in items_data.items():
+            try:
+                items_dict[item_name] = ItemConfig(
+                    z_offset=float(item_data['z_offset']),
+                    roll=float(item_data['roll']),
+                    pitch=float(item_data['pitch']),
+                    yaw=float(item_data['yaw']),
+                    gripper_openness=float(item_data['gripper_openness']),
+                    price=float(item_data['price'])
+                )
+            except (KeyError, ValueError, TypeError) as e:
+                logging.warning(f"Failed to parse config for item '{item_name}': {e}")
+                # 使用默认配置
+                items_dict[item_name] = ItemConfig(
+                    z_offset=0.0,
+                    roll=3.14159,
+                    pitch=0.0,
+                    yaw=0.0,
+                    gripper_openness=0.8,
+                    price=0.0
+                )
+        
+        items = ItemsConfig(items=items_dict)
+        
+        # 创建主配置对象
+        config = AppConfig(
+            connections=connections,
+            arm=arm,
+            gripper=gripper,
+            ugv=ugv,
+            calibration=calibration,
+            speech=speech,
+            llm=llm,
+            agent=agent,
+            vision=vision,
+            items=items,
+            system=system
+        )
+        
+        # 验证配置
+        validate_config(config)
+        
+        logging.info(f"Successfully loaded configuration from {path}")
+        logging.info(f"Loaded {len(items.items)} item configurations")
+        
+        return config
+        
+    except yaml.YAMLError as e:
+        raise ConfigError(f"Failed to parse YAML configuration: {e}")
+    except Exception as e:
+        if isinstance(e, ConfigError):
+            raise
+        else:
+            raise ConfigError(f"Failed to load configuration: {e}")
+
+
 def validate_config(config: AppConfig) -> None:
     """
     验证配置的有效性
+    
+    Args:
+        config: 待验证的配置对象
+        
+    Raises:
+        ConfigError: 配置验证失败
     """
     # 验证IP地址格式
     import socket
@@ -131,6 +358,7 @@ def validate_config(config: AppConfig) -> None:
     
     # 验证关节姿态长度
     for pose_name, pose in [
+        ("home_pose", config.arm.home_pose),
         ("scanning_pose", config.arm.scanning_pose),
         ("zero_pose", config.arm.zero_pose),
         ("dropoff_pose", config.arm.dropoff_pose),
@@ -138,6 +366,20 @@ def validate_config(config: AppConfig) -> None:
     ]:
         if len(pose) != 6:
             raise ConfigError(f"Invalid {pose_name}: must have 6 joint angles, got {len(pose)}")
+    
+    # 验证TCP位姿长度
+    if len(config.arm.tcp_pose) != 6:
+        raise ConfigError(f"Invalid tcp_pose: must have 6 elements, got {len(config.arm.tcp_pose)}")
+    
+    # 验证笛卡尔位姿长度
+    for pose_name, pose in [
+        ("scanning_pose_cartesian", config.arm.scanning_pose_cartesian),
+        ("zero_pose_cartesian", config.arm.zero_pose_cartesian),
+        ("dropoff_pose_cartesian", config.arm.dropoff_pose_cartesian),
+        ("checkout_scan_pose_cartesian", config.arm.checkout_scan_pose_cartesian)
+    ]:
+        if len(pose) != 6:
+            raise ConfigError(f"Invalid {pose_name}: must have 6 elements, got {len(pose)}")
     
     # 验证手眼标定矩阵
     if config.calibration.T_end_to_camera.shape != (4, 4):
@@ -147,169 +389,20 @@ def validate_config(config: AppConfig) -> None:
     valid_environments = ["development", "production", "testing"]
     if config.system.environment not in valid_environments:
         raise ConfigError(f"Invalid environment: {config.system.environment}")
-
-
-def load_config(path: str = 'config.ini') -> AppConfig:
-    """
-    读取.ini文件，解析所有部分，并返回一个结构化的AppConfig对象。
-    支持环境变量覆盖敏感配置。
-    """
-    if not os.path.exists(path):
-        raise ConfigError(f"Configuration file not found: {path}")
     
-    parser = configparser.ConfigParser()
-    parser.read(path, encoding='utf-8')
-
-    def _parse_list(s: str) -> List[float]:
-        """解析逗号分隔的字符串为浮点数列表"""
-        try:
-            return [float(x.strip()) for x in s.split(',')]
-        except ValueError as e:
-            raise ConfigError(f"Failed to parse list: {s}, error: {e}")
-    
-    def _parse_joint_angles(s: str) -> List[float]:
-        """解析关节角度（度）为浮点数列表"""
-        try:
-            return [float(x.strip()) for x in s.split(',')]
-        except ValueError as e:
-            raise ConfigError(f"Failed to parse joint angles: {s}, error: {e}")
-    
-    def _parse_matrix(s: str) -> np.ndarray:
-        """解析形如[[...],[...],[...],[...]]的字符串为numpy数组"""
-        try:
-            return np.array(ast.literal_eval(s), dtype=float)
-        except (ValueError, SyntaxError) as e:
-            raise ConfigError(f"Failed to parse matrix: {s}, error: {e}")
-    
-    def _get_config_value(section: str, key: str, parser_func=None, fallback=None, required=True):
-        """获取配置值，支持环境变量覆盖"""
-        # 首先检查环境变量
-        env_value = get_env_var(section, key)
-        if env_value is not None:
-            if parser_func:
-                try:
-                    return parser_func(env_value)
-                except Exception as e:
-                    raise ConfigError(f"Failed to parse environment variable GRABBER_{section.upper()}_{key.upper()}: {e}")
-            return env_value
+    # 验证物品配置
+    for item_name, item_config in config.items.items.items():
+        # 验证夹爪张开度范围
+        if not (0.0 <= item_config.gripper_openness <= 1.0):
+            raise ConfigError(f"Invalid gripper_openness for {item_name}: must be between 0.0 and 1.0")
         
-        # 然后检查配置文件
-        try:
-            if parser_func:
-                return parser_func(section, key, fallback=fallback)
-            else:
-                return parser.get(section, key, fallback=fallback)
-        except configparser.NoSectionError:
-            if required and fallback is None:
-                raise ConfigError(f"Missing configuration section: {section}")
-            return fallback
-        except configparser.NoOptionError:
-            if required and fallback is None:
-                raise ConfigError(f"Missing configuration option: {section}.{key}")
-            return fallback
-    
-    try:
-        # 连接配置
-        conn_config = ConnectionsConfig(
-            arm_ip=_get_config_value('connections', 'arm_ip'),
-            arm_port=_get_config_value('connections', 'arm_port', parser.getint)
-        )
-
-        # 机械臂配置
-        arm_config = ArmConfig(
-            home_pose=_parse_joint_angles(_get_config_value('arm', 'home_pose')),
-            scanning_pose=_parse_joint_angles(_get_config_value('arm', 'scanning_pose')),
-            zero_pose=_parse_joint_angles(_get_config_value('arm', 'zero_pose')),
-            dropoff_pose=_parse_joint_angles(_get_config_value('arm', 'dropoff_pose', fallback='0,0,0,0,0,0')),
-            checkout_scan_pose=_parse_joint_angles(_get_config_value('arm', 'checkout_scan_pose')),
-            tcp_pose=_parse_list(_get_config_value('arm', 'tcp_pose', fallback='0.0, 0.0, 0.0, 0.0, 0.0, 0.0')),
-            scanning_pose_cartesian=_parse_list(_get_config_value('arm', 'scanning_pose_cartesian')),
-            zero_pose_cartesian=_parse_list(_get_config_value('arm', 'zero_pose_cartesian')),
-            dropoff_pose_cartesian=_parse_list(_get_config_value('arm', 'dropoff_pose_cartesian')),
-            checkout_scan_pose_cartesian=_parse_list(_get_config_value('arm', 'checkout_scan_pose_cartesian'))
-        )
-
-        # 夹爪配置
-        gripper_config = GripperConfig(
-            zero_speed=_get_config_value('gripper', 'zero_speed', parser.getint),
-            init_speed=_get_config_value('gripper', 'init_speed', parser.getint),
-            run_speed=_get_config_value('gripper', 'run_speed', parser.getint)
-        )
-
-        # UGV配置
-        ugv_config = UGVConfig(
-            max_dist=_get_config_value('ugv', 'max_dist', parser.getfloat, 0.0),
-            speed=_get_config_value('ugv', 'speed', parser.getfloat, 0.0)
-        )
-
-        # 标定配置
-        T_end_to_camera = _parse_matrix(_get_config_value('calibration', 'T_end_to_camera', 
-                                                          fallback=str(np.eye(4).tolist())))
-        calibration_config = CalibrationConfig(
-            T_end_to_camera=T_end_to_camera
-        )
-
-        # Speech配置
-        speech_config = SpeechConfig(
-            app_id=_get_config_value('speech', 'app_id'),
-            api_key=_get_config_value('speech', 'api_key'),
-            api_secret=_get_config_value('speech', 'api_secret')
-        )
-
-        # LLM配置
-        llm_config = LLMConfig(
-            gemini_api_key=_get_config_value('llm', 'gemini_api_key'),
-            model_name=_get_config_value('llm', 'model_name', fallback="gemini-2.0-flash-live-001")
-        )
-
-        # Agent配置
-        agent_config = AgentConfig(
-            audio_sample_rate=_get_config_value('agent', 'audio_sample_rate', parser.getint, 16000),
-            audio_channels=_get_config_value('agent', 'audio_channels', parser.getint, 1),
-            audio_chunk_size=_get_config_value('agent', 'audio_chunk_size', parser.getint, 1024)
-        )
-
-        # 视觉配置
-        vision_config = VisionConfig(
-            model_path=_get_config_value('vision', 'model_path')
-        )
-
-        # 系统配置
-        system_config = SystemConfig(
-            debug_mode=_get_config_value('system', 'debug_mode', parser.getboolean, False),
-            environment=_get_config_value('system', 'environment', fallback="development")
-        )
-
-        # 创建主配置对象
-        config = AppConfig(
-            connections=conn_config,
-            arm=arm_config,
-            gripper=gripper_config,
-            ugv=ugv_config,
-            calibration=calibration_config,
-            speech=speech_config,
-            llm=llm_config,
-            agent=agent_config,
-            vision=vision_config,
-            system=system_config
-        )
-
-        # 验证配置
-        validate_config(config)
-        
-        return config
-
-    except Exception as e:
-        if isinstance(e, ConfigError):
-            raise
-        else:
-            raise ConfigError(f"Failed to load configuration: {e}")
+        # 验证价格非负
+        if item_config.price < 0:
+            raise ConfigError(f"Invalid price for {item_name}: must be non-negative")
 
 
 def setup_logging(log_level: str = "INFO") -> None:
-    """
-    设置默认日志系统
-    """
+    """设置默认日志系统"""
     # 创建日志目录
     log_dir = "logs"
     if not os.path.exists(log_dir):

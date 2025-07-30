@@ -14,13 +14,11 @@ class HandEyeCalibrator:
     def __init__(self, 
                  arm_controller: ArmController, 
                  camera_thread: CameraThread,
-                 world_state: WorldState,
-                 config_path='config.ini'):
+                 world_state: WorldState):
         
         self.arm_controller = arm_controller
         self.camera_thread = camera_thread
         self.world_state = world_state  # 用于获取最新图像和机械臂状态
-        self.config_path = config_path
         self.marker_length = 0.034  # 34mm
         self.marker_separation = 0.0085 # 8.5mm
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_250)
@@ -126,19 +124,4 @@ class HandEyeCalibrator:
         
         print("\nHand-Eye Calibration successful!")
         print("Resulting T_end_to_camera (4x4 Transformation Matrix):\n", T_end_to_camera)
-        
-        # 将结果自动保存回配置文件
-        self._save_matrix_to_config(T_end_to_camera)
         return T_end_to_camera
-
-    def _save_matrix_to_config(self, matrix):
-        # 将标定结果持久化
-        parser = configparser.ConfigParser()
-        parser.read(self.config_path)
-        if not parser.has_section('calibration'):
-            parser.add_section('calibration')
-        matrix_str = str(matrix.tolist())
-        parser.set('calibration', 't_end_to_camera', matrix_str)
-        with open(self.config_path, 'w') as configfile:
-            parser.write(configfile)
-        print(f"Calibration matrix successfully saved to {self.config_path}")
