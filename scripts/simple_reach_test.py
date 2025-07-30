@@ -15,9 +15,8 @@ import numpy as np
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.config import load_config
-from utils.state import WorldState
 from utils.calibration import Calibration
-from sensors.camera_thread import CameraThread, DisplayMode
+from sensors.camera_thread import CameraThread
 from controllers.arm_controller import ArmController
 
 
@@ -38,7 +37,7 @@ def test_simple_reach(arm: ArmController, camera_thread: CameraThread, calibrati
     # 图像中心点
     center_pixel = (320, 240)
     # 目标深度
-    target_depth_m = 0.2 # 20cm
+    target_depth_m = 0.1 # 10cm
 
     while not exit_event.is_set():
         color_image, _ = camera_thread.get_latest_frames()
@@ -63,6 +62,7 @@ def test_simple_reach(arm: ArmController, camera_thread: CameraThread, calibrati
             if T_base_to_end is None:
                 print("ERROR: Could not get current arm pose.")
                 continue
+            print(f"Current end pose: {T_base_to_end}")
 
             # 2. 将像素点转换为世界坐标
             # 注意：我们没有真实的深度图，所以直接使用给定的深度值
@@ -93,7 +93,7 @@ def test_simple_reach(arm: ArmController, camera_thread: CameraThread, calibrati
             ]
             
             print(f"Commanding arm to move to: {np.round(target_pose, 3)}")
-            arm.move_to_cartesian_pose(target_pose, speed=50)
+            arm.move_to_cartesian_pose(target_pose)
             print("Move command sent.")
 
     cv2.destroyWindow(window_name)
@@ -108,8 +108,6 @@ def run_test():
     try:
         # 加载配置
         app_config = load_config()
-        state = WorldState()
-        
         # 启动相机线程
         cam_thread = CameraThread()
         cam_thread.start()

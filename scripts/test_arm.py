@@ -16,8 +16,8 @@ from utils.config import load_config, ArmConfig
 from controllers.arm_controller import ArmController
 
 
-def test_arm_movement(arm: ArmController, arm_config):
-    """测试机械臂运动"""
+def test_joint_movement(arm: ArmController, arm_config):
+    """测试机械臂关节空间运动"""
     print("\n--- [Test] Arm Movement ---")
     print("Moving to scanning pose in joint space...")
     arm.move_to_joints(arm_config.scanning_pose) 
@@ -58,45 +58,6 @@ def test_arm_movement(arm: ArmController, arm_config):
     print("Zero pose in cartesian space:")
     print(cartesian_matrix)
 
-    print("Moving to scanning pose in cartesian space...")
-    arm.move_to_cartesian_pose(arm_config.scanning_pose_cartesian)
-    time.sleep(1.5)
-    joints_rad = arm.get_current_joint_angles()
-    _, joints_deg = arm.arm.rm_get_joint_degree()
-    cartesian_matrix = arm.get_base_to_end_pose_matrix()
-    print("Scanning pose in joint space(radian):")
-    print(np.array(joints_rad))
-    print("Scanning pose in joint space(degree):")
-    print(np.array(joints_deg))
-    print("Scanning pose in cartesian space:")
-    print(cartesian_matrix)
-
-    print("Moving to dropoff pose in cartesian space...")
-    arm.move_to_cartesian_pose(arm_config.dropoff_pose_cartesian)
-    time.sleep(1.5)
-    joints_rad = arm.get_current_joint_angles()
-    _, joints_deg = arm.arm.rm_get_joint_degree()
-    cartesian_matrix = arm.get_base_to_end_pose_matrix()
-    print("Dropoff pose in joint space(radian):")
-    print(np.array(joints_rad))
-    print("Dropoff pose in joint space(degree):")
-    print(np.array(joints_deg))
-    print("Dropoff pose in cartesian space:")
-    print(cartesian_matrix)
-
-    print("Moving to zero pose in cartesian space...")
-    arm.move_to_cartesian_pose(arm_config.zero_pose_cartesian)
-    time.sleep(1.5)
-    joints_rad = arm.get_current_joint_angles()
-    _, joints_deg = arm.arm.rm_get_joint_degree()
-    cartesian_matrix = arm.get_base_to_end_pose_matrix()
-    print("Zero pose in joint space(radian):")
-    print(np.array(joints_rad))
-    print("Zero pose in joint space(degree):")
-    print(np.array(joints_deg))
-    print("Zero pose in cartesian space:")
-    print(cartesian_matrix)
-
     print("--- Arm Movement Test PASSED ---")
 
 
@@ -110,16 +71,9 @@ def test_gripper_control(arm: ArmController):
     print("--- Gripper Control Test PASSED ---")
 
 
-def test_tcp_precision_movement(arm: ArmController, arm_config: ArmConfig):
-    """测试TCP精细运动"""
-    print("\n--- [Test] TCP Precision Movement ---")
-    
-    # 检查是否配置了TCP
-    if all(abs(x) < 1e-6 for x in arm_config.tcp_pose):
-        print("未配置TCP偏移，跳过TCP测试")
-        return
-    
-    print(f"配置的TCP偏移: {arm_config.tcp_pose}")
+def test_cartesian_movement(arm: ArmController, arm_config: ArmConfig):
+    """测试笛卡尔坐标系下的精细运动"""
+    print("\n--- [Test] Cartesian Movement ---")
     
     # 移动到扫描位置作为起点
     print("Moving to scanning pose as starting position...")
@@ -129,7 +83,7 @@ def test_tcp_precision_movement(arm: ArmController, arm_config: ArmConfig):
     # 获取当前笛卡尔位姿
     current_matrix = arm.get_base_to_end_pose_matrix()
     if current_matrix is None:
-        print("无法获取当前位姿，跳过TCP测试")
+        print("无法获取当前位姿，跳过测试")
         return
     
     # 提取当前位置和姿态
@@ -137,16 +91,16 @@ def test_tcp_precision_movement(arm: ArmController, arm_config: ArmConfig):
     current_pos = current_matrix[:3, 3]
     current_rot = Rotation.from_matrix(current_matrix[:3, :3]).as_euler('ZYX')
     
-    print(f"当前TCP位置: [{current_pos[0]:.3f}, {current_pos[1]:.3f}, {current_pos[2]:.3f}] m")
+    print(f"当前机械臂末端位置: [{current_pos[0]:.3f}, {current_pos[1]:.3f}, {current_pos[2]:.3f}] m")
     
-    # 定义一系列安全的小幅度移动来测试TCP精度
+    # 定义一系列安全的小幅度移动来测试笛卡尔运动精度
     # 注意：这些是相对于当前位置的小偏移
     test_moves = [
-        ("TCP上移5cm", [current_pos[0], current_pos[1], current_pos[2] + 0.05, 
+        ("上移5cm", [current_pos[0], current_pos[1], current_pos[2] + 0.05, 
                        current_rot[0], current_rot[1], current_rot[2]]),
-        ("TCP右移3cm", [current_pos[0] + 0.03, current_pos[1], current_pos[2] + 0.05, 
+        ("右移3cm", [current_pos[0] + 0.03, current_pos[1], current_pos[2] + 0.05, 
                        current_rot[0], current_rot[1], current_rot[2]]),
-        ("TCP前移2cm", [current_pos[0] + 0.03, current_pos[1] + 0.02, current_pos[2] + 0.05, 
+        ("前移2cm", [current_pos[0] + 0.03, current_pos[1] + 0.02, current_pos[2] + 0.05, 
                        current_rot[0], current_rot[1], current_rot[2]]),
         ("回到起始位置", [current_pos[0], current_pos[1], current_pos[2], 
                       current_rot[0], current_rot[1], current_rot[2]]),
@@ -160,7 +114,7 @@ def test_tcp_precision_movement(arm: ArmController, arm_config: ArmConfig):
         result = arm.move_to_cartesian_pose(target_pose, speed=20, wait=True)
         
         if result == 0:
-            print(f"  ✅ {move_name} 成功")
+            print(f"  {move_name} 成功")
             time.sleep(1.5)
             
             # 验证实际到达位置
@@ -171,9 +125,9 @@ def test_tcp_precision_movement(arm: ArmController, arm_config: ArmConfig):
                 print(f"  实际位置: [{actual_pos[0]:.3f}, {actual_pos[1]:.3f}, {actual_pos[2]:.3f}] m")
                 print(f"  位置误差: {error*1000:.1f} mm")
             else:
-                print("  ⚠️ 无法获取实际位置验证")
+                print("  无法获取实际位置验证")
         else:
-            print(f"  ❌ {move_name} 失败，错误码: {result}")
+            print(f"  {move_name} 失败，错误码: {result}")
             break
     
     print("--- TCP Precision Movement Test COMPLETED ---")
@@ -196,24 +150,24 @@ def run_arm_tests():
             print("\n" + "="*40)
             print("机械臂测试菜单")
             print("="*40)
-            print("1. 测试机械臂运动")
+            print("1. 测试关节空间运动")
             print("2. 测试夹爪控制")
-            print("3. 测试TCP精细运动")
+            print("3. 测试笛卡尔空间运动")
             print("4. 运行所有测试")
             print("Q. 退出")
             
             choice = input("请选择: ").upper()
             
             if choice == '1':
-                test_arm_movement(arm, app_config.arm)
+                test_joint_movement(arm, app_config.arm)
             elif choice == '2':
                 test_gripper_control(arm)
             elif choice == '3':
-                test_tcp_precision_movement(arm, app_config.arm)
+                test_cartesian_movement(arm, app_config.arm)
             elif choice == '4':
-                test_arm_movement(arm, app_config.arm)
+                test_joint_movement(arm, app_config.arm)
                 test_gripper_control(arm)
-                test_tcp_precision_movement(arm, app_config.arm)
+                test_cartesian_movement(arm, app_config.arm)
             elif choice == 'Q':
                 break
             else:

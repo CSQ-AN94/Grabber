@@ -35,7 +35,6 @@ class ArmConfig:
     zero_pose: List[float]              # 关节角度，单位：度
     dropoff_pose: List[float]           # 关节角度，单位：度
     checkout_scan_pose: List[float]     # 关节角度，单位：度
-    tcp_pose: List[float]               # TCP位姿，单位：米和弧度
     scanning_pose_cartesian: List[float]  # 笛卡尔位姿，单位：米和弧度
     zero_pose_cartesian: List[float]    # 笛卡尔位姿，单位：米和弧度
     dropoff_pose_cartesian: List[float] # 笛卡尔位姿，单位：米和弧度
@@ -210,7 +209,6 @@ def load_config(path: str = 'config.yaml') -> AppConfig:
             zero_pose=_get_value(arm_data, 'zero_pose'),
             dropoff_pose=_get_value(arm_data, 'dropoff_pose'),
             checkout_scan_pose=_get_value(arm_data, 'checkout_scan_pose'),
-            tcp_pose=_get_value(arm_data, 'tcp_pose'),
             scanning_pose_cartesian=_get_value(arm_data, 'scanning_pose_cartesian'),
             zero_pose_cartesian=_get_value(arm_data, 'zero_pose_cartesian'),
             dropoff_pose_cartesian=_get_value(arm_data, 'dropoff_pose_cartesian'),
@@ -366,10 +364,6 @@ def validate_config(config: AppConfig) -> None:
     ]:
         if len(pose) != 6:
             raise ConfigError(f"Invalid {pose_name}: must have 6 joint angles, got {len(pose)}")
-    
-    # 验证TCP位姿长度
-    if len(config.arm.tcp_pose) != 6:
-        raise ConfigError(f"Invalid tcp_pose: must have 6 elements, got {len(config.arm.tcp_pose)}")
     
     # 验证笛卡尔位姿长度
     for pose_name, pose in [

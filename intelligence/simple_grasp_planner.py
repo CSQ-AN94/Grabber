@@ -23,26 +23,35 @@ class SimpleGraspPlanner:
     
     在机械臂到达预抓取位姿后使用，选择画面中心的物体进行抓取
     使用依赖注入模式，传入构造好的实例，参考ArmController的实现
+    
+    架构说明：
+    - 标定系统基于末端法兰坐标系（不知道夹爪存在）
+    - 本规划器估算TCP应达到的位姿，然后补偿夹爪长度
+    - 输出给move_to_cartesian_pose()的是末端法兰位姿
     """
     
     def __init__(self, 
                  items_config: ItemsConfig,
                  calibration: Calibration,
-                 vision_analyzer: VisionAnalyzer):
+                 vision_analyzer: VisionAnalyzer,
+                 gripper_length: float = 0.15):
         """
         初始化抓取规划器
         
         Args:
             items_config: 物品配置实例
-            calibration: 标定实例，用于坐标转换
+            calibration: 标定实例，用于坐标转换（基于末端法兰）
             vision_analyzer: 视觉分析器实例
+            gripper_length: 夹爪长度，单位：米（TCP相对末端法兰的Z轴偏移）
         """
         self.items_config = items_config
         self.calibration = calibration 
         self.vision_analyzer = vision_analyzer
+        self.gripper_length = gripper_length  # 夹爪长度补偿
         
         print(f"[简单抓取规划器] 初始化完成，支持 {len(self.items_config.get_all_items())} 种物品")
         print(f"[简单抓取规划器] 支持的物品: {', '.join(self.items_config.get_all_items())}")
+        print(f"[简单抓取规划器] 夹爪长度补偿: {self.gripper_length:.3f}m")
     
     def estimate_grasp(self, 
                       color_image: np.ndarray,
@@ -65,8 +74,8 @@ class SimpleGraspPlanner:
             {
                 "success": bool,
                 "message": str,
-                "grasp_pose": [x, y, z, roll, pitch, yaw],  # 世界坐标系下的6D位姿
-                "gripper_width": float,  # 推荐夹爪宽度
+                "grasp_pose": [x, y, z, roll, pitch, yaw],  # 末端法兰位姿（已补偿夹爪长度）
+                "gripper_openness": float,  # 推荐夹爪张开度
                 "target_object": str,    # 实际检测到的物体类别
                 "confidence": float,     # 检测置信度
                 "price": float,          # 物品价格
@@ -146,7 +155,7 @@ class SimpleGraspPlanner:
             # 计算最终抓取位姿
             grasp_pose = self._compute_final_grasp_pose(world_point, item_config)
             
-            print(f"[简单抓取规划器] 最终抓取位姿: [{grasp_pose[0]:.3f}, {grasp_pose[1]:.3f}, {grasp_pose[2]:.3f}, "
+            print(f"[简单抓取规划器] 最终末端法兰位姿: [{grasp_pose[0]:.3f}, {grasp_pose[1]:.3f}, {grasp_pose[2]:.3f}, "
                   f"{grasp_pose[3]:.3f}, {grasp_pose[4]:.3f}, {grasp_pose[5]:.3f}]")
             print(f"[简单抓取规划器] 夹爪张开度: {item_config.gripper_openness:.3f}, 价格: ￥{item_config.price}")
             
@@ -235,15 +244,47 @@ class SimpleGraspPlanner:
         return (bbox_center_x, bbox_center_y), center_depth
     
     def _compute_final_grasp_pose(self, world_point: np.ndarray, item_config) -> list:
-        """计算最终抓取位姿"""
-        grasp_x = world_point[0]
-        grasp_y = world_point[1] 
-        grasp_z = world_point[2] + item_config.z_offset  # 应用Z轴偏移
-        grasp_roll = item_config.roll
-        grasp_pitch = item_config.pitch
-        grasp_yaw = item_config.yaw
+        """
+        计算最终抓取位姿（末端法兰位姿）
         
-        return [grasp_x, grasp_y, grasp_z, grasp_roll, grasp_pitch, grasp_yaw]
+        架构：
+        1. 首先计算TCP应达到的理想抓取位姿
+        2. 然后沿着工具坐标系Z轴负方向偏移gripper_length
+        3. 返回末端法兰应达到的位姿，使得TCP到达理想抓取点
+        """
+        # 步骤1：计算TCP理想抓取位姿
+        tcp_x = world_point[0]
+        tcp_y = world_point[1] 
+        tcp_z = world_point[2] + item_config.z_offset  # 应用Z轴偏移
+        tcp_roll = item_config.roll
+        tcp_pitch = item_config.pitch
+        tcp_yaw = item_config.yaw
+        
+        # 步骤2：构造TCP到末端法兰的变换矩阵
+        # TCP相对末端法兰向前(+Z)偏移gripper_length，所以末端法兰向后(-Z)偏移
+        from scipy.spatial.transform import Rotation
+        
+        # TCP的旋转矩阵
+        tcp_rotation = Rotation.from_euler('ZYX', [tcp_yaw, tcp_pitch, tcp_roll]).as_matrix()
+        
+        # 在TCP坐标系下，末端法兰位于TCP的-Z方向gripper_length距离处
+        tcp_to_end_offset = np.array([0, 0, -self.gripper_length])
+        
+        # 将偏移向量转换到世界坐标系
+        world_offset = tcp_rotation @ tcp_to_end_offset
+        
+        # 步骤3：计算末端法兰位姿
+        end_x = tcp_x + world_offset[0]
+        end_y = tcp_y + world_offset[1] 
+        end_z = tcp_z + world_offset[2]
+        end_roll = tcp_roll  # 姿态保持不变
+        end_pitch = tcp_pitch
+        end_yaw = tcp_yaw
+        
+        print(f"[TCP补偿] TCP位姿: [{tcp_x:.3f}, {tcp_y:.3f}, {tcp_z:.3f}]")
+        print(f"[TCP补偿] 末端位姿: [{end_x:.3f}, {end_y:.3f}, {end_z:.3f}] (补偿: {self.gripper_length:.3f}m)")
+        
+        return [end_x, end_y, end_z, end_roll, end_pitch, end_yaw]
     
     def _get_item_config(self, object_class: str):
         """获取指定物体的配置"""
