@@ -28,10 +28,6 @@ class ArmController:
             result = self.arm.rm_movej(joint_angles_deg, speed, radius, 0, block)
             print(f"[DEBUG] rm_movej result: {result}")
             return result
-
-    async def move_to_joints_async(self, joint_angles_deg, speed=30, radius=0, wait=True):
-        """ move_to_joints的异步版本 """
-        return await asyncio.to_thread(self.move_to_joints, joint_angles_deg, speed, radius, wait)
         
     def move_to_cartesian_pose(self, pose, speed=30, wait=True):
         # pose: 一个6元素的列表 [x, y, z, roll, pitch, yaw]。位置单位为米(m)，姿态单位为弧度(rad)。
@@ -44,10 +40,19 @@ class ArmController:
             result = self.arm.rm_movel(pose, speed, 0, 0, block)
             print(f"[DEBUG] rm_movel result: {result}")
             return result
-    
-    async def move_to_pose_async(self, pose, speed=30, wait=True):
-        return await asyncio.to_thread(self.move_to_cartesian_pose, pose, speed, wait)
 
+    def movej_to_cartesian_pose(self, pose, speed=30, wait=True):
+        # pose: 一个6元素的列表 [x, y, z, roll, pitch, yaw]。位置单位为米(m)，姿态单位为弧度(rad)。
+        # speed: 运动速度百分比
+        # wait: 是否阻塞直到完成
+        with self.lock:
+            # rm_movej_p API需要米和弧度，直接使用传入的pose
+            block = 1 if wait else 0
+            print(f"[DEBUG] Calling rm_movel with pose: {pose}")
+            result = self.arm.rm_movej_p(pose, speed, 0, 0, block)
+            print(f"[DEBUG] rm_movel result: {result}")
+            return result
+        
     def get_current_joint_angles(self):
         """
         返回当前6个关节角度 (单位: 弧度)

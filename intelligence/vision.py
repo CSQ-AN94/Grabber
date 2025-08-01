@@ -125,7 +125,7 @@ class VisionAnalyzer:
                     
                     # 确保中心点在图像范围内
                     if 0 <= center_y < depth_map.shape[0] and 0 <= center_x < depth_map.shape[1]:
-                        # 从深度图���获取深度值 (单位：米)
+                        # 从深度图获取深度值 (单位：米)
                         depth_value = depth_map[center_y, center_x]
                         
                         # 只有当深度值有效时才添加 (大于0)
