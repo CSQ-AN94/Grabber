@@ -1,329 +1,431 @@
-# intelligence/gemini_agent.py
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+简洁的Gemini Agent - 专注于text in/text out基本功能
+使用新的google-genai库实现最简单可靠的API调用
+"""
 
 import asyncio
 import logging
-from typing import Callable, Dict, Any, Optional
-from dataclasses import dataclass
+from typing import Optional, Dict, Any, List
 
 from google import genai
 from google.genai import types
 
-from utils.config import AgentConfig, LLMConfig
-from sensors.smart_microphone import SmartMicrophoneInput
+from utils.config import load_config
 
-
-@dataclass
-class RobotCommand:
-    """Represents a structured command from Gemini Live API"""
-    action: str
-    parameters: Dict[str, Any]
-    response_text: str
-    confidence: float = 1.0
-
-
+logger = logging.getLogger(__name__)
 
 
 class GeminiAgent:
-    """
-    Real-time voice interaction agent using Google Gemini Live API.
+    """简洁的Gemini代理 - 纯文本输入输出"""
     
-    Uses simplified network audio input for maximum stability and containerization compatibility.
-    Focuses on competition tasks: inventory scan, recommendation, item selection, checkout.
-    """
-    
-    def __init__(self, llm_config: LLMConfig, agent_config: AgentConfig, tool_registry=None):
-        self.llm_config = llm_config
-        self.agent_config = agent_config
-        self.tool_registry = tool_registry  # Tool registry
-        
-        # Initialize client - use gemini-2.0-flash-live-001 for stability  
-        self.client = genai.Client(api_key=llm_config.gemini_api_key)
-        self.model = "gemini-2.0-flash-live-001"  # Semi-cascade model, supports tool calling, more stable
-        
-        # Smart audio input using SmartMicrophoneInput with VAD
-        self.microphone = SmartMicrophoneInput(
-            sample_rate=agent_config.audio_sample_rate,  # 16000Hz for Gemini
-            chunk_size=agent_config.audio_chunk_size,
-            silence_threshold=1.0,  # 1秒静音阈值
-            speech_threshold=800    # 语音检测阈值
-        )
-        
-        # Session management
-        self.session = None
-        self.is_running = False
-        self.command_callback: Optional[Callable[[RobotCommand], None]] = None
-        
-        # Competition context - item prices for competition
-        self.item_prices = {
-            "牙膏": 7, "雀巢咖啡": 4, "洗发水": 12, "可口可乐": 3.5, "百事可乐": 3.5,
-            "橘子": 1.5, "苹果": 2, "纯牛奶": 2.5, "农夫山泉矿泉水": 2.5, "维达纸巾": 4,
-            "薯片": 3.5, "洽洽瓜子": 5, "奥利奥饼干": 6, "娃哈哈 AD钙奶": 5.5,
-            "营养快线": 6, "红牛": 6
-        }
-        
-        # Logging
-        logging.basicConfig(level=logging.INFO)
-        self.logger = logging.getLogger(__name__)
-    
-    def _create_session_config(self) -> Dict:
-        """Create configuration for Gemini Live API session - simplified"""
-        config = {
-            "response_modalities": ["TEXT"],
-            "system_instruction": "You are an intelligent retail robot assistant participating in the China Robot and AI Competition. Please respond in Chinese in a friendly manner."
-        }
-        
-        # Add tool definitions
-        if self.tool_registry:
-            config["tools"] = self.tool_registry.get_tool_definitions()
-            
-        return config
-    
-    async def start_interactive_session(self, command_callback: Callable[[RobotCommand], None]):
-        """
-        Start interactive session with Gemini Live API - pure audio in, JSON text out
-        
-        Args:
-            command_callback: Function to call when receiving structured commands
-        """
-        if self.is_running:
-            self.logger.warning("Session already running")
-            return
-        
-        self.command_callback = command_callback
-        self.is_running = True
+    def __init__(self, config_path: str = "config.yaml"):
+        """初始化Gemini客户端"""
+        self.client = None
+        self.model_name = "gemini-2.5-flash-lite"
+        self.enable_tools = False  # 控制是否启用工具调用
         
         try:
-            # Set up microphone event callbacks
-            def on_speech_start():
-                self.logger.debug("🎤 检测到语音开始")
+            # 加载配置
+            config = load_config(config_path)
+            api_key = config.llm.gemini_api_key
             
-            def on_silence_end():
-                self.logger.debug("🤫 检测到静音结束")
+            if not api_key or api_key == "your_gemini_api_key":
+                raise ValueError("请在config.yaml中设置有效的gemini_api_key")
             
-            self.microphone.set_event_callbacks(
-                speech_start=on_speech_start,
-                silence_end=on_silence_end
+            # 初始化客户端
+            self.client = genai.Client(api_key=api_key)
+            self.model_name = config.llm.model_name or self.model_name
+            
+            logger.info(f"Gemini客户端初始化成功，模型: {self.model_name}")
+            
+        except Exception as e:
+            logger.error(f"Gemini客户端初始化失败: {e}")
+            raise
+    
+    async def process_text(self, user_input: str) -> Dict[str, Any]:
+        """处理文本输入，返回AI响应"""
+        if self.enable_tools:
+            return await self.process_text_with_tools(user_input)
+        else:
+            return await self.process_text_simple(user_input)
+    
+    async def process_text_simple(self, user_input: str) -> Dict[str, Any]:
+        """处理文本输入，返回AI响应（不使用工具）"""
+        
+        if not self.client:
+            return {
+                "success": False,
+                "error": "Gemini客户端未初始化",
+                "text": ""
+            }
+        
+        if not user_input.strip():
+            return {
+                "success": False,
+                "error": "输入文本为空",
+                "text": ""
+            }
+        
+        try:
+            # 准备请求内容
+            contents = [user_input.strip()]
+            
+            # 创建配置
+            config = types.GenerateContentConfig(
+                temperature=0.8,
+                max_output_tokens=1024,
+                system_instruction="你是一个智能零售机器人助手。请用简洁、友好的方式回答用户问题。"
             )
             
-            # Start smart microphone recording with VAD
-            await self.microphone.start_recording()
+            # 调用API
+            logger.debug(f"发送请求到Gemini: {user_input[:50]}...")
+            response = await self._call_gemini_api(contents, config)
             
-            # Create Live API session with proper config
-            config_dict = self._create_session_config()
-            config = types.LiveConnectConfig(**config_dict)
-            async with self.client.aio.live.connect(model=self.model, config=config) as session:
-                self.session = session
-                self.logger.info("Gemini Live API session established")
-                self.logger.info("智能麦克风已启动，支持VAD和实时音频流处理")
+            if response and response.text:
+                result_text = response.text.strip()
+                logger.info(f"收到Gemini响应: {result_text[:100]}...")
                 
-                # Run concurrent tasks
-                await asyncio.gather(
-                    self._audio_input_loop(),
-                    self._response_processing_loop(),
-                    return_exceptions=True
-                )
-                
-        except Exception as e:
-            self.logger.error(f"Session error: {e}")
-            raise
-        finally:
-            await self.stop_session()
-    
-    async def _audio_input_loop(self):
-        """Continuously process audio events and send to Gemini Live API"""
-        while self.is_running and self.session:
-            audio_event = await self.microphone.get_audio_event()
-            if audio_event:
-                event_type, data = audio_event
-                
-                try:
-                    if event_type == 'audio' and data:
-                        # Validate audio data size - Gemini has requirements for audio chunk size
-                        if len(data) < 64:  # Increase minimum audio chunk size to avoid 1007 errors
-                            continue
-                        
-                        # Ensure audio data is even bytes (16-bit PCM requirement)
-                        if len(data) % 2 != 0:
-                            data = data[:-1]  # Remove last byte
-                        
-                        # Validate audio data is not empty and reasonable size
-                        if len(data) == 0 or len(data) > 8192:  # Max 8KB to avoid oversized chunks
-                            continue
-                        
-                        # Send audio data to Gemini Live API
-                        await self.session.send_realtime_input(
-                            audio=types.Blob(
-                                data=data,
-                                mime_type="audio/pcm;rate=16000"  # Fix 1007 error: must include sample rate
-                            )
-                        )
-                        
-                    elif event_type == 'silence_end':
-                        # Send silence end signal to Gemini Live API
-                        self.logger.debug("发送静音结束信号到Gemini Live API")
-                        try:
-                            await self.session.send_client_content(
-                                turns=[{"role": "user", "parts": [{"audio_stream_end": {}}]}],
-                                turn_complete=True
-                            )
-                        except Exception as e:
-                            self.logger.debug(f"静音结束信号发送错误: {e}")
-                    
-                except Exception as e:
-                    self.logger.error(f"Audio processing error: {e}")
-                    # If it's a 1007 error, audio format is problematic, stop session
-                    if "1007" in str(e):
-                        self.logger.error("Detected 1007 error - audio format issue:")
-                        self.logger.error(f"  - Audio chunk size: {len(data) if 'data' in locals() else 'N/A'}")
-                        self.logger.error(f"  - MIME type: audio/pcm;rate=16000")
-                        self.logger.error("  - Stopping session to avoid continuous errors")
-                        self.is_running = False
-                        break
-                    # Continue trying for other errors
-                    continue
-            
-            await asyncio.sleep(0.01)  # Small delay to prevent overwhelming the API
-    
-    async def _response_processing_loop(self):
-        """Process JSON text responses from Gemini Live API"""
-        while self.is_running and self.session:
-            try:
-                async for response in self.session.receive():
-                    if not self.is_running:
-                        break
-                    await self._handle_response(response)
-                    
-                # 如果 async for 循环正常结束，说明会话可能已断开
-                # 在循环模式下，我们应该尝试重新连接或保持等待
-                if self.is_running:
-                    self.logger.warning("Response stream ended, but session should continue...")
-                    await asyncio.sleep(0.5)  # 等待一下再检查
-                    
-            except Exception as e:
-                self.logger.error(f"Error processing responses: {e}")
-                if self.is_running:
-                    await asyncio.sleep(1)  # 遇到错误时等待重试
-                else:
-                    break
-    
-    async def _handle_response(self, response):
-        """Handle individual response from Gemini Live API - text and function calls"""
-        try:
-            # Handle text responses
-            if hasattr(response, 'text') and response.text:
-                text_response = response.text.strip()
-                self.logger.info(f"Received text: {text_response}")
-                
-                # For direct text responses (non-function calls)
-                command = RobotCommand(
-                    action="speak",
-                    parameters={"text": text_response},
-                    response_text=text_response,
-                    confidence=1.0
-                )
-                
-                if self.command_callback:
-                    loop = asyncio.get_event_loop()
-                    await loop.run_in_executor(None, self.command_callback, command)
-            
-            # Handle server content and function calls
-            if hasattr(response, 'server_content') and response.server_content:
-                if hasattr(response.server_content, 'model_turn') and response.server_content.model_turn:
-                    if hasattr(response.server_content.model_turn, 'parts'):
-                        for part in response.server_content.model_turn.parts:
-                            if hasattr(part, 'function_call'):
-                                await self._handle_tool_call(part)
-                
-        except Exception as e:
-            self.logger.error(f"Error handling response: {e}")
-    
-    async def _handle_tool_call(self, part):
-        """Handle function calls from Gemini Live API"""
-        try:
-            function_call = part.function_call
-            function_name = function_call.name
-            parameters = dict(function_call.args) if hasattr(function_call, 'args') else {}
-            
-            self.logger.info(f"Tool call: {function_name} with params: {parameters}")
-            
-            # Execute the tool function
-            if self.tool_registry:
-                result = await self.tool_registry.execute_tool(function_name, parameters)
-                
-                # Send result back to Gemini using client_content
-                await self.session.send_client_content(
-                    turns=[{
-                        "role": "function",
-                        "parts": [{
-                            "function_response": {
-                                "name": function_name,
-                                "response": result
-                            }
-                        }]
-                    }],
-                    turn_complete=True
-                )
-                
-                # Create command for main application
-                command = RobotCommand(
-                    action=function_name,
-                    parameters=parameters,
-                    response_text=result.get("message", "Operation completed"),
-                    confidence=1.0 if result.get("success") else 0.5
-                )
-                
-                # Send to main application
-                if self.command_callback:
-                    loop = asyncio.get_event_loop()
-                    await loop.run_in_executor(None, self.command_callback, command)
+                return {
+                    "success": True,
+                    "text": result_text,
+                    "model": self.model_name
+                }
             else:
-                # No tool registry - send error response
-                await self.session.send_client_content(
-                    turns=[{
-                        "role": "function", 
-                        "parts": [{
-                            "function_response": {
-                                "name": function_name,
-                                "response": {"success": False, "message": "Tool registry not initialized"}
-                            }
-                        }]
-                    }],
-                    turn_complete=True
-                )
+                return {
+                    "success": False,
+                    "error": "API返回空响应",
+                    "text": ""
+                }
                 
         except Exception as e:
-            self.logger.error(f"Error handling tool call: {e}")
+            logger.error(f"处理文本时发生错误: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "text": ""
+            }
+    
+    async def process_text_with_tools(self, user_input: str) -> Dict[str, Any]:
+        """处理文本输入，支持工具调用"""
+        
+        if not self.client:
+            return {
+                "success": False,
+                "error": "Gemini客户端未初始化",
+                "text": ""
+            }
+        
+        if not user_input.strip():
+            return {
+                "success": False,
+                "error": "输入文本为空",
+                "text": ""
+            }
+        
+        try:
+            # 准备消息 - 使用简单的字符串格式
+            contents = [user_input.strip()]
             
-            # Send error response back to Gemini
+            # 准备工具定义
+            tools = self._create_tool_definitions()
+            
+            # 创建配置
+            config = types.GenerateContentConfig(
+                temperature=0.8,
+                max_output_tokens=1024,
+                system_instruction="你是一个智能零售机器人助手。当用户需要问候或查询状态时，请使用相应的工具函数。",
+                tools=tools
+            )
+            
+            # 调用API
+            logger.debug(f"发送请求到Gemini (with tools): {user_input[:50]}...")
+            response = await self._call_gemini_api(contents, config)
+            
+            # 处理响应和工具调用
+            return await self._process_response_with_tools(response)
+            
+        except Exception as e:
+            logger.error(f"处理文本时发生错误: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "text": ""
+            }
+    
+    async def _call_gemini_api(self, contents, config, max_retries: int = 3):
+        """调用Gemini API，带重试机制"""
+        
+        for attempt in range(max_retries):
             try:
-                await self.session.send_client_content(
-                    turns=[{
-                        "role": "function",
-                        "parts": [{
-                            "function_response": {
-                                "name": function_name if 'function_name' in locals() else "unknown", 
-                                "response": {"success": False, "message": f"Tool execution error: {str(e)}"}
-                            }
-                        }]
-                    }],
-                    turn_complete=True
+                # 使用executor包装同步API为异步
+                response = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: self.client.models.generate_content(
+                        model=self.model_name,
+                        contents=contents,
+                        config=config
+                    )
                 )
-            except:
-                pass
+                return response
+                
+            except Exception as e:
+                logger.warning(f"API调用失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+                
+                if attempt < max_retries - 1:
+                    # 指数退避
+                    wait_time = 2 ** attempt
+                    logger.info(f"等待 {wait_time} 秒后重试...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    # 最后一次尝试失败
+                    raise e
     
-    async def stop_session(self):
-        """Stop the interactive session"""
-        self.is_running = False
-        await self.microphone.stop_recording()
-        if self.session:
-            self.session = None
-        self.logger.info("Gemini Agent session stopped")
+    def is_ready(self) -> bool:
+        """检查代理是否就绪"""
+        return self.client is not None
     
-    def update_context(self, context: str):
-        """Update agent context (e.g., current inventory, position, etc.)"""
-        # This could be used to provide context about robot state
-        # For now, we keep the agent stateless as designed
-        self.logger.info(f"Context update: {context}")
+    def enable_function_calling(self, enable: bool = True):
+        """启用或禁用工具调用功能"""
+        self.enable_tools = enable
+        if enable:
+            logger.info("已启用Function Calling功能")
+        else:
+            logger.info("已禁用Function Calling功能")
+    
+    # 工具函数定义
+    async def say_hello(self, name: str = "用户") -> Dict[str, Any]:
+        """简单的问候工具函数"""
+        try:
+            logger.info(f"执行问候工具: {name}")
+            await asyncio.sleep(0.3)  # 模拟处理时间
+            
+            message = f"你好，{name}！我是智能零售机器人助手。"
+            return {
+                "success": True,
+                "message": message,
+                "data": {"greeted_name": name}
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "message": "问候功能出现错误",
+                "error": str(e)
+            }
+    
+    async def get_robot_status(self) -> Dict[str, Any]:
+        """获取机器人状态工具函数"""
+        try:
+            logger.info("查询机器人状态")
+            await asyncio.sleep(0.5)  # 模拟状态检查
+            
+            status_info = {
+                "status": "正常运行",
+                "battery": "85%", 
+                "position": "待命位置"
+            }
+            
+            message = f"机器人状态：{status_info['status']}，电量{status_info['battery']}，位置：{status_info['position']}"
+            return {
+                "success": True,
+                "message": message,
+                "data": status_info
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "message": "无法获取机器人状态",
+                "error": str(e)
+            }
+    
+    def get_available_tools(self) -> List[Dict[str, Any]]:
+        """获取可用工具定义"""
+        return [
+            {
+                "name": "say_hello",
+                "description": "向用户问候",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "要问候的用户名称"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "get_robot_status",
+                "description": "获取机器人当前状态信息",
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
+        ]
+    
+    async def execute_tool(self, tool_name: str, **kwargs) -> Dict[str, Any]:
+        """执行指定工具函数"""
+        try:
+            if tool_name == "say_hello":
+                return await self.say_hello(**kwargs)
+            elif tool_name == "get_robot_status":
+                return await self.get_robot_status(**kwargs)
+            else:
+                return {
+                    "success": False,
+                    "message": f"未知工具: {tool_name}",
+                    "error": f"不支持的工具函数: {tool_name}"
+                }
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"工具{tool_name}执行失败",
+                "error": str(e)
+            }
+    
+    def _create_tool_definitions(self) -> List[types.Tool]:
+        """创建工具函数定义"""
+        available_tools = self.get_available_tools()
+        
+        function_declarations = []
+        for tool in available_tools:
+            function_declaration = types.FunctionDeclaration(
+                name=tool["name"],
+                description=tool["description"],
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        param_name: types.Schema(
+                            type=types.Type.STRING,
+                            description=param_info.get("description", "")
+                        )
+                        for param_name, param_info in tool["parameters"]["properties"].items()
+                    },
+                    required=tool["parameters"].get("required", [])
+                )
+            )
+            function_declarations.append(function_declaration)
+        
+        return [types.Tool(function_declarations=function_declarations)]
+    
+    async def _process_response_with_tools(self, response) -> Dict[str, Any]:
+        """处理包含工具调用的响应"""
+        try:
+            if not response.candidates or len(response.candidates) == 0:
+                return {
+                    "success": False,
+                    "error": "响应中没有候选结果",
+                    "text": ""
+                }
+            
+            candidate = response.candidates[0]
+            text_parts = []
+            tool_results = []
+            
+            if candidate.content and candidate.content.parts:
+                for part in candidate.content.parts:
+                    # 处理文本部分
+                    if hasattr(part, 'text') and part.text:
+                        text_parts.append(part.text)
+                    
+                    # 处理工具调用
+                    if hasattr(part, 'function_call') and part.function_call:
+                        function_call = part.function_call
+                        tool_name = function_call.name
+                        
+                        # 提取参数
+                        args = {}
+                        if function_call.args:
+                            args = dict(function_call.args)
+                        
+                        logger.info(f"执行工具函数: {tool_name} with args: {args}")
+                        
+                        # 执行工具函数
+                        tool_result = await self.execute_tool(tool_name, **args)
+                        tool_results.append(tool_result)
+            
+            # 组合最终文本
+            final_text = ""
+            if text_parts:
+                final_text = " ".join(text_parts)
+            
+            # 添加工具执行结果
+            if tool_results:
+                for tool_result in tool_results:
+                    if tool_result["success"]:
+                        if final_text:
+                            final_text += "\n\n"
+                        final_text += f"✅ {tool_result['message']}"
+                    else:
+                        if final_text:
+                            final_text += "\n\n"
+                        final_text += f"❌ {tool_result['message']}"
+            
+            if not final_text:
+                final_text = "操作已完成。"
+            
+            return {
+                "success": True,
+                "text": final_text.strip(),
+                "model": self.model_name,
+                "tool_calls": len(tool_results),
+                "tool_results": tool_results
+            }
+            
+        except Exception as e:
+            logger.error(f"处理工具调用响应时发生错误: {e}")
+            return {
+                "success": False,
+                "error": f"响应处理失败: {str(e)}",
+                "text": ""
+            }
 
 
-# Utility function for testing
+async def main():
+    """简单的测试函数"""
+    print("=== Gemini Agent 简单测试 ===")
+    
+    try:
+        # 初始化代理
+        agent = GeminiAgent()
+        
+        if not agent.is_ready():
+            print("❌ 代理初始化失败")
+            return
+        
+        print("✅ 代理初始化成功")
+        
+        # 交互式测试
+        while True:
+            user_input = input("\n请输入文本 (输入 'quit' 退出): ").strip()
+            
+            if user_input.lower() in ['quit', 'exit', 'q']:
+                break
+            
+            if not user_input:
+                continue
+            
+            print("🤖 处理中...")
+            result = await agent.process_text(user_input)
+            
+            if result["success"]:
+                print(f"✅ AI回复: {result['text']}")
+            else:
+                print(f"❌ 错误: {result['error']}")
+    
+    except KeyboardInterrupt:
+        print("\n👋 用户中断，退出")
+    except Exception as e:
+        print(f"❌ 发生错误: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+if __name__ == "__main__":
+    # 设置日志级别
+    logging.basicConfig(level=logging.INFO)
+    
+    # 运行测试
+    asyncio.run(main())

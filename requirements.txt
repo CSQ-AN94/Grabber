@@ -6,6 +6,7 @@ opencv-contrib-python
 numpy<2.0
 scipy
 google-genai
+zhipuai
 sounddevice
 soundfile
 pyserial

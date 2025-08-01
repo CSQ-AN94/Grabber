@@ -51,8 +51,58 @@ def test_camera_capture(cam_thread: CameraThread):
         print(" 无可用深度帧")
         return False
     
+    # 保存RGB和深度图为PNG
+    save_images_as_png(color, depth)
+    
     print("--- 摄像头帧捕获测试通过 ---")
     return True
+
+def save_images_as_png(color_image, depth_image):
+    """保存RGB和深度图为PNG格式"""
+    print("\n--- [保存] RGB和深度图为PNG ---")
+    
+    # 创建保存目录
+    save_dir = "camera_captures"
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # 生成时间戳文件名
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    
+    try:
+        # 保存RGB图像
+        if color_image is not None:
+            rgb_filename = f"{save_dir}/rgb_{timestamp}.png"
+            # 确保图像是正确的BGR格式用于OpenCV保存
+            if len(color_image.shape) == 3 and color_image.shape[2] == 3:
+                success = cv2.imwrite(rgb_filename, color_image)
+                if success:
+                    print(f" ✅ RGB图像已保存: {rgb_filename}")
+                else:
+                    print(f" ❌ RGB图像保存失败: {rgb_filename}")
+            else:
+                print(f" ⚠️  RGB图像格式异常: {color_image.shape}")
+        
+        # 保存深度图像
+        if depth_image is not None:
+            depth_filename = f"{save_dir}/depth_{timestamp}.png"
+            
+            # 将深度图转换为可视化格式
+            # 方法1: 直接保存原始深度值(米)并限制范围
+            depth_mm = (depth_image).astype(np.uint16) 
+            depth_mm = np.clip(depth_mm, 0, 65535)  # 限制在uint16范围内
+            
+            success = cv2.imwrite(depth_filename, depth_mm)
+            if success:
+                print(f" ✅ 深度图像已保存: {depth_filename} (原始深度值，米单位)")
+            else:
+                print(f" ❌ 深度图像保存失败: {depth_filename}")
+        
+        print("--- PNG图像保存完成 ---")
+        
+    except Exception as e:
+        print(f" ❌ 保存图像时发生错误: {e}")
+        import traceback
+        traceback.print_exc()
 
 def test_point_cloud_generation(cam_thread: CameraThread):
     """测试点云生成和导出功能"""

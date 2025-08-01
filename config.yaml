@@ -52,10 +52,15 @@ speech:
   api_key: "e248b59b7b21d7291702b7808ba07257"
   api_secret: "MjQ1ZmM3MjkwNmEzZTQyN2ZiNTYxN2Ey"
 
-# 大语言模型配置 - Google Gemini
+# 大语言模型配置 - 支持多个提供商
 llm:
+  # Google Gemini
   gemini_api_key: "AIzaSyDoRYk_kU61IIeEsCuAUaRft2iaeKXtoFE"
-  model_name: "gemini-2.0-flash-live-001"
+  model_name: "gemini-2.5-flash-lite"
+  
+  # 智谱AI GLM
+  zhipu_api_key: "your_zhipu_api_key"
+  glm_model_name: "glm-4v-flash"
 
 # 智能Agent配置 - 音频参数
 agent:

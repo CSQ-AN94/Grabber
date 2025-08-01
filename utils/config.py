@@ -75,6 +75,8 @@ class LLMConfig:
     """大语言模型配置"""
     gemini_api_key: str
     model_name: str
+    zhipu_api_key: Optional[str] = None
+    glm_model_name: Optional[str] = "glm-4v-flash"
 
 
 @dataclass
