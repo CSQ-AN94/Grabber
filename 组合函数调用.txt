@@ -1,0 +1,73 @@
+组合式函数调用
+
+组合式或顺序式函数调用可让 Gemini 将多个函数调用链接在一起，以满足复杂的请求。例如，为了回答“获取我当前位置的温度”，Gemini API 可能会先调用 get_current_location() 函数，然后再调用以位置为参数的 get_weather() 函数。
+
+以下示例演示了如何使用 Python SDK 和自动函数调用来实现组合式函数调用。
+Python
+JavaScript
+
+此示例使用 google-genai Python SDK 的自动函数调用功能。SDK 会自动将 Python 函数转换为所需的架构，在模型请求时执行函数调用，并将结果发送回模型以完成任务。
+
+import os
+from google import genai
+from google.genai import types
+
+# Example Functions
+def get_weather_forecast(location: str) -> dict:
+    """Gets the current weather temperature for a given location."""
+    print(f"Tool Call: get_weather_forecast(location={location})")
+    # TODO: Make API call
+    print("Tool Response: {'temperature': 25, 'unit': 'celsius'}")
+    return {"temperature": 25, "unit": "celsius"}  # Dummy response
+
+def set_thermostat_temperature(temperature: int) -> dict:
+    """Sets the thermostat to a desired temperature."""
+    print(f"Tool Call: set_thermostat_temperature(temperature={temperature})")
+    # TODO: Interact with a thermostat API
+    print("Tool Response: {'status': 'success'}")
+    return {"status": "success"}
+
+# Configure the client and model
+client = genai.Client()
+config = types.GenerateContentConfig(
+    tools=[get_weather_forecast, set_thermostat_temperature]
+)
+
+# Make the request
+response = client.models.generate_content(
+    model="gemini-2.5-flash",
+    contents="If it's warmer than 20°C in London, set the thermostat to 20°C, otherwise set it to 18°C.",
+    config=config,
+)
+
+# Print the final, user-facing response
+print(response.text)
+
+预期输出
+
+运行代码时，您会看到 SDK 编排函数调用。模型首先调用 get_weather_forecast，接收温度，然后根据提示中的逻辑调用 set_thermostat_temperature 并传入正确的值。
+
+Tool Call: get_weather_forecast(location=London)
+Tool Response: {'temperature': 25, 'unit': 'celsius'}
+Tool Call: set_thermostat_temperature(temperature=20)
+Tool Response: {'status': 'success'}
+OK. I've set the thermostat to 20°C.
+
+组合式函数调用是一项原生 Live API 功能。这意味着 Live API 可以像 Python SDK 一样处理函数调用。
+Python
+JavaScript
+
+# Light control schemas
+turn_on_the_lights_schema = {'name': 'turn_on_the_lights'}
+turn_off_the_lights_schema = {'name': 'turn_off_the_lights'}
+
+prompt = """
+  Hey, can you write run some python code to turn on the lights, wait 10s and then turn off the lights?
+  """
+
+tools = [
+    {'code_execution': {}},
+    {'function_declarations': [turn_on_the_lights_schema, turn_off_the_lights_schema]}
+]
+
+await run(prompt, tools=tools, modality="AUDIO")

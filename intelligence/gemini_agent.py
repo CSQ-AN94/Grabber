@@ -20,11 +20,12 @@ logger = logging.getLogger(__name__)
 class GeminiAgent:
     """简洁的Gemini代理 - 纯文本输入输出"""
     
-    def __init__(self, config_path: str = "config.yaml"):
+    def __init__(self, config_path: str = "config.yaml", enable_tools: bool = False):
         """初始化Gemini客户端"""
         self.client = None
         self.model_name = "gemini-2.5-flash-lite"
-        self.enable_tools = False  # 控制是否启用工具调用
+        self.enable_tools = enable_tools
+        self.tools = []  # 存储注册的工具函数
         
         try:
             # 加载配置
@@ -38,7 +39,7 @@ class GeminiAgent:
             self.client = genai.Client(api_key=api_key)
             self.model_name = config.llm.model_name or self.model_name
             
-            logger.info(f"Gemini客户端初始化成功，模型: {self.model_name}")
+            logger.info(f"Gemini客户端初始化成功，模型: {self.model_name}，工具调用: {enable_tools}")
             
         except Exception as e:
             logger.error(f"Gemini客户端初始化失败: {e}")
@@ -46,113 +47,154 @@ class GeminiAgent:
     
     async def process_text(self, user_input: str) -> Dict[str, Any]:
         """处理文本输入，返回AI响应"""
+        if not self.client or not user_input.strip():
+            return {"success": False, "error": "无效输入", "text": ""}
+        
+        try:
+            contents = [user_input.strip()]
+            config = types.GenerateContentConfig(
+                temperature=0.8,
+                max_output_tokens=1024,
+                system_instruction=self._get_system_instruction(),
+                tools=self._get_tool_definitions() if self.enable_tools else None
+            )
+            
+            response = await self._call_gemini_api(contents, config)
+            return await self._process_response(response)
+            
+        except Exception as e:
+            logger.error(f"处理文本时发生错误: {e}")
+            return {"success": False, "error": str(e), "text": ""}
+    
+    def register_tool(self, name: str, description: str, func, parameters: Dict = None):
+        """注册工具函数
+        
+        Args:
+            name: 工具名称
+            description: 工具描述
+            func: 要执行的函数（必须是async函数）
+            parameters: 参数定义字典
+        
+        示例:
+            agent.register_tool(
+                name="scan_shelf",
+                description="扫描货架商品", 
+                func=my_scan_function,
+                parameters={
+                    "type": "object",
+                    "properties": {"announce": {"type": "boolean", "description": "是否播报"}}
+                }
+            )
+        """
+        tool_info = {
+            "name": name,
+            "description": description,
+            "func": func,
+            "parameters": parameters or {"type": "object", "properties": {}}
+        }
+        self.tools.append(tool_info)
+        logger.info(f"已注册工具函数: {name}")
+    
+    def _get_system_instruction(self) -> str:
+        """生成详细的系统指令"""
+        base_instruction = """你是一个智能零售机器人助手，负责帮助顾客浏览商品、查询信息和完成购买。
+
+## 核心行为原则
+
+### 1. 完整任务执行原则
+- 当用户提出需求时，要完成用户的完整意图，不要只做一半
+- 如果用户说"我要买苹果"，你需要：先查询苹果位置 → 然后抓取苹果
+- 如果用户说"我渴了，请给我水"，你需要：先查询饮料 → 从中选择水类商品 → 然后抓取合适的水
+
+### 2. 工具调用依赖链
+重要：很多任务需要多个工具按顺序调用！
+
+**抓取商品的标准流程：**
+1. 先用 query_world_state 确认商品位置和状态
+2. 再用 grasp_and_drop 执行抓取（必须提供准确的position_id和item_name）
+3. 永远不要跳过查询步骤！
+
+**用户需求类型识别：**
+- "我要买X" = 查询X的信息 + 抓取X
+- "我渴了/我饿了" = 查询对应类别 + 推荐并抓取合适商品
+- "给我X旁边的商品" = 查询相对位置 + 抓取目标商品
+- "货架上有什么X？" = 仅查询，无需抓取
+
+### 3. 相对位置处理策略
+当用户说"X上面/下面/左边/右边的商品"时：
+1. 先用 query_world_state(query_type="by_name", item_name="X") 找到参考商品
+2. 再用 query_world_state(query_type="relative_position", reference_item="X", direction="上方/下方/左侧/右侧")
+3. 然后根据结果决定是否抓取
+
+方向词汇对应：
+- "上面/上层" → "上方"
+- "下面/下层" → "下方"  
+- "左边/左侧" → "左侧"
+- "右边/右侧" → "右侧"
+
+### 4. 语义理解和推荐
+- "我渴了" → 查询"饮料"类别，推荐水、果汁等
+- "便宜的" → 从查询结果中选择价格最低的
+- "好吃的零食" → 查询"零食"类别
+- "我要结账" → 调用 get_checkout_summary
+
+### 5. 文本输出规范
+所有回复都要：
+- 自然流畅，适合语音播报
+- 包含具体的商品名称和价格
+- 说明执行的操作结果
+- 使用友好的语气
+
+### 6. 错误处理
+- 如果货架未扫描，先提醒用户扫描货架
+- 如果商品不存在，主动推荐类似商品
+- 如果操作失败，说明原因并提供替代方案
+
+## 工具使用示例
+
+用户："我要买苹果"
+正确流程：
+1. query_world_state(query_type="by_name", item_name="苹果")
+2. 如果找到，使用返回的position_id调用 grasp_and_drop(position_id=X, item_name="苹果")
+
+用户："给我可口可乐上面的商品"  
+正确流程：
+1. query_world_state(query_type="relative_position", reference_item="可口可乐", direction="上方")
+2. 根据返回结果调用 grasp_and_drop
+
+记住：始终要完成用户的完整需求！"""
+
         if self.enable_tools:
-            return await self.process_text_with_tools(user_input)
+            return base_instruction
         else:
-            return await self.process_text_simple(user_input)
+            return "你是一个智能零售机器人助手。请用简洁、友好的方式回答用户问题。"
     
-    async def process_text_simple(self, user_input: str) -> Dict[str, Any]:
-        """处理文本输入，返回AI响应（不使用工具）"""
+    def _get_tool_definitions(self) -> List[types.Tool]:
+        """获取工具定义"""
+        if not self.tools:
+            return []
         
-        if not self.client:
-            return {
-                "success": False,
-                "error": "Gemini客户端未初始化",
-                "text": ""
-            }
-        
-        if not user_input.strip():
-            return {
-                "success": False,
-                "error": "输入文本为空",
-                "text": ""
-            }
-        
-        try:
-            # 准备请求内容
-            contents = [user_input.strip()]
-            
-            # 创建配置
-            config = types.GenerateContentConfig(
-                temperature=0.8,
-                max_output_tokens=1024,
-                system_instruction="你是一个智能零售机器人助手。请用简洁、友好的方式回答用户问题。"
+        function_declarations = []
+        for tool in self.tools:
+            function_declaration = types.FunctionDeclaration(
+                name=tool["name"],
+                description=tool["description"],
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        param_name: types.Schema(
+                            type=types.Type.STRING if param_info.get("type") == "string" else
+                                 types.Type.BOOLEAN if param_info.get("type") == "boolean" else types.Type.STRING,
+                            description=param_info.get("description", "")
+                        )
+                        for param_name, param_info in tool["parameters"]["properties"].items()
+                    },
+                    required=tool["parameters"].get("required", [])
+                )
             )
-            
-            # 调用API
-            logger.debug(f"发送请求到Gemini: {user_input[:50]}...")
-            response = await self._call_gemini_api(contents, config)
-            
-            if response and response.text:
-                result_text = response.text.strip()
-                logger.info(f"收到Gemini响应: {result_text[:100]}...")
-                
-                return {
-                    "success": True,
-                    "text": result_text,
-                    "model": self.model_name
-                }
-            else:
-                return {
-                    "success": False,
-                    "error": "API返回空响应",
-                    "text": ""
-                }
-                
-        except Exception as e:
-            logger.error(f"处理文本时发生错误: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "text": ""
-            }
-    
-    async def process_text_with_tools(self, user_input: str) -> Dict[str, Any]:
-        """处理文本输入，支持工具调用"""
+            function_declarations.append(function_declaration)
         
-        if not self.client:
-            return {
-                "success": False,
-                "error": "Gemini客户端未初始化",
-                "text": ""
-            }
-        
-        if not user_input.strip():
-            return {
-                "success": False,
-                "error": "输入文本为空",
-                "text": ""
-            }
-        
-        try:
-            # 准备消息 - 使用简单的字符串格式
-            contents = [user_input.strip()]
-            
-            # 准备工具定义
-            tools = self._create_tool_definitions()
-            
-            # 创建配置
-            config = types.GenerateContentConfig(
-                temperature=0.8,
-                max_output_tokens=1024,
-                system_instruction="你是一个智能零售机器人助手。当用户需要问候或查询状态时，请使用相应的工具函数。",
-                tools=tools
-            )
-            
-            # 调用API
-            logger.debug(f"发送请求到Gemini (with tools): {user_input[:50]}...")
-            response = await self._call_gemini_api(contents, config)
-            
-            # 处理响应和工具调用
-            return await self._process_response_with_tools(response)
-            
-        except Exception as e:
-            logger.error(f"处理文本时发生错误: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "text": ""
-            }
+        return [types.Tool(function_declarations=function_declarations)]
     
     async def _call_gemini_api(self, contents, config, max_retries: int = 3):
         """调用Gemini API，带重试机制"""
@@ -186,139 +228,25 @@ class GeminiAgent:
         """检查代理是否就绪"""
         return self.client is not None
     
-    def enable_function_calling(self, enable: bool = True):
-        """启用或禁用工具调用功能"""
-        self.enable_tools = enable
-        if enable:
-            logger.info("已启用Function Calling功能")
-        else:
-            logger.info("已禁用Function Calling功能")
-    
-    # 工具函数定义
-    async def say_hello(self, name: str = "用户") -> Dict[str, Any]:
-        """简单的问候工具函数"""
-        try:
-            logger.info(f"执行问候工具: {name}")
-            await asyncio.sleep(0.3)  # 模拟处理时间
-            
-            message = f"你好，{name}！我是智能零售机器人助手。"
-            return {
-                "success": True,
-                "message": message,
-                "data": {"greeted_name": name}
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "message": "问候功能出现错误",
-                "error": str(e)
-            }
-    
-    async def get_robot_status(self) -> Dict[str, Any]:
-        """获取机器人状态工具函数"""
-        try:
-            logger.info("查询机器人状态")
-            await asyncio.sleep(0.5)  # 模拟状态检查
-            
-            status_info = {
-                "status": "正常运行",
-                "battery": "85%", 
-                "position": "待命位置"
-            }
-            
-            message = f"机器人状态：{status_info['status']}，电量{status_info['battery']}，位置：{status_info['position']}"
-            return {
-                "success": True,
-                "message": message,
-                "data": status_info
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "message": "无法获取机器人状态",
-                "error": str(e)
-            }
-    
-    def get_available_tools(self) -> List[Dict[str, Any]]:
-        """获取可用工具定义"""
-        return [
-            {
-                "name": "say_hello",
-                "description": "向用户问候",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "name": {
-                            "type": "string",
-                            "description": "要问候的用户名称"
-                        }
-                    }
-                }
-            },
-            {
-                "name": "get_robot_status",
-                "description": "获取机器人当前状态信息",
-                "parameters": {
-                    "type": "object",
-                    "properties": {}
-                }
-            }
-        ]
-    
-    async def execute_tool(self, tool_name: str, **kwargs) -> Dict[str, Any]:
+    async def _execute_tool(self, tool_name: str, **kwargs) -> Dict[str, Any]:
         """执行指定工具函数"""
-        try:
-            if tool_name == "say_hello":
-                return await self.say_hello(**kwargs)
-            elif tool_name == "get_robot_status":
-                return await self.get_robot_status(**kwargs)
-            else:
-                return {
-                    "success": False,
-                    "message": f"未知工具: {tool_name}",
-                    "error": f"不支持的工具函数: {tool_name}"
-                }
-        except Exception as e:
-            return {
-                "success": False,
-                "message": f"工具{tool_name}执行失败",
-                "error": str(e)
-            }
-    
-    def _create_tool_definitions(self) -> List[types.Tool]:
-        """创建工具函数定义"""
-        available_tools = self.get_available_tools()
+        for tool in self.tools:
+            if tool["name"] == tool_name:
+                logger.info(f"执行工具函数: {tool_name} with args: {kwargs}")
+                return await tool["func"](**kwargs)
         
-        function_declarations = []
-        for tool in available_tools:
-            function_declaration = types.FunctionDeclaration(
-                name=tool["name"],
-                description=tool["description"],
-                parameters=types.Schema(
-                    type=types.Type.OBJECT,
-                    properties={
-                        param_name: types.Schema(
-                            type=types.Type.STRING,
-                            description=param_info.get("description", "")
-                        )
-                        for param_name, param_info in tool["parameters"]["properties"].items()
-                    },
-                    required=tool["parameters"].get("required", [])
-                )
-            )
-            function_declarations.append(function_declaration)
-        
-        return [types.Tool(function_declarations=function_declarations)]
+        return {
+            "success": False,
+            "message": f"未知工具: {tool_name}",
+            "error": f"不支持的工具函数: {tool_name}"
+        }
     
-    async def _process_response_with_tools(self, response) -> Dict[str, Any]:
-        """处理包含工具调用的响应"""
+    
+    async def _process_response(self, response) -> Dict[str, Any]:
+        """处理Gemini响应（包括工具调用）"""
         try:
             if not response.candidates or len(response.candidates) == 0:
-                return {
-                    "success": False,
-                    "error": "响应中没有候选结果",
-                    "text": ""
-                }
+                return {"success": False, "error": "响应中没有候选结果", "text": ""}
             
             candidate = response.candidates[0]
             text_parts = []
@@ -334,34 +262,22 @@ class GeminiAgent:
                     if hasattr(part, 'function_call') and part.function_call:
                         function_call = part.function_call
                         tool_name = function_call.name
-                        
-                        # 提取参数
-                        args = {}
-                        if function_call.args:
-                            args = dict(function_call.args)
-                        
-                        logger.info(f"执行工具函数: {tool_name} with args: {args}")
+                        args = dict(function_call.args) if function_call.args else {}
                         
                         # 执行工具函数
-                        tool_result = await self.execute_tool(tool_name, **args)
+                        tool_result = await self._execute_tool(tool_name, **args)
                         tool_results.append(tool_result)
             
             # 组合最终文本
-            final_text = ""
-            if text_parts:
-                final_text = " ".join(text_parts)
+            final_text = " ".join(text_parts) if text_parts else ""
             
             # 添加工具执行结果
-            if tool_results:
-                for tool_result in tool_results:
-                    if tool_result["success"]:
-                        if final_text:
-                            final_text += "\n\n"
-                        final_text += f"✅ {tool_result['message']}"
-                    else:
-                        if final_text:
-                            final_text += "\n\n"
-                        final_text += f"❌ {tool_result['message']}"
+            for tool_result in tool_results:
+                if final_text:
+                    final_text += "\n\n"
+                status = "✅" if tool_result.get("success", False) else "❌"
+                message = tool_result.get("message", "操作已完成")
+                final_text += f"{status} {message}"
             
             if not final_text:
                 final_text = "操作已完成。"
@@ -370,25 +286,35 @@ class GeminiAgent:
                 "success": True,
                 "text": final_text.strip(),
                 "model": self.model_name,
-                "tool_calls": len(tool_results),
-                "tool_results": tool_results
+                "tool_calls": len(tool_results)
             }
             
         except Exception as e:
-            logger.error(f"处理工具调用响应时发生错误: {e}")
-            return {
-                "success": False,
-                "error": f"响应处理失败: {str(e)}",
-                "text": ""
-            }
+            logger.error(f"处理响应时发生错误: {e}")
+            return {"success": False, "error": f"响应处理失败: {str(e)}", "text": ""}
 
+
+# 示例用法：
+# 
+# async def my_scan_function(announce: bool = True):
+#     return {"success": True, "message": "扫描完成"}
+#
+# agent = GeminiAgent(enable_tools=True)
+# agent.register_tool(
+#     name="scan_shelf",
+#     description="扫描货架商品",
+#     func=my_scan_function,
+#     parameters={
+#         "type": "object",
+#         "properties": {"announce": {"type": "boolean", "description": "是否播报"}}
+#     }
+# )
 
 async def main():
     """简单的测试函数"""
     print("=== Gemini Agent 简单测试 ===")
     
     try:
-        # 初始化代理
         agent = GeminiAgent()
         
         if not agent.is_ready():
@@ -397,7 +323,6 @@ async def main():
         
         print("✅ 代理初始化成功")
         
-        # 交互式测试
         while True:
             user_input = input("\n请输入文本 (输入 'quit' 退出): ").strip()
             
@@ -424,8 +349,5 @@ async def main():
 
 
 if __name__ == "__main__":
-    # 设置日志级别
     logging.basicConfig(level=logging.INFO)
-    
-    # 运行测试
     asyncio.run(main())

@@ -180,22 +180,34 @@ async def test_function_calling():
     print("\n=== 测试Function Calling功能 ===")
     
     try:
-        agent = GeminiAgent()
+        # 直接启用Function Calling
+        agent = GeminiAgent(enable_tools=True)
         
         if not agent.is_ready():
             print("❌ 代理未就绪")
             return False
         
-        # 启用Function Calling
-        agent.enable_function_calling(True)
         print("✅ 已启用Function Calling功能")
+        
+        # 注册一个简单的测试工具
+        async def test_tool(message: str = "测试成功"):
+            return {"success": True, "message": f"测试工具被调用: {message}"}
+        
+        agent.register_tool(
+            name="test_function",
+            description="测试用的简单工具函数",
+            func=test_tool,
+            parameters={
+                "type": "object",
+                "properties": {"message": {"type": "string", "description": "测试消息"}}
+            }
+        )
         
         # 测试工具调用
         tool_tests = [
-            ("请向我问候", "say_hello"),
-            ("请查询机器人状态", "get_robot_status"),
-            ("你好，我叫张三", "say_hello"),
-            ("机器人状态如何？", "get_robot_status")
+            ("请调用测试函数", "test_function"),
+            ("执行一下测试工具", "test_function"),
+            ("运行测试功能", "test_function")
         ]
         
         passed = 0
