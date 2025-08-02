@@ -14,9 +14,9 @@ import logging
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from intelligence.gemini_agent import GeminiAgent
-from intelligence.simple_auto_tools import (
-    scan_shelf, find_item, find_drinks, grab_item, 
-    buy_item, get_water, get_checkout_summary
+from intelligence.robot_tools import (
+    scan_shelf, find_item, find_items_for_need, grab_item, 
+    buy_item, buy_product, get_checkout_summary
 )
 
 
@@ -37,10 +37,10 @@ async def test_auto_function_calling():
         auto_functions = [
             scan_shelf,
             find_item, 
-            find_drinks,
+            find_items_for_need,
             grab_item,
             buy_item,      # 组合函数：查找+抓取
-            get_water,     # 组合函数：查找饮料+选择水+抓取
+            buy_product,   # LLM驱动的智能购买函数
             get_checkout_summary
         ]
         

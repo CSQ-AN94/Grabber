@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-简化版WorldState - 专门用于测试Gemini能力边界
-保持最少的状态信息，专注于测试工具调用模式
+智能零售机器人世界状态管理器
+管理货架布局、商品信息和机器人状态，支持语义化查询和智能推荐
 """
 
 import threading
@@ -22,18 +22,19 @@ class ShelfItem:
     """货架物品信息"""
     item_name: str
     price: float
-    category: str
+    description: str
     status: ItemStatus = ItemStatus.ON_SHELF
 
 
-class TestWorldState:
+class WorldState:
     """
-    简化版世界状态管理器 - 专门用于测试Gemini Function Calling能力边界
+    智能零售机器人世界状态管理器
     
     设计目标：
-    1. 最少化状态信息，专注于工具调用测试
+    1. 管理货架布局和商品状态信息
     2. 模拟2层货架，每层4个商品位置（共8个位置）
-    3. 支持多种查询方式来测试Gemini的推理能力
+    3. 支持语义化商品查询和智能推荐
+    4. 为LLM驱动的购物助手提供数据支持
     """
     
     def __init__(self):
@@ -49,24 +50,72 @@ class TestWorldState:
         # 机器人状态
         self.robot_busy = False
         
-        # 商品数据库（完整的16种比赛商品）
+        # 商品数据库（完整的16种比赛商品）- 基于语义描述的智能推荐设计
         self.item_database = {
-            "可口可乐": {"price": 3.5, "category": "饮料"},
-            "百事可乐": {"price": 3.5, "category": "饮料"},
-            "红牛": {"price": 6.0, "category": "饮料"},
-            "农夫山泉矿泉水": {"price": 2.5, "category": "饮料"},
-            "营养快线": {"price": 6.0, "category": "饮料"},
-            "娃哈哈 AD钙奶": {"price": 5.5, "category": "饮料"},
-            "纯牛奶": {"price": 2.5, "category": "饮料"},
-            "雀巢咖啡": {"price": 4.0, "category": "饮料"},
-            "牙膏": {"price": 7.0, "category": "日用品"},
-            "洗发水": {"price": 12.0, "category": "日用品"},
-            "薯片": {"price": 3.5, "category": "零食"},
-            "洽洽瓜子": {"price": 5.0, "category": "零食"},
-            "奥利奥饼干": {"price": 6.0, "category": "零食"},
-            "维达纸巾": {"price": 4.0, "category": "日用品"},
-            "橘子": {"price": 1.5, "category": "水果"},
-            "苹果": {"price": 2.0, "category": "水果"}
+            "可口可乐": {
+                "price": 3.5,
+                "description": "经典碳酸饮料，红色易拉罐装，330ml，甜味汽水，解渴提神，含咖啡因，气泡丰富，冰爽畅快"
+            },
+            "百事可乐": {
+                "price": 3.5, 
+                "description": "知名碳酸饮料，蓝色易拉罐装，330ml，甜味汽水，解渴提神，含咖啡因，口感清爽，年轻活力"
+            },
+            "红牛": {
+                "price": 6.0,
+                "description": "功能性能量饮料，蓝银色罐装，250ml，提神醒脑，缓解疲劳，补充体力，运动健身，维生素B群"
+            },
+            "农夫山泉矿泉水": {
+                "price": 2.5,
+                "description": "天然矿泉水，透明塑料瓶装，500ml，纯净解渴，补充水分，健康天然，无色无味，清洁卫生"
+            },
+            "营养快线": {
+                "price": 6.0,
+                "description": "复合型乳饮料，白色利乐包装，500ml，香甜奶味，营养补充，富含蛋白质和维生素，饱腹感强"
+            },
+            "娃哈哈 AD钙奶": {
+                "price": 5.5,
+                "description": "儿童营养饮品，蓝白色塑料瓶，220ml，甜味奶饮，补钙健骨，富含维生素A和D，促进发育"
+            },
+            "纯牛奶": {
+                "price": 2.5,
+                "description": "新鲜纯牛奶，白色利乐包装，250ml，浓郁奶香，营养丰富，补充蛋白质和钙质，健康天然"
+            },
+            "雀巢咖啡": {
+                "price": 4.0,
+                "description": "速溶咖啡饮品，棕色瓶装，180ml，浓郁咖啡香，提神醒脑，缓解困倦，工作学习伴侣，苦中带甜"
+            },
+            "牙膏": {
+                "price": 7.0,
+                "description": "口腔清洁用品，白色软管包装，120g，薄荷香味，清洁牙齿，保护口腔，去除异味，日常洗漱必需"
+            },
+            "洗发水": {
+                "price": 12.0,
+                "description": "头发清洁护理产品，蓝色塑料瓶装，400ml，柔顺香氛，清洁头皮，滋养发丝，日常洗护用品"
+            },
+            "薯片": {
+                "price": 3.5,
+                "description": "酥脆薯片零食，金色包装袋，70g，香脆可口，解馋充饥，聚会休闲，多种口味，老少皆宜"
+            },
+            "洽洽瓜子": {
+                "price": 5.0,
+                "description": "炒制瓜子零食，红色包装袋，108g，香脆咸香，消磨时光，解馋嗑食，休闲娱乐，传统小食"
+            },
+            "奥利奥饼干": {
+                "price": 6.0,
+                "description": "夹心饼干零食，蓝色包装盒，97g，巧克力味，香甜酥脆，解馋充饥，下午茶点，经典美味"
+            },
+            "维达纸巾": {
+                "price": 4.0,
+                "description": "面部纸巾用品，白色包装盒，200抽，柔软亲肤，清洁擦拭，日常必需，卫生方便，居家办公"
+            },
+            "橘子": {
+                "price": 1.5,
+                "description": "新鲜柑橘水果，橙黄色圆形，单个装，酸甜多汁，补充维C，健康营养，天然有机，解渴开胃"
+            },
+            "苹果": {
+                "price": 2.0,
+                "description": "新鲜苹果水果，红色圆形，单个装，香甜脆嫩，富含纤维，健康营养，天然有机，饱腹感强"
+            }
         }
     
     # === 货架扫描模拟 ===
@@ -92,7 +141,7 @@ class TestWorldState:
                     self.shelf_layout[pos_id] = ShelfItem(
                         item_name=item_name,
                         price=item_info["price"],
-                        category=item_info["category"],
+                        description=item_info["description"],
                         status=ItemStatus.ON_SHELF
                     )
             
@@ -116,7 +165,7 @@ class TestWorldState:
                         "position_id": pos_id,
                         "item_name": item.item_name,
                         "price": item.price,
-                        "category": item.category
+                        "description": item.description
                     }
                     layout[pos_id] = item_data
                     
@@ -146,7 +195,7 @@ class TestWorldState:
                         "position_id": pos_id,
                         "item_name": item.item_name,
                         "price": item.price,
-                        "category": item.category,
+                        "description": item.description,
                         "layer": 1 if pos_id <= 4 else 2,
                         "shelf_position": ((pos_id - 1) % 4) + 1
                     }
@@ -250,6 +299,82 @@ class TestWorldState:
                 "item_count": len(items)
             }
     
+    def find_items_by_need(self, user_need: str) -> Dict[str, Any]:
+        """
+        基于用户需求描述查找合适商品（语义匹配）
+        
+        Args:
+            user_need: 用户需求描述，如"解渴"、"充饥"、"提神"、"清洁"等
+        
+        Returns:
+            匹配的商品列表，按相关度排序
+        """
+        with self.lock:
+            if not self.shelf_scanned:
+                return {"success": False, "error": "货架尚未扫描"}
+            
+            # 需求关键词映射（简化的语义匹配）
+            need_keywords = {
+                "解渴": ["解渴", "补充水分", "水", "饮料", "汽水", "矿泉水"],
+                "充饥": ["充饥", "饱腹", "零食", "饼干", "瓜子", "薯片", "水果"],
+                "提神": ["提神", "醒脑", "咖啡因", "咖啡", "能量", "缓解疲劳"],
+                "清洁": ["清洁", "洗漱", "清洁用品", "牙膏", "洗发水", "纸巾"],
+                "营养": ["营养", "蛋白质", "维生素", "钙质", "健康", "牛奶"],
+                "休闲": ["休闲", "零食", "消磨时光", "聚会", "娱乐"],
+                "甜食": ["甜", "巧克力", "香甜", "甜味", "饼干"]
+            }
+            
+            # 扩展用户需求关键词
+            search_keywords = []
+            user_need_lower = user_need.lower()
+            
+            # 直接包含的关键词
+            search_keywords.append(user_need_lower)
+            
+            # 映射的关键词
+            for need_type, keywords in need_keywords.items():
+                if need_type in user_need_lower:
+                    search_keywords.extend(keywords)
+            
+            # 在货架上的商品中搜索匹配
+            matched_items = []
+            
+            for pos_id, item in self.shelf_layout.items():
+                if item.status == ItemStatus.ON_SHELF:
+                    # 获取商品描述
+                    item_description = item.description.lower()
+                    
+                    # 计算匹配度
+                    match_score = 0
+                    matched_keywords = []
+                    
+                    for keyword in search_keywords:
+                        if keyword in item_description:
+                            match_score += 1
+                            matched_keywords.append(keyword)
+                    
+                    if match_score > 0:
+                        matched_items.append({
+                            "position_id": pos_id,
+                            "item_name": item.item_name,
+                            "price": item.price,
+                            "description": item.description,
+                            "match_score": match_score,
+                            "matched_keywords": matched_keywords,
+                            "layer": 1 if pos_id <= 4 else 2,
+                            "shelf_position": ((pos_id - 1) % 4) + 1
+                        })
+            
+            # 按匹配度排序
+            matched_items.sort(key=lambda x: x["match_score"], reverse=True)
+            
+            return {
+                "success": True,
+                "user_need": user_need,
+                "items": matched_items,
+                "count": len(matched_items)
+            }
+    
     # === 机器人操作 ===
     def execute_grasp_and_drop(self, position_id: int, item_name: str) -> Dict[str, Any]:
         """执行抓取和放置操作"""
@@ -285,12 +410,12 @@ class TestWorldState:
             }
 
 
-# 全局测试状态实例
-_test_world_state = None
+# 全局世界状态实例
+_world_state = None
 
-def get_test_world_state() -> TestWorldState:
-    """获取测试世界状态实例（单例模式）"""
-    global _test_world_state
-    if _test_world_state is None:
-        _test_world_state = TestWorldState()
-    return _test_world_state
+def get_world_state() -> WorldState:
+    """获取世界状态管理器实例（单例模式）"""
+    global _world_state
+    if _world_state is None:
+        _world_state = WorldState()
+    return _world_state

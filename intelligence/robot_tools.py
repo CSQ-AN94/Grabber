@@ -1,363 +1,263 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-机器人工具函数库 - 连接AI助手与硬件控制
-提供标准化的工具函数接口，支持Gemini Function Calling
+智能零售机器人工具函数库
+实现LLM驱动的智能购物助手功能，支持Gemini自动函数调用
 """
 
-import asyncio
-import logging
-from typing import Dict, Any, List, Optional
-from dataclasses import dataclass
+import json
+from intelligence.world_state import get_world_state
+from intelligence.gemini_agent import GeminiAgent
 
-logger = logging.getLogger(__name__)
-
-
-@dataclass
-class RobotToolResult:
-    """机器人工具执行结果"""
-    success: bool
-    message: str
-    error: Optional[str] = None
-    data: Optional[Dict[str, Any]] = None
+# 获取世界状态实例
+world_state = get_world_state()
 
 
-class RobotTools:
-    """机器人工具函数库"""
+def scan_shelf() -> dict:
+    """扫描货架并识别所有商品位置，这是了解货架布局的第一步，必须在其他操作前执行"""
+    print("[函数调用] scan_shelf()")
     
-    def __init__(self):
-        """初始化机器人工具"""
-        self.logger = logging.getLogger(__name__)
+    # 模拟扫描过程
+    scanned_items = world_state.simulate_shelf_scan()
+    
+    layer1_items = scanned_items[:4]
+    layer2_items = scanned_items[4:]
+    
+    result = {
+        "success": True,
+        "message": f"货架扫描完成。检测到{len(scanned_items)}个商品。第一层有：{', '.join(layer1_items)}。第二层有：{', '.join(layer2_items)}。",
+        "items": scanned_items
+    }
+    
+    print(f"[函数返回] {result['message']}")
+    return result
+
+
+# find_item 函数已删除 - 使用更强大的 buy_product() 替代
+
+
+# find_items_for_need 函数已删除 - 使用更强大的 buy_product() 替代
+
+
+# grab_item 函数已删除 - 由 buy_product() 内部调用 _internal_grab_item()
+
+
+# buy_item 函数已删除 - 使用更强大的 buy_product() 替代
+
+
+def buy_product(user_query: str) -> dict:
+    """
+    大模型驱动的通用智能购买函数
+    
+    理解任何形式的购买需求：
+    - 商品名称："苹果"、"可口可乐"
+    - 需求描述："我渴了"、"解渴的东西"、"便宜的饮料" 
+    - 位置描述："第一层第二个"、"可口可乐旁边的"
+    - 复合条件："便宜的解渴饮料"、"提神又不贵的"
+    
+    内部使用大模型分析用户意图，结合货架信息智能推荐最佳商品
+    """
+    print(f"[函数调用] buy_product(user_query='{user_query}')")
+    try:
+        # 1. 收集完整上下文
+        context = _gather_complete_context(user_query)
+        if not context["success"]:
+            return context
         
-        # Mock数据 - 模拟货架商品信息
-        self.mock_items = {
-            "1-1": {"name": "奥利奥饼干", "price": 8.0, "category": "零食类"},
-            "1-2": {"name": "橘子", "price": 4.5, "category": "水果类"},
-            "2-1": {"name": "可口可乐", "price": 3.5, "category": "饮料类"},
-            "2-2": {"name": "薯片", "price": 6.0, "category": "零食类"},
-            "3-1": {"name": "苹果", "price": 5.0, "category": "水果类"},
+        # 2. 调用大模型进行智能推荐 (使用同步方式)
+        recommendation = _get_llm_recommendation_sync(context)
+        if not recommendation["success"]:
+            return recommendation
+        
+        # 3. 执行推荐的购买操作
+        result = _execute_recommendation(recommendation)
+        
+        if result["success"]:
+            message = f"根据您的需求'{user_query}'，为您推荐了{result['item_name']}（{result['reasoning']}），{result['message']}"
+            result["message"] = message
+            result["user_query"] = user_query
+        
+        return result
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"购买过程中发生错误：{str(e)}",
+            "error": str(e)
         }
-        
-        self.logger.info("机器人工具库初始化完成")
+
+
+def _gather_complete_context(user_query: str) -> dict:
+    """收集完整上下文信息"""
+    if not world_state.shelf_scanned:
+        return {
+            "success": False,
+            "message": "请先扫描货架",
+            "error": "货架尚未扫描"
+        }
     
-    async def scan_shelf(self, announce: bool = True) -> Dict[str, Any]:
-        """
-        扫描货架功能
+    # 获取货架布局
+    shelf_info = world_state.query_full_layout()
+    if not shelf_info["success"]:
+        return shelf_info
+    
+    return {
+        "success": True,
+        "user_query": user_query,
+        "shelf_layout": shelf_info["layout"],
+        "layer1_items": shelf_info["layer1"],
+        "layer2_items": shelf_info["layer2"],
+        "total_items": shelf_info["total_items"]
+    }
+
+
+def _get_llm_recommendation_sync(context: dict) -> dict:
+    """使用大模型获取智能推荐"""
+    try:
+        # 创建推荐分析的结构化prompt
+        prompt = f"""你是智能购物助手，需要根据用户需求分析并推荐最合适的商品。
+
+用户需求："{context['user_query']}"
+
+当前货架信息：
+第一层商品：{', '.join([f"{item}(位置{i+1})" for i, item in enumerate(context['layer1_items'])])}
+第二层商品：{', '.join([f"{item}(位置{i+5})" for i, item in enumerate(context['layer2_items'])])}
+
+详细商品信息：
+{_format_items_for_llm(context['shelf_layout'])}
+
+请分析用户需求并推荐最佳商品。考虑因素：
+1. 用户的具体需求（解渴、充饥、提神、价格敏感等）
+2. 商品的功能特性和价格
+3. 用户可能的偏好
+
+请严格按以下JSON格式回复（不要包含其他文字）：
+{{
+    "recommended_item": "推荐的商品名称",
+    "position_id": 商品位置ID数字,
+    "reasoning": "推荐理由（简洁说明为什么选择这个商品）"
+}}"""
+
+        # 创建临时的LLM代理进行分析
+        analyzer = GeminiAgent(enable_tools=False)  # 不使用工具，仅用于文本分析
         
-        Args:
-            announce: 是否播报商品清单
-            
-        Returns:
-            包含扫描结果的字典
-        """
-        try:
-            self.logger.info("开始扫描货架...")
-            
-            # 模拟扫描过程
-            await asyncio.sleep(1)  # 模拟扫描时间
-            
-            # 生成扫描结果
-            detected_items = []
-            for region_id, item_info in self.mock_items.items():
-                detected_items.append({
-                    "region": region_id,
-                    "name": item_info["name"],
-                    "price": item_info["price"],
-                    "category": item_info["category"]
-                })
-            
-            result_message = f"货架扫描完成。检测到{len(detected_items)}个商品"
-            if announce:
-                item_list = "，".join([f"{item['region']}区域的{item['name']}" for item in detected_items])
-                result_message += f"：{item_list}。"
-            
-            self.logger.info(f"扫描完成，检测到{len(detected_items)}个商品")
-            
-            return {
-                "success": True,
-                "message": result_message,
-                "data": {
-                    "items_count": len(detected_items),
-                    "items": detected_items
-                }
-            }
-            
-        except Exception as e:
-            error_msg = f"货架扫描失败: {str(e)}"
-            self.logger.error(error_msg)
+        # 同步调用LLM分析 (简化版本)
+        import asyncio
+        result = asyncio.run(analyzer.process_text(prompt))
+        
+        if not result["success"]:
             return {
                 "success": False,
-                "message": "货架扫描过程中发生错误",
-                "error": error_msg
+                "message": "推荐分析失败",
+                "error": result.get("error", "LLM分析错误")
             }
-    
-    async def grasp_item(self, region_id: str) -> Dict[str, Any]:
-        """
-        抓取指定区域的商品
         
-        Args:
-            region_id: 区域ID (如 "1-1", "2-2")
-            
-        Returns:
-            包含抓取结果的字典
-        """
+        # 解析LLM返回的JSON
         try:
-            self.logger.info(f"开始抓取区域{region_id}的商品...")
-            
-            # 检查区域是否存在商品
-            if region_id not in self.mock_items:
-                return {
-                    "success": False,
-                    "message": f"区域{region_id}没有检测到商品",
-                    "error": f"无效区域ID: {region_id}"
-                }
-            
-            item_info = self.mock_items[region_id]
-            
-            # 模拟抓取过程
-            self.logger.info(f"正在抓取{item_info['name']}...")
-            await asyncio.sleep(2)  # 模拟抓取时间
-            
-            result_message = f"正在抓取区域{region_id}的商品...抓取完成！"
-            
-            self.logger.info(f"成功抓取{item_info['name']}")
-            
-            # 从货架移除已抓取的商品 (模拟)
-            # 注意：这里不真正删除，因为这只是Mock数据
-            
-            return {
-                "success": True,
-                "message": result_message,
-                "data": {
-                    "region_id": region_id,
-                    "item_name": item_info["name"],
-                    "item_price": item_info["price"]
-                }
-            }
-            
-        except Exception as e:
-            error_msg = f"抓取商品失败: {str(e)}"
-            self.logger.error(error_msg)
-            return {
-                "success": False,
-                "message": f"抓取区域{region_id}的商品时发生错误",
-                "error": error_msg
-            }
-    
-    async def get_item_info(self, item_name: str) -> Dict[str, Any]:
-        """
-        查询商品信息
-        
-        Args:
-            item_name: 商品名称
-            
-        Returns:
-            包含商品信息的字典
-        """
-        try:
-            self.logger.info(f"查询商品信息: {item_name}")
-            
-            # 在Mock数据中搜索商品
-            found_item = None
-            found_region = None
-            
-            for region_id, item_info in self.mock_items.items():
-                if item_name in item_info["name"] or item_info["name"] in item_name:
-                    found_item = item_info
-                    found_region = region_id
-                    break
-            
-            if not found_item:
-                return {
-                    "success": False,
-                    "message": f"没有找到商品「{item_name}」的信息",
-                    "error": f"商品不存在: {item_name}"
-                }
-            
-            result_message = f"{found_item['name']}的价格是{found_item['price']}元，属于{found_item['category']}。"
-            
-            self.logger.info(f"找到商品信息: {found_item['name']}")
-            
-            return {
-                "success": True,
-                "message": result_message,
-                "data": {
-                    "item_name": found_item["name"],
-                    "price": found_item["price"],
-                    "category": found_item["category"],
-                    "region": found_region
-                }
-            }
-            
-        except Exception as e:
-            error_msg = f"查询商品信息失败: {str(e)}"
-            self.logger.error(error_msg)
-            return {
-                "success": False,
-                "message": f"查询商品「{item_name}」信息时发生错误",
-                "error": error_msg
-            }
-    
-    async def move_to_position(self, position: str) -> Dict[str, Any]:
-        """
-        移动到指定位置
-        
-        Args:
-            position: 目标位置 ("scanning", "home", "dropoff")
-            
-        Returns:
-            包含移动结果的字典
-        """
-        try:
-            self.logger.info(f"开始移动到{position}位置...")
-            
-            # 验证位置
-            valid_positions = ["scanning", "home", "dropoff", "checkout"]
-            if position not in valid_positions:
-                return {
-                    "success": False,
-                    "message": f"无效的位置: {position}",
-                    "error": f"支持的位置: {', '.join(valid_positions)}"
-                }
-            
-            # 模拟移动过程
-            await asyncio.sleep(3)  # 模拟移动时间
-            
-            result_message = f"正在移动到{position}位置...到达目标位置。"
-            
-            self.logger.info(f"成功移动到{position}位置")
-            
-            return {
-                "success": True,
-                "message": result_message,
-                "data": {
-                    "target_position": position,
-                    "status": "arrived"
-                }
-            }
-            
-        except Exception as e:
-            error_msg = f"移动失败: {str(e)}"
-            self.logger.error(error_msg)
-            return {
-                "success": False,
-                "message": f"移动到{position}位置时发生错误",
-                "error": error_msg
-            }
-    
-    def get_available_tools(self) -> List[Dict[str, Any]]:
-        """
-        获取可用的工具函数定义 (用于Gemini Function Calling)
-        
-        Returns:
-            工具函数定义列表
-        """
-        return [
-            {
-                "name": "scan_shelf",
-                "description": "扫描货架商品并播报位置",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "announce": {
-                            "type": "boolean",
-                            "description": "是否播报商品清单",
-                            "default": True
-                        }
-                    }
-                }
-            },
-            {
-                "name": "grasp_item",
-                "description": "抓取指定区域的商品",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "region_id": {
-                            "type": "string",
-                            "description": "区域ID，如 '1-1', '2-2'",
-                            "required": True
-                        }
-                    },
-                    "required": ["region_id"]
-                }
-            },
-            {
-                "name": "get_item_info",
-                "description": "查询商品信息包括价格和分类",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "item_name": {
-                            "type": "string",
-                            "description": "商品名称",
-                            "required": True
-                        }
-                    },
-                    "required": ["item_name"]
-                }
-            },
-            {
-                "name": "move_to_position",
-                "description": "移动机器人到指定位置",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "position": {
-                            "type": "string",
-                            "description": "目标位置: scanning, home, dropoff, checkout",
-                            "enum": ["scanning", "home", "dropoff", "checkout"],
-                            "required": True
-                        }
-                    },
-                    "required": ["position"]
-                }
-            }
-        ]
-    
-    async def execute_tool(self, tool_name: str, **kwargs) -> Dict[str, Any]:
-        """
-        执行指定的工具函数
-        
-        Args:
-            tool_name: 工具函数名称
-            **kwargs: 工具函数参数
-            
-        Returns:
-            工具执行结果
-        """
-        try:
-            if tool_name == "scan_shelf":
-                return await self.scan_shelf(**kwargs)
-            elif tool_name == "grasp_item":
-                return await self.grasp_item(**kwargs)
-            elif tool_name == "get_item_info":
-                return await self.get_item_info(**kwargs)
-            elif tool_name == "move_to_position":
-                return await self.move_to_position(**kwargs)
+            # 提取JSON部分
+            response_text = result["text"].strip()
+            if "```json" in response_text:
+                json_start = response_text.find("```json") + 7
+                json_end = response_text.find("```", json_start)
+                json_text = response_text[json_start:json_end].strip()
+            elif "{" in response_text and "}" in response_text:
+                json_start = response_text.find("{")
+                json_end = response_text.rfind("}") + 1
+                json_text = response_text[json_start:json_end]
             else:
-                return {
-                    "success": False,
-                    "message": f"未知的工具函数: {tool_name}",
-                    "error": f"不支持的工具: {tool_name}"
-                }
-                
-        except Exception as e:
-            error_msg = f"执行工具函数{tool_name}时发生错误: {str(e)}"
-            self.logger.error(error_msg)
+                json_text = response_text
+            
+            recommendation = json.loads(json_text)
+            
+            return {
+                "success": True,
+                "recommended_item": recommendation["recommended_item"],
+                "position_id": recommendation["position_id"],
+                "reasoning": recommendation["reasoning"]
+            }
+            
+        except json.JSONDecodeError as e:
             return {
                 "success": False,
-                "message": f"工具函数{tool_name}执行失败",
-                "error": error_msg
+                "message": f"推荐结果解析失败：{result['text']}",
+                "error": f"JSON解析错误: {str(e)}"
             }
+    
+    except Exception as e:
+        return {
+            "success": False,
+            "message": "推荐分析过程中发生错误",
+            "error": str(e)
+        }
 
 
-# 全局工具实例
-_robot_tools_instance = None
+def _format_items_for_llm(shelf_layout: dict) -> str:
+    """格式化商品信息供LLM分析"""
+    formatted_items = []
+    for pos_id, item_data in shelf_layout.items():
+        item_text = f"位置{pos_id}: {item_data['item_name']} - {item_data['price']}元\n   描述: {item_data['description']}"
+        formatted_items.append(item_text)
+    return "\n\n".join(formatted_items)
 
-def get_robot_tools() -> RobotTools:
-    """获取机器人工具实例 (单例模式)"""
-    global _robot_tools_instance
-    if _robot_tools_instance is None:
-        _robot_tools_instance = RobotTools()
-    return _robot_tools_instance
+
+def _execute_recommendation(recommendation: dict) -> dict:
+    """执行LLM推荐的购买操作"""
+    try:
+        item_name = recommendation["recommended_item"]  
+        position_id = recommendation["position_id"]
+        reasoning = recommendation["reasoning"]
+        
+        # 执行抓取操作（内部函数，不暴露给Gemini）
+        grab_result = _internal_grab_item(item_name, position_id)
+        
+        if grab_result["success"]:
+            return {
+                "success": True,
+                "message": grab_result["message"],
+                "item_name": item_name,
+                "position_id": position_id,
+                "price": grab_result["price"],
+                "reasoning": reasoning
+            }
+        else:
+            return grab_result
+            
+    except Exception as e:
+        return {
+            "success": False,
+            "message": "执行推荐操作失败",
+            "error": str(e)
+        }
+
+
+def _internal_grab_item(item_name: str, position_id: int) -> dict:
+    """内部抓取函数，不暴露给Gemini"""
+    result = world_state.execute_grasp_and_drop(position_id, item_name)
+    
+    if result["success"]:
+        result["message"] = f"成功抓取{result['item_name']}，价格{result['price']}元，已放入结账区。"
+    
+    return result
+
+
+def get_checkout_summary() -> dict:
+    """获取购物车中所有商品的详细清单和总价，用于结账时查看购买的商品和费用"""
+    print("[函数调用] get_checkout_summary()")
+    
+    result = world_state.query_checkout_summary()
+    
+    if result["success"]:
+        if result["item_count"] > 0:
+            items_detail = []
+            for item in result["items"]:
+                items_detail.append(f"{item['name']} {item['price']}元")
+            
+            result["message"] = (
+                f"结账清单：{', '.join(items_detail)}。"
+                f"共{result['item_count']}件商品，总计{result['total_price']}元。"
+            )
+        else:
+            result["message"] = "结账区暂无商品。"
+    
+    print(f"[函数返回] {result['message']}")
+    return result

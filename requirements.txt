@@ -6,7 +6,6 @@ opencv-contrib-python
 numpy<2.0
 scipy
 google-genai
-zhipuai
 sounddevice
 soundfile
 pyserial
@@ -17,13 +16,11 @@ websockets
 websocket-client
 requests
 pyyaml
-configparser
 scikit-learn
 matplotlib
 pytest
 pytest-asyncio
 black
-configparser
 pybind11==2.11.0
 pybind11-global==2.11.0
 av

@@ -1,7 +1,7 @@
 ARG TARGETPLATFORM
 
 # amd64带显卡笔记本的基础镜像
-FROM nvidia/cuda:12.8.0-devel-ubuntu22.04 AS base-amd64
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS base-amd64
 # jetson orin 的基础镜像
 FROM ultralytics/ultralytics:latest-jetson-jetpack6 AS base-arm64
 

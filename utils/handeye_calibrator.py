@@ -1,7 +1,6 @@
 import cv2
 import numpy as np
 import time
-import configparser
 from controllers.arm_controller import ArmController
 from sensors.camera_thread import CameraThread
 from utils.state import WorldState
