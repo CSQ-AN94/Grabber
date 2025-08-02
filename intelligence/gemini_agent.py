@@ -67,25 +67,7 @@ class GeminiAgent:
             return {"success": False, "error": str(e), "text": ""}
     
     def register_tool(self, name: str, description: str, func, parameters: Dict = None):
-        """注册工具函数
-        
-        Args:
-            name: 工具名称
-            description: 工具描述
-            func: 要执行的函数（必须是async函数）
-            parameters: 参数定义字典
-        
-        示例:
-            agent.register_tool(
-                name="scan_shelf",
-                description="扫描货架商品", 
-                func=my_scan_function,
-                parameters={
-                    "type": "object",
-                    "properties": {"announce": {"type": "boolean", "description": "是否播报"}}
-                }
-            )
-        """
+        """注册工具函数（兼容模式）"""
         tool_info = {
             "name": name,
             "description": description,
@@ -94,6 +76,31 @@ class GeminiAgent:
         }
         self.tools.append(tool_info)
         logger.info(f"已注册工具函数: {name}")
+    
+    def register_function(self, func):
+        """
+        注册Python函数用于自动调用（新的推荐方式）
+        
+        Args:
+            func: Python函数，必须有类型提示和文档字符串
+        
+        示例:
+            def buy_item(item_name: str) -> dict:
+                '''购买指定商品'''
+                return {"success": True, "message": f"购买了{item_name}"}
+            
+            agent.register_function(buy_item)
+        """
+        # 将函数包装为工具格式，但保存原始函数引用
+        tool_info = {
+            "name": func.__name__,
+            "description": func.__doc__ or f"执行{func.__name__}函数",
+            "func": func,
+            "auto_function": True,  # 标记为自动函数
+            "parameters": {"type": "object", "properties": {}}  # 简化参数处理
+        }
+        self.tools.append(tool_info)
+        logger.info(f"已注册自动函数: {func.__name__}")
     
     def _get_system_instruction(self) -> str:
         """生成详细的系统指令"""
@@ -169,11 +176,20 @@ class GeminiAgent:
         else:
             return "你是一个智能零售机器人助手。请用简洁、友好的方式回答用户问题。"
     
-    def _get_tool_definitions(self) -> List[types.Tool]:
-        """获取工具定义"""
+    def _get_tool_definitions(self):
+        """获取工具定义，支持自动函数调用"""
         if not self.tools:
-            return []
+            return None
         
+        # 检查是否有自动函数
+        auto_functions = [tool["func"] for tool in self.tools if tool.get("auto_function", False)]
+        
+        if auto_functions:
+            # 使用自动函数调用模式 - 直接返回Python函数列表
+            logger.info(f"使用自动函数调用模式，函数数量: {len(auto_functions)}")
+            return auto_functions
+        
+        # 兼容模式 - 使用手动函数声明
         function_declarations = []
         for tool in self.tools:
             function_declaration = types.FunctionDeclaration(
@@ -243,8 +259,22 @@ class GeminiAgent:
     
     
     async def _process_response(self, response) -> Dict[str, Any]:
-        """处理Gemini响应（包括工具调用）"""
+        """处理Gemini响应（自动函数调用模式会自动处理函数调用）"""
         try:
+            # 检查是否使用自动函数调用模式
+            has_auto_functions = any(tool.get("auto_function", False) for tool in self.tools)
+            
+            if has_auto_functions:
+                # 自动函数调用模式 - SDK已自动处理所有函数调用
+                final_text = response.text if response.text else "操作已完成。"
+                return {
+                    "success": True,
+                    "text": final_text.strip(),
+                    "model": self.model_name,
+                    "auto_function_calls": True
+                }
+            
+            # 兼容模式 - 手动处理函数调用
             if not response.candidates or len(response.candidates) == 0:
                 return {"success": False, "error": "响应中没有候选结果", "text": ""}
             
