@@ -16,7 +16,7 @@ from scipy.spatial.transform import Rotation
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.config import load_config
-from utils.state import WorldState
+from intelligence.world_state import WorldState
 from utils.calibration import Calibration
 from utils.handeye_calibrator import HandEyeCalibrator
 from sensors.camera_thread import CameraThread, DisplayMode

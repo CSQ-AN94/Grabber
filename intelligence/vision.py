@@ -6,9 +6,7 @@ from ultralytics import YOLO
 import time
 from PIL import Image, ImageDraw, ImageFont
 
-# 为了独立测试，我们需要能够模拟或接收来自外部的数据
-# 在真实集成时，这些对象将由主程序传入
-from utils.state import WorldState
+from intelligence.world_state import WorldState
 from sensors.camera_thread import CameraThread
 from utils.config import load_config
 

@@ -17,7 +17,7 @@ import argparse
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.config import load_config
-from utils.state import WorldState
+from intelligence.world_state import WorldState
 from sensors.camera_thread import CameraThread
 
 

@@ -5,19 +5,37 @@
 实现LLM驱动的智能购物助手功能，支持Gemini自动函数调用
 """
 
-import json
 from intelligence.world_state import get_world_state
-from intelligence.gemini_agent import GeminiAgent
 
 # 获取世界状态实例
 world_state = get_world_state()
 
 
 def scan_shelf() -> dict:
-    """扫描货架并识别所有商品位置，这是了解货架布局的第一步，必须在其他操作前执行"""
+    """
+    驱动机器人系统扫描货架以初始化货架上所有商品信息，这是了解货架布局的第一步，必须在任何推荐行为前执行。
+    建立的世界状态将用于后续的商品查询和推荐，并且随着真实抓取操作的进行而更新。
+    
+    重要：这是一次性工具，货架扫描完成后不应再次调用。如需查看商品信息，请直接基于现有货架布局进行推荐。
+
+    返回：
+    - 首次扫描：返回扫描结果，包括第一层和第二层的商品列表
+    - 重复扫描：返回错误，提示应基于现有商品信息进行推荐
+    """
     print("[函数调用] scan_shelf()")
     
-    # 模拟扫描过程
+    # 检查是否已经扫描过
+    if world_state.shelf_scanned:
+        error_result = {
+            "success": False,
+            "message": "货架已扫描，无需重复扫描。请直接基于当前货架商品信息为用户推荐合适的商品。",
+            "error": "重复扫描被阻止",
+            "instruction": "请直接根据已知的货架布局为用户提供商品推荐，而不是重新扫描货架"
+        }
+        print(f"[函数返回] {error_result['message']}")
+        return error_result
+    
+    # 首次扫描：执行正常的扫描逻辑
     scanned_items = world_state.simulate_shelf_scan()
     
     layer1_items = scanned_items[:4]
@@ -32,212 +50,109 @@ def scan_shelf() -> dict:
     print(f"[函数返回] {result['message']}")
     return result
 
+def get_robot_tools():
+    """获取机器人工具函数列表，用于Gemini Agent"""
+    return [
+        scan_shelf,
+        execute_grab, 
+        get_checkout_summary
+    ]
 
-# find_item 函数已删除 - 使用更强大的 buy_product() 替代
-
-
-# find_items_for_need 函数已删除 - 使用更强大的 buy_product() 替代
-
-
-# grab_item 函数已删除 - 由 buy_product() 内部调用 _internal_grab_item()
-
-
-# buy_item 函数已删除 - 使用更强大的 buy_product() 替代
-
-
-def buy_product(user_query: str) -> dict:
+def execute_grab(item_name: str, position_id: int) -> dict:
     """
-    大模型驱动的通用智能购买函数
+    驱动真实机器人系统执行抓取指定商品的操作。
+    直接从货架抓取商品并放置到结账区。
     
-    理解任何形式的购买需求：
-    - 商品名称："苹果"、"可口可乐"
-    - 需求描述："我渴了"、"解渴的东西"、"便宜的饮料" 
-    - 位置描述："第一层第二个"、"可口可乐旁边的"
-    - 复合条件："便宜的解渴饮料"、"提神又不贵的"
+    参数：
+    - item_name: 要抓取的商品名称
+    - position_id: 商品在货架上的位置ID
     
-    内部使用大模型分析用户意图，结合货架信息智能推荐最佳商品
+    返回：
+    - 成功时返回抓取结果，包括商品名称、价格和位置ID
+    - 失败时返回错误信息
     """
-    print(f"[函数调用] buy_product(user_query='{user_query}')")
-    try:
-        # 1. 收集完整上下文
-        context = _gather_complete_context(user_query)
-        if not context["success"]:
-            return context
-        
-        # 2. 调用大模型进行智能推荐 (使用同步方式)
-        recommendation = _get_llm_recommendation_sync(context)
-        if not recommendation["success"]:
-            return recommendation
-        
-        # 3. 执行推荐的购买操作
-        result = _execute_recommendation(recommendation)
-        
-        if result["success"]:
-            message = f"根据您的需求'{user_query}'，为您推荐了{result['item_name']}（{result['reasoning']}），{result['message']}"
-            result["message"] = message
-            result["user_query"] = user_query
-        
-        return result
-        
-    except Exception as e:
-        return {
-            "success": False,
-            "message": f"购买过程中发生错误：{str(e)}",
-            "error": str(e)
-        }
-
-
-def _gather_complete_context(user_query: str) -> dict:
-    """收集完整上下文信息"""
-    if not world_state.shelf_scanned:
-        return {
-            "success": False,
-            "message": "请先扫描货架",
-            "error": "货架尚未扫描"
-        }
+    print(f"[函数调用] execute_grab(item_name='{item_name}', position_id={position_id})")
     
-    # 获取货架布局
-    shelf_info = world_state.query_full_layout()
-    if not shelf_info["success"]:
-        return shelf_info
+    # 导入枚举类型
+    from world_state import ItemStatus
     
-    return {
-        "success": True,
-        "user_query": user_query,
-        "shelf_layout": shelf_info["layout"],
-        "layer1_items": shelf_info["layer1"],
-        "layer2_items": shelf_info["layer2"],
-        "total_items": shelf_info["total_items"]
-    }
-
-
-def _get_llm_recommendation_sync(context: dict) -> dict:
-    """使用大模型获取智能推荐"""
     try:
-        # 创建推荐分析的结构化prompt
-        prompt = f"""你是智能购物助手，需要根据用户需求分析并推荐最合适的商品。
-
-用户需求："{context['user_query']}"
-
-当前货架信息：
-第一层商品：{', '.join([f"{item}(位置{i+1})" for i, item in enumerate(context['layer1_items'])])}
-第二层商品：{', '.join([f"{item}(位置{i+5})" for i, item in enumerate(context['layer2_items'])])}
-
-详细商品信息：
-{_format_items_for_llm(context['shelf_layout'])}
-
-请分析用户需求并推荐最佳商品。考虑因素：
-1. 用户的具体需求（解渴、充饥、提神、价格敏感等）
-2. 商品的功能特性和价格
-3. 用户可能的偏好
-
-请严格按以下JSON格式回复（不要包含其他文字）：
-{{
-    "recommended_item": "推荐的商品名称",
-    "position_id": 商品位置ID数字,
-    "reasoning": "推荐理由（简洁说明为什么选择这个商品）"
-}}"""
-
-        # 创建临时的LLM代理进行分析
-        analyzer = GeminiAgent(enable_tools=False)  # 不使用工具，仅用于文本分析
-        
-        # 同步调用LLM分析 (简化版本)
-        import asyncio
-        result = asyncio.run(analyzer.process_text(prompt))
-        
-        if not result["success"]:
-            return {
+        # 验证货架状态
+        if not world_state.shelf_scanned:
+            error_result = {
                 "success": False,
-                "message": "推荐分析失败",
-                "error": result.get("error", "LLM分析错误")
+                "message": "请先扫描货架",
+                "error": "货架尚未扫描"
             }
+            print(f"[函数返回] {error_result['message']}")
+            return error_result
         
-        # 解析LLM返回的JSON
-        try:
-            # 提取JSON部分
-            response_text = result["text"].strip()
-            if "```json" in response_text:
-                json_start = response_text.find("```json") + 7
-                json_end = response_text.find("```", json_start)
-                json_text = response_text[json_start:json_end].strip()
-            elif "{" in response_text and "}" in response_text:
-                json_start = response_text.find("{")
-                json_end = response_text.rfind("}") + 1
-                json_text = response_text[json_start:json_end]
-            else:
-                json_text = response_text
-            
-            recommendation = json.loads(json_text)
-            
-            return {
-                "success": True,
-                "recommended_item": recommendation["recommended_item"],
-                "position_id": recommendation["position_id"],
-                "reasoning": recommendation["reasoning"]
-            }
-            
-        except json.JSONDecodeError as e:
-            return {
+        # 检查机器人忙碌状态
+        if world_state.robot_busy:
+            error_result = {
                 "success": False,
-                "message": f"推荐结果解析失败：{result['text']}",
-                "error": f"JSON解析错误: {str(e)}"
+                "message": "机器人正忙，请稍候",
+                "error": "机器人正忙"
             }
-    
-    except Exception as e:
-        return {
-            "success": False,
-            "message": "推荐分析过程中发生错误",
-            "error": str(e)
-        }
-
-
-def _format_items_for_llm(shelf_layout: dict) -> str:
-    """格式化商品信息供LLM分析"""
-    formatted_items = []
-    for pos_id, item_data in shelf_layout.items():
-        item_text = f"位置{pos_id}: {item_data['item_name']} - {item_data['price']}元\n   描述: {item_data['description']}"
-        formatted_items.append(item_text)
-    return "\n\n".join(formatted_items)
-
-
-def _execute_recommendation(recommendation: dict) -> dict:
-    """执行LLM推荐的购买操作"""
-    try:
-        item_name = recommendation["recommended_item"]  
-        position_id = recommendation["position_id"]
-        reasoning = recommendation["reasoning"]
+            print(f"[函数返回] {error_result['message']}")
+            return error_result
         
-        # 执行抓取操作（内部函数，不暴露给Gemini）
-        grab_result = _internal_grab_item(item_name, position_id)
-        
-        if grab_result["success"]:
-            return {
+        # 直接操作world_state属性进行抓取
+        with world_state.lock:
+            # 验证位置和商品
+            if position_id not in world_state.shelf_layout:
+                error_result = {
+                    "success": False,
+                    "message": f"无效的位置ID: {position_id}",
+                    "error": f"无效的位置ID: {position_id}"
+                }
+                print(f"[函数返回] {error_result['message']}")
+                return error_result
+            
+            item = world_state.shelf_layout[position_id]
+            if item.status != ItemStatus.ON_SHELF:
+                error_result = {
+                    "success": False,
+                    "message": f"位置{position_id}没有可抓取的商品",
+                    "error": f"位置{position_id}没有可抓取的商品"
+                }
+                print(f"[函数返回] {error_result['message']}")
+                return error_result
+            
+            if item.item_name != item_name:
+                error_result = {
+                    "success": False,
+                    "message": f"位置{position_id}的商品是{item.item_name}，不是{item_name}",
+                    "error": f"商品不匹配"
+                }
+                print(f"[函数返回] {error_result['message']}")
+                return error_result
+            
+            # 执行抓取：ON_SHELF -> ON_CHECKOUT_ZONE
+            world_state.robot_busy = True
+            item.status = ItemStatus.ON_CHECKOUT_ZONE
+            world_state.checkout_items.append(item_name)
+            world_state.robot_busy = False
+            
+            success_result = {
                 "success": True,
-                "message": grab_result["message"],
+                "message": f"成功抓取{item_name}并放置到结账区",
                 "item_name": item_name,
-                "position_id": position_id,
-                "price": grab_result["price"],
-                "reasoning": reasoning
+                "price": item.price,
+                "position_id": position_id
             }
-        else:
-            return grab_result
-            
+            print(f"[函数返回] 成功抓取{item_name}，价格{item.price}元")
+            return success_result
+        
     except Exception as e:
-        return {
+        error_result = {
             "success": False,
-            "message": "执行推荐操作失败",
+            "message": f"抓取操作中发生错误：{str(e)}",
             "error": str(e)
         }
+        print(f"[函数返回] {error_result['message']}")
+        return error_result
 
-
-def _internal_grab_item(item_name: str, position_id: int) -> dict:
-    """内部抓取函数，不暴露给Gemini"""
-    result = world_state.execute_grasp_and_drop(position_id, item_name)
-    
-    if result["success"]:
-        result["message"] = f"成功抓取{result['item_name']}，价格{result['price']}元，已放入结账区。"
-    
-    return result
 
 
 def get_checkout_summary() -> dict:
@@ -261,3 +176,12 @@ def get_checkout_summary() -> dict:
     
     print(f"[函数返回] {result['message']}")
     return result
+
+
+def get_robot_tools():
+    """获取机器人工具函数列表，用于Gemini Agent"""
+    return [
+        scan_shelf,
+        execute_grab, 
+        get_checkout_summary
+    ]

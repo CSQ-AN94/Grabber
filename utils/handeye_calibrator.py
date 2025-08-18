@@ -3,7 +3,7 @@ import numpy as np
 import time
 from controllers.arm_controller import ArmController
 from sensors.camera_thread import CameraThread
-from utils.state import WorldState
+from intelligence.world_state import WorldState
 
 class HandEyeCalibrator:
     """
