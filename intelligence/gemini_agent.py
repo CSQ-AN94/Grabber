@@ -10,19 +10,22 @@ from typing import Dict, Any
 
 from google import genai
 from google.genai import types
-from intelligence.robot_tools import get_robot_tools
+from utils.item_prices import get_item_price
+from intelligence import robot_tools
+
 logger = logging.getLogger(__name__)
 
 class GeminiAgent:
     """基于chat的Gemini代理"""
     
-    def __init__(self, enable_tools: bool = False, enable_voice: bool = False):
+    def __init__(self, enable_tools: bool = False, enable_voice: bool = False, use_real_hardware: bool = False):
         """初始化Gemini客户端"""
         try:
             self.client = genai.Client(api_key="AIzaSyDoRYk_kU61IIeEsCuAUaRft2iaeKXtoFE")
             self.model_name = "gemini-2.5-flash-lite"
             self.enable_tools = enable_tools
             self.enable_voice = enable_voice
+            self.use_real_hardware = use_real_hardware
             self.speech = None
             self.vad_manager = None
             
@@ -52,14 +55,11 @@ class GeminiAgent:
         try:
             # 根据是否启用工具构建不同的输入
             if self.enable_tools:
-                # 工具模式：获取货架信息并构建增强提示
-                from intelligence.world_state import get_world_state
-                world_state = get_world_state()
-                layout = world_state.query_full_layout()
-                context_text = self._format_world_context(layout)
+                # 工具模式：生成系统上下文
+                context_text = self._get_system_context()
                 enhanced_input = f"""用户说："{user_input}"
 
-[系统信息：当前货架状况]
+[系统信息]
 {context_text}"""
             else:
                 # 无工具模式：直接使用用户输入
@@ -82,92 +82,83 @@ class GeminiAgent:
             return {"success": False, "error": str(e), "text": ""}
     
     
-    def _format_world_context(self, world_context: dict) -> str:
-        """格式化世界状态为文本描述（仅在工具模式下使用）"""
-        if not world_context or not world_context.get("success", False):
-            return "货架尚未扫描。无法进行任何推荐，请先提示用户扫描货架。"
+    def _get_system_context(self) -> str:
+        """
+        生成系统上下文信息
+        格式: 货架上有: 商品列表  购物车内有: 商品列表
+        让大模型快速了解可用商品和购买历史
+        """
+        context_parts = []
         
-        # 构建带价格的货架布局
-        layout_items = world_context.get("layout", {})
+        # 货架商品信息 - 从robot_tools获取动态available_items
+        available_items = robot_tools.get_available_items()
+        if available_items:
+            shelf_items = []
+            for item in available_items:
+                price = get_item_price(item)
+                shelf_items.append(f"{item}({price}元)")
+            context_parts.append(f"货架上有: {', '.join(shelf_items)}")
+        else:
+            context_parts.append("货架上有: 空")
         
-        # 第一层
-        layer1 = []
-        for i, item in enumerate(world_context.get('layer1', [])):
-            pos_id = i + 1
-            if item == "空位":
-                layer1.append(f"位置{pos_id}:空位")
-            elif pos_id in layout_items:
-                price = layout_items[pos_id]['price']
-                layer1.append(f"位置{pos_id}:{item}({price}元)")
-            else:
-                layer1.append(f"位置{pos_id}:{item}")
+        # 购物车商品信息 - 从robot_tools获取动态购物车状态
+        cart_items = robot_tools.get_shopping_cart()
+        if cart_items:
+            cart_list = []
+            total_price = 0
+            for item_name, price in cart_items:
+                cart_list.append(f"{item_name}({price}元)")
+                total_price += price
+            context_parts.append(f"购物车内有: {', '.join(cart_list)}，总价: {total_price}元")
+        else:
+            context_parts.append("购物车内有: 空，总价: 0元")
         
-        # 第二层
-        layer2 = []
-        for i, item in enumerate(world_context.get('layer2', [])):
-            pos_id = i + 5
-            if item == "空位":
-                layer2.append(f"位置{pos_id}:空位")
-            elif pos_id in layout_items:
-                price = layout_items[pos_id]['price']
-                layer2.append(f"位置{pos_id}:{item}({price}元)")
-            else:
-                layer2.append(f"位置{pos_id}:{item}")
-        
-        layout_text = "当前货架布局：\n"
-        layout_text += f"第一层：{' | '.join(layer1)}\n"
-        layout_text += f"第二层：{' | '.join(layer2)}"
-        
-        return layout_text.strip()
+        return "\n".join(context_parts)
+    
+    def _get_tools(self):
+        """根据硬件模式选择工具集"""
+        if self.use_real_hardware:
+            return [robot_tools.scan_shelf, robot_tools.execute_grab]
+        else:
+            return [robot_tools.scan_shelf_mock, robot_tools.execute_grab_mock]
     
     def _get_system_instruction(self) -> str:
         """生成详细的系统指令"""
         base_instruction = """你是Grabber智能零售机器人。
 
-## 可用工具函数
+## 核心工具函数
 
 ### 1. scan_shelf()
-- 功能：扫描并初始化货架系统
-- 用途：用户首次提出购买意向时，自动执行该函数来初始化货架商品信息
+- 功能：实时扫描货架，获取当前或夹上所有可见商品的名称
+- 返回：商品列表（名称、位置、置信度）
 
-### 2. execute_grab(item_name: str, position_id: int)
-- 功能：执行抓取指定商品的操作
-- 用途：在明确用户需要的商品后驱动实体机器人系统从货架上抓取商品到购物车，并更新货架商品信息
-- 参数：商品名称和位置ID
-
-### 3. get_checkout_summary()
-- 功能：查看购物车清单和总价
-- 用途：用户提出结账时检查购物车内容和总价
+### 2. execute_grab(item_name: str) 
+- 功能：基于商品名称智能抓取
+- 内部流程：自动扫描 → 定位目标 → 执行抓取
+- 参数：商品名称（如"苹果"、"可口可乐"）
 
 ## 核心行为原则
 
 ### 1. 智能推荐与决策
 
-作为智能零售机器人，你拥有实时的货架布局，可以结合用户输入直接进行智能推荐和决策。
+作为智能零售机器人，你拥有实时的货架内容和购物车内容作为系统信息，可以结合用户输入对商品的理解直接进行智能推荐和决策。
 
 **推荐理由要求**：每次推荐商品时，请简要说明推荐理由，让用户理解为什么选择这个商品。
 
 参考示例：
-**高度明确意图**（直接执行）:
-- 具体商品名: "我要买苹果" → "好的！苹果位置在第二层，富含维生素，健康营养" → execute_grab("苹果", 6)
-- 明确位置+属性: "第一层最便宜的" → "第一层最便宜的是XX，只要X元，性价比很高" → execute_grab(最便宜商品, 位置)  
-- 复合条件明确: "便宜的解渴饮料" → "推荐农夫山泉，X元，纯净解渴，价格实惠" → execute_grab(商品, 位置)
+**明确商品需求**（直接执行）:
+- 具体商品名: "我要买苹果" → 系统信息中"苹果"存在 → execute_grab("苹果") → 回复"已抓取苹果到购物车"
+- 功能描述: "我想要解渴的饮料 → 根据系统信息推荐合适饮料，如农夫山泉矿泉水 → execute_grab("农夫山泉矿泉水") → 回复"已抓取农夫山泉矿泉水，帮您解渴"
 
-**中度明确意图**（推荐确认）:
-- 功能需求: "我渴了" → "推荐农夫山泉矿泉水，纯净解渴，只要2.5元。是否为您抓取？"
-- 类别需求: "给我个饮料" → "有可口可乐(经典口感，3.5元)和农夫山泉(纯净健康，2.5元)，您需要哪个？"
+**模糊需求**（引导用户决定）:
+- 询问商品: "有什么好吃的？" → 系统信息中多个相关物品存在 → 回复"货架上有苹果、薯片等好吃的，您想要哪个？"
+- 价格导向: "便宜的东西" → 系统信息中多个相关物品存在 → 回复"货架上有苹果、可乐等高性价比的商品，您想要哪个？"
 
-**低度明确意图**（信息收集）:
-- 模糊表达: "我想要点什么" → "您想要什么样的商品？我们有解渴的饮料、香脆的零食、新鲜的水果，都能为您推荐合适的。"
-- 缺乏条件: "便宜的东西" → "我们有很多实惠商品！橘子只要1.5元，农夫山泉2.5元，都很划算。您想要哪一类？"
+### 2. 推荐行为准则
 
-### 2. 推荐分析准则
-
-- 当进行商品推荐时，请严格结合提供的货架信息。
-- 禁止推荐不在货架上的商品。
-- 禁止推荐已经放到购物车的商品。
-- 只要货架上存在商品，就可以进行推荐。货架上的空位是正常的，不影响推荐。
-- 除了第一次扫描货架，其他时候不需要再执行scan_shelf()，除非用户明确要求。
+- 基于系统信息中货架内商品进行推荐，确保商品可用性
+- 使用execute_grab(item_name)驱动机器人进行抓取，系统会自动定位
+- 避免提及位置ID等技术细节，专注商品名称交互
 
 ### 3. 用户体验第一
 
@@ -189,7 +180,7 @@ class GeminiAgent:
                 temperature=0.8,
                 max_output_tokens=1024,
                 system_instruction=self._get_system_instruction(),
-                tools=get_robot_tools() if self.enable_tools else None
+                tools=self._get_tools() if self.enable_tools else None
             )
             
             # 创建chat会话
@@ -258,82 +249,3 @@ class GeminiAgent:
         if self.vad_manager:
             self.vad_manager.stop_listening()
             print("VAD监听已停止")
-
-
-def main():
-    """交互测试"""
-    print("=== Gemini Agent 智能对话系统 ===")
-    
-    # 选择工具模式
-    mode = input("选择模式 - 1:文本对话模式 2:机器人工具模式 (默认1): ").strip()
-    enable_tools = mode == "2"
-    
-    # 选择交互方式
-    voice_mode = input("选择交互方式 - 1:文本交互 2:语音交互 (默认1): ").strip()
-    enable_voice = voice_mode == "2"
-    
-    try:
-        agent = GeminiAgent(enable_tools=enable_tools, enable_voice=enable_voice)
-        
-        if not agent.is_ready():
-            print("代理初始化失败")
-            return
-        
-        mode_text = '机器人工具模式' if enable_tools else '文本对话模式'
-        voice_text = '语音交互' if enable_voice else '文本交互'
-        print(f"代理初始化成功 ({mode_text} + {voice_text})")
-        
-        if enable_voice:
-            # 语音交互模式
-            print("\n语音交互模式已启用")
-            print("- 系统将自动检测您的语音并智能回复")
-            print("- 请对着麦克风说话，AI会自动回应")
-            print("- 输入 'quit' 退出程序")
-            
-            # 启动VAD监听
-            agent.start_vad_listening()
-            
-            try:
-                while True:
-                    user_input = input("\n输入 'quit' 退出: ").strip()
-                    if user_input.lower() in ['quit', 'exit', 'q']:
-                        break
-            except KeyboardInterrupt:
-                print("\n程序被用户中断")
-            finally:
-                agent.stop_vad_listening()
-        else:
-            # 文本交互模式
-            print("\n文本交互模式")
-            print("- 直接输入文本与AI对话")
-            print("- 输入 'quit' 退出程序")
-            
-            while True:
-                user_input = input("\n请输入文本: ").strip()
-                if user_input.lower() in ['quit', 'exit', 'q']:
-                    break
-                
-                if not user_input:
-                    continue
-                
-                print("AI思考中...")
-                
-                # 处理文本输入
-                result = agent.process_text(user_input)
-                
-                if result["success"]:
-                    print(f"AI回复: {result['text']}")
-                else:
-                    print(f"处理失败: {result['error']}")
-    
-    except KeyboardInterrupt:
-        print("\n用户中断，退出")
-    except Exception as e:
-        print(f"发生错误: {e}")
-        import traceback
-        traceback.print_exc()
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    main()

@@ -6,7 +6,6 @@ from ultralytics import YOLO
 import time
 from PIL import Image, ImageDraw, ImageFont
 
-from intelligence.world_state import WorldState
 from sensors.camera_thread import CameraThread
 from utils.config import load_config
 
@@ -244,8 +243,6 @@ if __name__ == '__main__':
             print("Starting live video analysis... (Press 'q' in the window to stop)")
             
             # 初始化相机线程
-            # 这是vision.py与系统其他部分唯一的连接点
-            world_state = WorldState()
             camera_thread = CameraThread()
             camera_thread.start()
             

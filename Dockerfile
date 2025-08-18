@@ -36,10 +36,11 @@ RUN apt-get update && apt-get install -y \
     kmod \
     && rm -rf /var/lib/apt/lists/*
 
-# --- 单独安装PulseAudio工具（修复基镜像不一致问题）---
+# --- 安装完整PulseAudio-ALSA生态系统 ---
 RUN apt-get update && apt-get install -y \
     pulseaudio-utils \
     libpulsedsp \
+    libasound2-plugins \
     && rm -rf /var/lib/apt/lists/*
 
 # --- 设置工作目录并拷贝pip依赖相关文件 ---

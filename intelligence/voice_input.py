@@ -151,12 +151,13 @@ class VoiceInputManager:
             return
             
         try:
-            # 打开音频流
+            # 打开音频流 - 容器内使用设备8 (hw:1,7 16kHz DMIC)
             self.stream = self.audio.open(
                 format=self.format,
                 channels=self.channels,
                 rate=self.sample_rate,
                 input=True,
+                # input_device_index=8,  # 设备8: sof-hda-dsp (hw:1,7) 16kHz兼容
                 frames_per_buffer=self.chunk_size
             )
             

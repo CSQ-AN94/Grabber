@@ -5,8 +5,8 @@ services:
       context: . 
       dockerfile: Dockerfile 
       args: # 设置构建时需要的代理参数
-        http_proxy: "http://192.168.3.7:7897"
-        https_proxy: "http://192.168.3.7:7897"
+        http_proxy: "http://172.17.0.1:7897"
+        https_proxy: "http://172.17.0.1:7897"
     privileged: true  # 需要访问网络接口和CAN设备
     
     container_name: grabber_container
@@ -24,11 +24,12 @@ services:
       - /run/user/1000/pulse:/run/user/1000/pulse:rw # 挂载PulseAudio socket
       - /run/user/1000:/run/user/1000:rw # 挂载用户运行时目录
       - ~/.config/pulse:/root/.config/pulse:rw # 挂载PulseAudio用户配置
+      - /usr/share/alsa/pulse-alsa.conf:/root/.asoundrc:ro # 挂载Host的PulseAudio-ALSA配置
       
     # 这里定义容器运行时的环境变量
     environment:
-      - http_proxy=http://192.168.3.7:7897
-      - https_proxy=http://192.168.3.7:7897
+      - http_proxy=http://172.17.0.1:7897
+      - https_proxy=http://172.17.0.1:7897
       - no_proxy=localhost,127.0.0.1
       - DISPLAY=${DISPLAY}
       - XAUTHORITY=/root/.Xauthority
@@ -40,9 +41,6 @@ services:
       - PULSE_RUNTIME_PATH=/run/user/1000/pulse
       - PULSE_SERVER=unix:/run/user/1000/pulse/native
       - XDG_RUNTIME_DIR=/run/user/1000
-      # ALSA配置
-      - ALSA_PCM_CARD=1
-      - ALSA_PCM_DEVICE=0
 
     # 设置网络模式为host
     network_mode: "host"
