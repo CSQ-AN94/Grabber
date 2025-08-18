@@ -1,14 +1,11 @@
 import numpy as np
 import os
 import cv2
-import sys
 
-# 假设 vision.py 在 intelligence 目录下
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 from intelligence.vision import VisionAnalyzer
 
 # --- 配置 (Configuration) ---
-YOLO_MODEL_PATH = "../../intelligence/models/8_2.pt"
+YOLO_MODEL_PATH = os.path.join("intelligence/models/", "8_17.pt")
 
 # --- 相机内参 (Camera Intrinsics) ---
 MY_CAMERA_INTRINSICS = {
@@ -59,7 +56,8 @@ def get_all_targets(analyzer, color_image, depth_image):
         print("--- ❌ 错误: 传入了空的彩色图像。 ---")
         return []
 
-    detections = analyzer.analyze_image(color_image)
+    # 调用VisionAnalyzer时传入深度图，这样能直接获得深度信息
+    detections = analyzer.analyze_image(color_image, depth_image)
     if not detections:
         return []
 

@@ -7,37 +7,23 @@
 """
 
 import os
-import sys
 import time
 import numpy as np
 import cv2
 from datetime import datetime
 
-# --- 路径设置 ---
-# 将项目根目录添加到Python路径中，以便导入其他模块
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.append(PROJECT_ROOT)
-
-try:
-    from sensors.camera_thread import CameraThread
-    from utils.state import WorldState
-except ImportError as e:
-    print(f"--- ❌ 错误: 无法从 'sensors' 或 'utils' 导入模块: {e} ---")
-    # 这是一个致命错误，因为相机处理完全依赖这些模块
-    raise
+from sensors.camera_thread import CameraThread
 
 class Camera:
     """一个封装了相机功能的类"""
     def __init__(self):
-        self.state = None
         self.cam_thread = None
         self.is_initialized = False
 
     def initialize(self):
         """初始化相机线程并启动"""
         print("--- 正在初始化相机... ---")
-        self.state = WorldState()
-        self.cam_thread = CameraThread(self.state, None)
+        self.cam_thread = CameraThread()
 
         if not self.cam_thread.initialization_successful:
             print("--- ❌ 错误: 相机初始化失败。请检查相机连接。 ---")
@@ -63,7 +49,7 @@ class Camera:
             print(f"--- 错误: 无法创建保存目录 '{save_dir}': {e} ---")
             return None, None
 
-        color_image, depth_map_meters = self.state.get_latest_frames()
+        color_image, depth_map_meters = self.cam_thread.get_latest_frames()
 
         if color_image is None or depth_map_meters is None:
             print("--- 错误: 未能从相机捕获到有效的图像。 ---")

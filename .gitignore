@@ -95,18 +95,6 @@ venv.bak/
 ehthumbs.db
 Thumbs.db
 
-# Grabber specific files
-*.pcm
-*.wav
-*.mp3
-*.mp4
-*.avi
-demo.*
-error_info.txt
-voice_test_output.txt
-microphone_test.wav
-robot_log.txt
-
 # Log files
 logs/
 *.log
@@ -129,23 +117,9 @@ models/weights/
 # GPU cache
 .nv/
 
-# Python virtual environments
-grabber_env/
-robotics_env/
-
 # Docker volumes and data
 docker-data/
 .docker/
-
-# Test artifacts
-test_results/
-test_reports/
-test_data/
-
-# Local development files
-dev_*
-debug_*
-scratch_*
 
 # Cache directories
 .cache/
@@ -172,7 +146,6 @@ keys/
 certificates/
 CLAUDE.md
 .claude/
-references/
 
 # Runtime files
 *.pid

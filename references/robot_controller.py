@@ -3,23 +3,13 @@
 """
 统一的机械臂与夹爪控制器 (V3 - 重构版)
 """
-import sys
 import time
 import numpy as np
 import threading
 import math
 from scipy.spatial.transform import Rotation
 
-# 临时修复: 将睿尔曼SDK的实际路径添加到sys.path
-sdk_path = '/app/external/RM_API2/Python'
-if sdk_path not in sys.path:
-    sys.path.insert(0, sdk_path)
-
-try:
-    from Robotic_Arm.rm_robot_interface import *
-except ImportError:
-    print(f"错误: 无法从路径 {sdk_path} 导入睿尔曼SDK。请检查路径是否正确。")
-    sys.exit(1)
+from external.RM_API2.Python.Robotic_Arm.rm_robot_interface import *
 
 # --- 辅助函数: 6D位姿 <-> 4x4矩阵 ---
 def pose6d_to_matrix(pose):

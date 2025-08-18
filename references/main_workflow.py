@@ -24,28 +24,33 @@ import re
 AUTO_CONFIRM = True
 
 # --- 路径设置 ---
-sdk_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../external/RM_API2/Python'))
-sys.path.append(sdk_path)
-sys.path.append(os.path.join(os.path.dirname(__file__), 'test_arm'))
-sys.path.append(os.path.join(os.path.dirname(__file__), 'graspnet'))
-intelligence_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../intelligence'))
-sys.path.append(intelligence_path)
+# 修复路径指向正确的项目目录结构
+references_dir = os.path.dirname(__file__)  # /path/to/Grabber/references
+project_root = os.path.dirname(references_dir)  # /path/to/Grabber
+
+sdk_path = os.path.join(project_root, 'external/RM_API2/Python')
+intelligence_path = os.path.join(project_root, 'intelligence')
+references_path = os.path.join(project_root, 'references')
+
+sys.path.insert(0, sdk_path)
+sys.path.insert(0, intelligence_path)  
+sys.path.insert(0, references_path)
 
 # --- 导入模块 ---
-try:
-    from robot_controller import RobotController
-    from camera_handler import Camera
-    from yolo_model import get_all_targets, VisionAnalyzer
-except ImportError as e:
-    print(f"❌ 错误: 导入自定义模块失败: {e}")
-    sys.exit(1)
+from robot_controller import RobotController
+from camera_handler import Camera  
+from yolo_model import get_all_targets, VisionAnalyzer
 
-# --- 全局配置（保持不变） ---
-CONFIG_FILE_PATH = 'test_arm/simple_config.ini'
-YOLO_MODEL_PATH = os.path.join(intelligence_path, 'models/8_17.pt')
-CAPTURE_SAVE_DIR = 'graspnet/test_data_YOLO'
-DEFAULT_COLOR_PATH = 'graspnet/test_data_YOLO/888_color.png'
-DEFAULT_DEPTH_PATH = 'graspnet/test_data_YOLO/888_depth.png'
+# --- 全局配置（修复路径） ---
+# 创建临时配置和数据目录
+temp_dir = os.path.join(project_root, 'temp_grabber')
+os.makedirs(temp_dir, exist_ok=True)
+os.makedirs(os.path.join(temp_dir, 'test_data_YOLO'), exist_ok=True)
+
+YOLO_MODEL_PATH = os.path.join(intelligence_path, 'models/8_17.pt') 
+CAPTURE_SAVE_DIR = os.path.join(temp_dir, 'test_data_YOLO')
+DEFAULT_COLOR_PATH = os.path.join(temp_dir, 'test_data_YOLO/888_color.png')
+DEFAULT_DEPTH_PATH = os.path.join(temp_dir, 'test_data_YOLO/888_depth.png')
 
 # ====================== 新增：标签队列（供外部注入） ======================
 # 外部模块可调用 set_label_queue([...]) / push_label("red_bull") 来设置
@@ -131,14 +136,6 @@ def find_target_index_by_label(label: str, targets: list) -> int:
 
     return -1
 
-# ====================== 原有工具函数（保持不变） ======================
-def load_robot_config(config_path):
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(f"配置文件未找到: {config_path}")
-    config = configparser.ConfigParser()
-    config.read(config_path)
-    return config.get('robot', 'ip'), config.getint('robot', 'port')
-
 def find_center_most_target(targets, img_width, img_height):
     """从目标列表中找到最接近图像中心的目标"""
     if not targets:
@@ -215,8 +212,7 @@ def main():
             return
 
         # --- 步骤 2: 初始化机器人 & 进入主循环 ---
-        robot_ip, robot_port = load_robot_config(CONFIG_FILE_PATH)
-        robot = RobotController(robot_ip, robot_port)
+        robot = RobotController("192.168.1.18", 8080)
 
         global _label_queue
         while all_targets_coarse:
