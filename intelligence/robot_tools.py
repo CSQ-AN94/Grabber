@@ -103,15 +103,6 @@ def scan_shelf() -> Dict[str, Any]:
     print("[函数调用] scan_shelf() - 真实硬件扫描模式")
     
     try:
-        if not all([vision_analyzer, camera_thread, calibration, arm_controller]):
-            return {
-                "success": False,
-                "error": "硬件系统未完全初始化",
-                "message": "请检查硬件系统初始化状态",
-                "objects": [],
-                "count": 0
-            }
-        
         # 获取最新的相机帧
         color_frame, depth_frame = camera_thread.get_latest_frames()
         
@@ -249,39 +240,62 @@ def scan_shelf_mock() -> Dict[str, Any]:
 
 def execute_grab(item_name: str) -> Dict[str, Any]:
     """
-    真实硬件模式：完整的抓取流程
+    真实硬件模式：使用reference算法 + 统一硬件组件
     
-    流程：
-    1. 实时扫描货架获取所有商品
-    2. 定位目标商品
-    3. 计算抓取坐标
-    4. 执行抓取动作
+    特点：
+    1. 使用robot_tools.py中已初始化的硬件组件（避免重复初始化）
+    2. 保持reference的抓取算法逻辑（双阶段扫描、智能匹配等）
+    3. 无需重新初始化硬件，复用现有实例
     
     Args:
-        item_name: 要抓取的商品名称（如"苹果"、"可口可乐"）
+        item_name: 要抓取的商品名称（如"苹果"、"可口可乐"、"红牛"）
     
     Returns:
         dict: {
             "success": bool,
             "message": str,
             "item_name": str,
-            "grasp_position": [x,y,z]  # 抓取位置（如果成功）
+            "grasp_position": [x,y,z],  # 抓取位置
+            "price": float  # 商品价格
         }
     """
-    print(f"[函数调用] execute_grab(item_name='{item_name}') - 真实硬件抓取模式")
+    print(f"[函数调用] execute_grab(item_name='{item_name}')")
     
-    # TODO: 实现完整的抓取逻辑
-    # 1. 调用scan_shelf()获取实时商品信息
-    # 2. 在检测结果中查找目标商品
-    # 3. 调用机械臂控制器执行抓取
-    # 4. 返回抓取结果
+    # 检查硬件组件是否已初始化
+    if not all([vision_analyzer, camera_thread, calibration, arm_controller]):
+        return {
+            "success": False,
+            "message": "硬件系统未完全初始化，无法执行抓取",
+            "error": "硬件未初始化",
+            "item_name": item_name
+        }
     
-    return {
-        "success": False,
-        "message": f"真实硬件模式下execute_grab('{item_name}')功能开发中",
-        "error": "功能未实现",
-        "item_name": item_name
-    }
+    from references.enhanced_grab_interface import execute_grab_with_hardware
+    
+    print(f"[EnhancedGrab] 使用统一硬件组件执行reference抓取算法")
+    print(f"[EnhancedGrab] 目标商品: {item_name}")
+    
+    # 调用增强接口，传入统一硬件组件
+    result = execute_grab_with_hardware(
+        item_name=item_name,
+        vision_analyzer=vision_analyzer,
+        camera_thread=camera_thread,
+        calibration=calibration,
+        arm_controller=arm_controller
+    )
+    
+    # 如果成功，更新系统状态
+    if result.get("success"):
+        price = get_item_price(item_name)
+        add_item_to_cart(item_name, price)
+        remove_item_from_available(item_name)
+        
+        result["price"] = price
+        print(f"[Grab] 抓取成功，已更新系统状态")
+    else:
+        print(f"[Grab] 抓取失败: {result.get('message')}")
+    
+    return result
 
 def execute_grab_mock(item_name: str) -> Dict[str, Any]:
     """
