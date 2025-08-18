@@ -17,8 +17,6 @@ RUN apt-get update && apt-get install -y \
     tmux htop net-tools nmap tree xclip curl wget vim \
     python3-pip \
     python3-dev \
-    python3-venv \
-    python3-opencv \
     git \
     cmake \
     build-essential \

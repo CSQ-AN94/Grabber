@@ -59,4 +59,4 @@ llm:
 
 # 计算机视觉配置
 vision:
-  model_path: "intelligence/models/7_19.pt"  # YOLOv8模型路径
+  model_path: "intelligence/models/8_17.pt"  # YOLOv8模型路径

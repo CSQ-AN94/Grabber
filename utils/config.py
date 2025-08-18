@@ -12,7 +12,7 @@ import yaml
 import logging
 import numpy as np
 from dataclasses import dataclass
-from typing import List, Optional, Any, Dict
+from typing import List, Any
 
 
 class ConfigError(Exception):
@@ -75,59 +75,11 @@ class LLMConfig:
     """大语言模型配置"""
     gemini_api_key: str
     model_name: str
-    zhipu_api_key: Optional[str] = None
-    glm_model_name: Optional[str] = "glm-4v-flash"
-
-
-@dataclass
-class AgentConfig:
-    """智能Agent配置"""
-    audio_sample_rate: int  # 采样率，单位：Hz
-    audio_channels: int     # 声道数
-    audio_chunk_size: int   # 音频块大小
-
 
 @dataclass
 class VisionConfig:
     """计算机视觉配置"""
     model_path: str  # YOLOv8模型路径
-
-
-@dataclass
-class ItemConfig:
-    """单个物品配置"""
-    z_offset: float        # Z轴偏移量，单位：米
-    roll: float            # 抓取姿态roll角，单位：弧度  
-    pitch: float           # 抓取姿态pitch角，单位：弧度
-    yaw: float             # 抓取姿态yaw角，单位：弧度
-    gripper_openness: float # 夹爪张开度，0.0=完全闭合，1.0=完全张开
-    price: float           # 物品价格，单位：元
-
-
-@dataclass
-class ItemsConfig:
-    """物品配置容器"""
-    items: Dict[str, ItemConfig]
-    
-    def get_item_config(self, item_name: str) -> Optional[ItemConfig]:
-        """获取指定物品配置"""
-        return self.items.get(item_name)
-    
-    def get_all_items(self) -> List[str]:
-        """获取所有物品名称"""
-        return list(self.items.keys())
-    
-    def get_item_price(self, item_name: str) -> Optional[float]:
-        """获取物品价格"""
-        item_config = self.get_item_config(item_name)
-        return item_config.price if item_config else None
-
-
-@dataclass
-class SystemConfig:
-    """系统配置"""
-    debug_mode: bool
-    environment: str
 
 
 @dataclass
@@ -140,10 +92,7 @@ class AppConfig:
     calibration: CalibrationConfig
     speech: SpeechConfig
     llm: LLMConfig
-    agent: AgentConfig
     vision: VisionConfig
-    items: ItemsConfig
-    system: SystemConfig
 
 
 def get_env_var(section: str, key: str, fallback: Any = None) -> Any:
@@ -254,54 +203,11 @@ def load_config(path: str = 'config.yaml') -> AppConfig:
             model_name=_get_value(llm_data, 'model_name', 'llm')
         )
         
-        # 解析Agent配置
-        agent_data = config_data.get('agent', {})
-        agent = AgentConfig(
-            audio_sample_rate=_get_value(agent_data, 'audio_sample_rate', 'agent', int),
-            audio_channels=_get_value(agent_data, 'audio_channels', 'agent', int),
-            audio_chunk_size=_get_value(agent_data, 'audio_chunk_size', 'agent', int)
-        )
-        
         # 解析视觉配置
         vision_data = config_data.get('vision', {})
         vision = VisionConfig(
             model_path=_get_value(vision_data, 'model_path', 'vision')
         )
-        
-        # 解析系统配置
-        system_data = config_data.get('system', {})
-        system = SystemConfig(
-            debug_mode=_get_value(system_data, 'debug_mode', 'system', bool),
-            environment=_get_value(system_data, 'environment', 'system')
-        )
-        
-        # 解析物品配置
-        items_data = config_data.get('items', {})
-        items_dict = {}
-        
-        for item_name, item_data in items_data.items():
-            try:
-                items_dict[item_name] = ItemConfig(
-                    z_offset=float(item_data['z_offset']),
-                    roll=float(item_data['roll']),
-                    pitch=float(item_data['pitch']),
-                    yaw=float(item_data['yaw']),
-                    gripper_openness=float(item_data['gripper_openness']),
-                    price=float(item_data['price'])
-                )
-            except (KeyError, ValueError, TypeError) as e:
-                logging.warning(f"Failed to parse config for item '{item_name}': {e}")
-                # 使用默认配置
-                items_dict[item_name] = ItemConfig(
-                    z_offset=0.0,
-                    roll=3.14159,
-                    pitch=0.0,
-                    yaw=0.0,
-                    gripper_openness=0.8,
-                    price=0.0
-                )
-        
-        items = ItemsConfig(items=items_dict)
         
         # 创建主配置对象
         config = AppConfig(
@@ -312,18 +218,10 @@ def load_config(path: str = 'config.yaml') -> AppConfig:
             calibration=calibration,
             speech=speech,
             llm=llm,
-            agent=agent,
             vision=vision,
-            items=items,
-            system=system
         )
         
-        # 验证配置
-        validate_config(config)
-        
         logging.info(f"Successfully loaded configuration from {path}")
-        logging.info(f"Loaded {len(items.items)} item configurations")
-        
         return config
         
     except yaml.YAMLError as e:
@@ -333,100 +231,3 @@ def load_config(path: str = 'config.yaml') -> AppConfig:
             raise
         else:
             raise ConfigError(f"Failed to load configuration: {e}")
-
-
-def validate_config(config: AppConfig) -> None:
-    """
-    验证配置的有效性
-    
-    Args:
-        config: 待验证的配置对象
-        
-    Raises:
-        ConfigError: 配置验证失败
-    """
-    # 验证IP地址格式
-    import socket
-    try:
-        socket.inet_aton(config.connections.arm_ip)
-    except socket.error:
-        raise ConfigError(f"Invalid arm IP address: {config.connections.arm_ip}")
-    
-    # 验证端口范围
-    if not (1 <= config.connections.arm_port <= 65535):
-        raise ConfigError(f"Invalid arm port: {config.connections.arm_port}")
-    
-    # 验证关节姿态长度
-    for pose_name, pose in [
-        ("home_pose", config.arm.home_pose),
-        ("scanning_pose", config.arm.scanning_pose),
-        ("zero_pose", config.arm.zero_pose),
-        ("dropoff_pose", config.arm.dropoff_pose),
-        ("checkout_scan_pose", config.arm.checkout_scan_pose)
-    ]:
-        if len(pose) != 6:
-            raise ConfigError(f"Invalid {pose_name}: must have 6 joint angles, got {len(pose)}")
-    
-    # 验证笛卡尔位姿长度
-    for pose_name, pose in [
-        ("scanning_pose_cartesian", config.arm.scanning_pose_cartesian),
-        ("zero_pose_cartesian", config.arm.zero_pose_cartesian),
-        ("dropoff_pose_cartesian", config.arm.dropoff_pose_cartesian),
-        ("checkout_scan_pose_cartesian", config.arm.checkout_scan_pose_cartesian)
-    ]:
-        if len(pose) != 6:
-            raise ConfigError(f"Invalid {pose_name}: must have 6 elements, got {len(pose)}")
-    
-    # 验证手眼标定矩阵
-    if config.calibration.T_end_to_camera.shape != (4, 4):
-        raise ConfigError("T_end_to_camera must be a 4x4 matrix")
-    
-    # 验证环境类型
-    valid_environments = ["development", "production", "testing"]
-    if config.system.environment not in valid_environments:
-        raise ConfigError(f"Invalid environment: {config.system.environment}")
-    
-    # 验证物品配置
-    for item_name, item_config in config.items.items.items():
-        # 验证夹爪张开度范围
-        if not (0.0 <= item_config.gripper_openness <= 1.0):
-            raise ConfigError(f"Invalid gripper_openness for {item_name}: must be between 0.0 and 1.0")
-        
-        # 验证价格非负
-        if item_config.price < 0:
-            raise ConfigError(f"Invalid price for {item_name}: must be non-negative")
-
-
-def setup_logging(log_level: str = "INFO") -> None:
-    """设置默认日志系统"""
-    # 创建日志目录
-    log_dir = "logs"
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir, exist_ok=True)
-    
-    # 配置日志
-    log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    
-    handlers = []
-    
-    # 控制台处理器
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(logging.Formatter(log_format))
-    handlers.append(console_handler)
-    
-    # 文件处理器
-    from logging.handlers import RotatingFileHandler
-    file_handler = RotatingFileHandler(
-        "logs/grabber.log",
-        maxBytes=10485760,  # 10MB
-        backupCount=5,
-        encoding='utf-8'
-    )
-    file_handler.setFormatter(logging.Formatter(log_format))
-    handlers.append(file_handler)
-    
-    logging.basicConfig(
-        level=getattr(logging, log_level.upper()),
-        handlers=handlers,
-        format=log_format
-    )

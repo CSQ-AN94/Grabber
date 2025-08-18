@@ -172,7 +172,7 @@ def _play_audio(pcm_file: str) -> bool:
         audio_array = np.frombuffer(audio_data, dtype=np.int16)
         audio_float = audio_array.astype(np.float32) / 32768.0
         
-        sd.play(audio_float, samplerate=16000, blocking=True)
+        sd.play(audio_float, samplerate=16000, device=11, blocksize=512, blocking=True)  # 使用pulse设备，指定blocksize解决容器噪音
         return True
     except Exception:
         return False

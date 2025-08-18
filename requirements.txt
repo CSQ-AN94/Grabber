@@ -1,34 +1,37 @@
+# 核心AI框架
 torch
 torchvision
 ultralytics
+google-genai
+
+# 计算机视觉
 opencv-python
-opencv-contrib-python
 numpy<2.0
 scipy
-google-genai
+Pillow
+
+# 音频处理 
 sounddevice
-soundfile
+PyAudio
+SpeechRecognition
+webrtcvad-wheels
+
+# 机器人通信
 pyserial
 pymodbus
-Pillow
-pandas
+python-can
+
+# 网络和配置
 websockets
 websocket-client
 requests
 pyyaml
-scikit-learn
-matplotlib
-pytest
-pytest-asyncio
-black
+
+# 构建依赖
 pybind11==2.11.0
 pybind11-global==2.11.0
-av
-pygame
-pynput
 wheel
 wrapt<1.16.0,>=1.12.0
-python-can
-PyAudio
-SpeechRecognition
-webrtcvad-wheels
+
+# 数据处理
+pandas

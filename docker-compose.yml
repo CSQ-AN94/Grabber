@@ -45,9 +45,6 @@ services:
     # 设置网络模式为host
     network_mode: "host"
 
-    group_add:
-      - audio # 添加音频组权限
-
     # 让容器可以访问GPU
     deploy:
       resources:
