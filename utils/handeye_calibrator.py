@@ -3,7 +3,6 @@ import numpy as np
 import time
 from controllers.arm_controller import ArmController
 from sensors.camera_thread import CameraThread
-from intelligence.world_state import WorldState
 
 class HandEyeCalibrator:
     """
@@ -12,12 +11,10 @@ class HandEyeCalibrator:
     """
     def __init__(self, 
                  arm_controller: ArmController, 
-                 camera_thread: CameraThread,
-                 world_state: WorldState):
+                 camera_thread: CameraThread):
         
         self.arm_controller = arm_controller
         self.camera_thread = camera_thread
-        self.world_state = world_state  # 用于获取最新图像和机械臂状态
         self.marker_length = 0.034  # 34mm
         self.marker_separation = 0.0085 # 8.5mm
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_250)
@@ -72,7 +69,7 @@ class HandEyeCalibrator:
             [-56.56, -14.48, 94.95, 106.97, -56.71, -108.64],
             [-84.03, -19.96, 125.28, 44.45, -27.95, -108.67],
             [7.8, -15.82, -56.08, 92.68, -108.5, -108.66],
-            
+
         ]
         
         base_to_end_transforms = []

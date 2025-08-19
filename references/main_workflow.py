@@ -37,9 +37,9 @@ sys.path.insert(0, intelligence_path)
 sys.path.insert(0, references_path)
 
 # --- 导入模块 ---
-from robot_controller import RobotController
-from camera_handler import Camera  
-from yolo_model import get_all_targets, VisionAnalyzer
+from references.robot_controller import RobotController
+from references.camera_handler import Camera  
+from references.yolo_model import get_all_targets, VisionAnalyzer
 
 # --- 全局配置（修复路径） ---
 # 创建临时配置和数据目录

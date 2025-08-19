@@ -16,14 +16,13 @@ from scipy.spatial.transform import Rotation
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.config import load_config
-from intelligence.world_state import WorldState
 from utils.calibration import Calibration
 from utils.handeye_calibrator import HandEyeCalibrator
 from sensors.camera_thread import CameraThread, DisplayMode
 from controllers.arm_controller import ArmController
 
 
-def run_handeye_calibration(arm: ArmController, cam_thread: CameraThread, state: WorldState):
+def run_handeye_calibration(arm: ArmController, cam_thread: CameraThread):
     """运行完整的手眼标定过程"""
     print("\n" + "*"*60)
     print("WARNING: Starting Hand-Eye Calibration Process.")
@@ -38,7 +37,7 @@ def run_handeye_calibration(arm: ArmController, cam_thread: CameraThread, state:
         return
         
     try:
-        calibrator = HandEyeCalibrator(arm, cam_thread, state)
+        calibrator = HandEyeCalibrator(arm, cam_thread)
         calibrator.run_calibration_process()
         print("\n--- Hand-Eye Calibration Process Finished ---")
         print("Please check `config.yaml` for the updated `T_end_to_camera` matrix.")
@@ -145,7 +144,6 @@ def run_calibration_tests():
     try:
         # 加载配置
         app_config = load_config()
-        state = WorldState()
         
         # 启动相机线程
         cam_thread = CameraThread()
@@ -185,7 +183,7 @@ def run_calibration_tests():
             elif choice == '2':
                 collect_calibration_poses_interactively(arm, exit_event)
             elif choice == '3':
-                run_handeye_calibration(arm, cam_thread, state)
+                run_handeye_calibration(arm, cam_thread)
                 # 重新加载配置以获取更新的标定矩阵
                 try:
                     app_config = load_config()

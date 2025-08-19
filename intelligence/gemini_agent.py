@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-重构后的Gemini Agent - 适配chat机制
-使用新的google-genai库实现chat会话
+Gemini Agent
 """
 
 import logging
@@ -10,13 +9,13 @@ from typing import Dict, Any
 
 from google import genai
 from google.genai import types
-from utils.item_prices import get_item_price
+from utils.items_info import get_item_price
 from intelligence import robot_tools
 
 logger = logging.getLogger(__name__)
 
 class GeminiAgent:
-    """基于chat的Gemini代理"""
+    """基于自动函数调用和chat连续调用的Gemini代理"""
     
     def __init__(self, enable_tools: bool = False, enable_voice: bool = False, use_real_hardware: bool = False):
         """初始化Gemini客户端"""
@@ -97,9 +96,9 @@ class GeminiAgent:
             for item in available_items:
                 price = get_item_price(item)
                 shelf_items.append(f"{item}({price}元)")
-            context_parts.append(f"货架上有: {', '.join(shelf_items)}")
+            context_parts.append(f"有: {', '.join(shelf_items)}")
         else:
-            context_parts.append("货架上有: 空")
+            context_parts.append("货架上有: 空，提示用户先允许你扫描货架来获知最新商品信息")
         
         # 购物车商品信息 - 从robot_tools获取动态购物车状态
         cart_items = robot_tools.get_shopping_cart()
@@ -129,8 +128,7 @@ class GeminiAgent:
 ## 核心工具函数
 
 ### 1. scan_shelf()
-- 功能：实时扫描货架，获取当前或夹上所有可见商品的名称
-- 返回：商品列表（名称、位置、置信度）
+- 功能：实时扫描货架，以注重获取当前货架上所有可见商品信息
 
 ### 2. execute_grab(item_name: str) 
 - 功能：基于商品名称智能抓取
@@ -146,6 +144,9 @@ class GeminiAgent:
 **推荐理由要求**：每次推荐商品时，请简要说明推荐理由，让用户理解为什么选择这个商品。
 
 参考示例：
+**货架为空**（引导用户）:
+- "货架上没有商品，我可以扫描货架以获取最新商品信息，好么？" → scan_shelf() → 回复"已扫描货架，当前可见商品有：苹果、橘子、可乐等"
+
 **明确商品需求**（直接执行）:
 - 具体商品名: "我要买苹果" → 系统信息中"苹果"存在 → execute_grab("苹果") → 回复"已抓取苹果到购物车"
 - 功能描述: "我想要解渴的饮料 → 根据系统信息推荐合适饮料，如农夫山泉矿泉水 → execute_grab("农夫山泉矿泉水") → 回复"已抓取农夫山泉矿泉水，帮您解渴"
@@ -156,6 +157,7 @@ class GeminiAgent:
 
 ### 2. 推荐行为准则
 
+- 用户第一次使用前，提示用户先扫描货架
 - 基于系统信息中货架内商品进行推荐，确保商品可用性
 - 使用execute_grab(item_name)驱动机器人进行抓取，系统会自动定位
 - 避免提及位置ID等技术细节，专注商品名称交互

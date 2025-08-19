@@ -8,7 +8,7 @@
 
 import cv2
 from typing import Dict, Any
-from utils.item_prices import get_item_price
+from utils.items_info import get_item_price
 
 # 全局变量 - 硬件系统组件（由main.py初始化）
 vision_analyzer = None
@@ -22,7 +22,7 @@ shopping_cart = []  # 购物车内商品列表，格式：[("商品名", 价格)
 
 def set_hardware_components(vision_analyzer_instance=None, camera_thread_instance=None, 
                           calibration_instance=None, arm_controller_instance=None):
-    """设置硬件组件实例（由main.py调用）"""
+    """设置硬件组件实例（由main_agent.py调用）"""
     global vision_analyzer, camera_thread, calibration, arm_controller
     vision_analyzer = vision_analyzer_instance
     camera_thread = camera_thread_instance  
@@ -81,7 +81,8 @@ def clear_shopping_cart():
 
 def scan_shelf() -> Dict[str, Any]:
     """
-    真实硬件模式：使用YOLO进行目标检测 + 3D坐标转换
+    扫描货架以跟踪当前可见商品信息。这是了解货架上商品信息的关键步骤，必须在第一次推荐前执行。
+    如果系统信息提示货架上为空，提示用户先命令你扫描货架。
     
     Returns:
         dict: {
@@ -91,9 +92,6 @@ def scan_shelf() -> Dict[str, Any]:
                     "name": str,                    # 商品名称
                     "confidence": float,            # 检测置信度  
                     "box": [x1,y1,x2,y2],          # 边界框坐标
-                    "center_3d_base": [x,y,z],     # 基座坐标系下的3D中心点
-                    "pixel_coords": [u,v],         # 像素坐标
-                    "depth": float                  # 深度值（米）
                 }
             ],
             "message": str,
@@ -129,35 +127,6 @@ def scan_shelf() -> Dict[str, Any]:
                 "confidence": det["confidence"], 
                 "box": det["box"]
             }
-            
-            # 如果有深度信息，计算3D坐标（基座坐标系）
-            if "center_depth_m" in det and det["center_depth_m"] > 0:
-                obj_info["depth"] = det["center_depth_m"]
-                
-                # 计算边界框中心的像素坐标
-                x1, y1, x2, y2 = det["box"]
-                center_u = (x1 + x2) / 2
-                center_v = (y1 + y2) / 2
-                
-                try:
-                    # 获取当前机械臂位姿
-                    T_base_to_end = arm_controller.get_base_to_end_pose_matrix()
-                    
-                    # 使用标定系统转换像素+深度到基座坐标系3D点
-                    pixel_coords = (center_u, center_v)
-                    base_3d_point = calibration.transform_pixel_to_world(
-                        pixel_coords, det["center_depth_m"], T_base_to_end
-                    )
-                    
-                    if base_3d_point is not None:
-                        obj_info["center_3d_base"] = base_3d_point.tolist()
-                        obj_info["pixel_coords"] = [center_u, center_v]
-                    else:
-                        print(f"[Vision] 警告: 物体 {det['name']} 坐标转换失败")
-                        
-                except Exception as e:
-                    print(f"[Vision] 坐标转换错误: {e}")
-                    obj_info["center_3d"] = [center_u, center_v, det["center_depth_m"]]
             
             objects.append(obj_info)
         
@@ -240,12 +209,7 @@ def scan_shelf_mock() -> Dict[str, Any]:
 
 def execute_grab(item_name: str) -> Dict[str, Any]:
     """
-    真实硬件模式：使用reference算法 + 统一硬件组件
-    
-    特点：
-    1. 使用robot_tools.py中已初始化的硬件组件（避免重复初始化）
-    2. 保持reference的抓取算法逻辑（双阶段扫描、智能匹配等）
-    3. 无需重新初始化硬件，复用现有实例
+    驱动机械臂完成抓取货架上指定名称的商品到购物车的全流程
     
     Args:
         item_name: 要抓取的商品名称（如"苹果"、"可口可乐"、"红牛"）
@@ -260,16 +224,7 @@ def execute_grab(item_name: str) -> Dict[str, Any]:
         }
     """
     print(f"[函数调用] execute_grab(item_name='{item_name}')")
-    
-    # 检查硬件组件是否已初始化
-    if not all([vision_analyzer, camera_thread, calibration, arm_controller]):
-        return {
-            "success": False,
-            "message": "硬件系统未完全初始化，无法执行抓取",
-            "error": "硬件未初始化",
-            "item_name": item_name
-        }
-    
+
     from references.enhanced_grab_interface import execute_grab_with_hardware
     
     print(f"[EnhancedGrab] 使用统一硬件组件执行reference抓取算法")
@@ -280,7 +235,6 @@ def execute_grab(item_name: str) -> Dict[str, Any]:
         item_name=item_name,
         vision_analyzer=vision_analyzer,
         camera_thread=camera_thread,
-        calibration=calibration,
         arm_controller=arm_controller
     )
     

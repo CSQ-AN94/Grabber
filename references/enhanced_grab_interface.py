@@ -15,8 +15,8 @@ import time
 import math
 from typing import Dict, Any, Optional, List
 
-# 导入reference中的核心算法
-from main_workflow import (
+# 导入references中的核心算法
+from references.main_workflow import (
     find_target_index_by_label, find_center_most_target
 )
 
@@ -31,15 +31,14 @@ def get_next_placement_index():
     return index
 
 def execute_grab_with_hardware(item_name: str, 
-                              vision_analyzer, camera_thread, calibration, arm_controller) -> Dict[str, Any]:
+                              vision_analyzer, camera_thread, arm_controller) -> Dict[str, Any]:
     """
     抓取执行函数 - 使用统一硬件组件实现reference算法逻辑
     
     Args:
-        item_name: 要抓取的商品名称
+        item_name: 要抓取的商品名称，英文
         vision_analyzer: 视觉分析器实例
         camera_thread: 相机线程实例
-        calibration: 标定系统实例
         arm_controller: 机械臂控制器实例
     
     Returns:
@@ -63,7 +62,7 @@ def execute_grab_with_hardware(item_name: str,
         
         # === 第3步：基座旋转对准（使用统一硬件 + reference算法）===
         print("--- 第3步：基座旋转对准 ---")
-        touch_pose, pre_grasp_pose = calculate_grasp_poses(selected_target, arm_controller, calibration)
+        touch_pose, pre_grasp_pose = calculate_grasp_poses(selected_target, arm_controller)
         if not touch_pose:
             return {"success": False, "message": "抓取位姿计算失败", "item_name": item_name}
         
@@ -84,7 +83,7 @@ def execute_grab_with_hardware(item_name: str,
         
         # === 第5步：执行抓取序列（使用统一硬件）===
         print("--- 第5步：执行抓取序列 ---")
-        final_touch_pose, final_pre_grasp_pose = calculate_grasp_poses(final_target, arm_controller, calibration)
+        final_touch_pose, final_pre_grasp_pose = calculate_grasp_poses(final_target, arm_controller)
         if not final_touch_pose:
             return {"success": False, "message": "最终位姿计算失败", "item_name": item_name}
         
@@ -192,7 +191,7 @@ def smart_target_selection(item_name: str, targets: List[Dict]) -> Optional[Dict
     return None
 
 
-def calculate_grasp_poses(target: Dict, arm_controller, calibration) -> tuple:
+def calculate_grasp_poses(target: Dict, arm_controller) -> tuple:
     """使用reference位姿计算算法（calibration参数保持接口一致性）"""
     try:
         coords_3d = target.get('coords_3d', target.get('center_3d_base'))

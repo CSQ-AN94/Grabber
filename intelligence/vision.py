@@ -98,7 +98,8 @@ class VisionAnalyzer:
                 # 获取类别名称
                 class_id = int(box.cls[0])
                 class_name = self.model.names[class_id]
-                
+                print(f'发现：{class_name}\n')
+
                 # 获取置信度
                 confidence = float(box.conf[0])
                 
@@ -106,8 +107,28 @@ class VisionAnalyzer:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 
                 # 创建一个字典来存储这个物体的信息
+                # 临时： 英文输出映射到中文
+                product_chinese_name = {
+                    'mineral_water': '矿泉水',
+                    'Orea': '奥利奥饼干',
+                    'chips': '乐事薯片',
+                    'Sprite': '雪碧',
+                    'Milk': '纯牛奶',
+                    'Orange': '橘子',
+                    'Nescafe': '雀巢咖啡',     
+                    'toothpaste': '牙膏',        
+                    'tissue': '纸巾',
+                    'apple': '苹果', 
+                    'Coke': '百事可乐', 
+                    'Coca_Coke': '可口可乐',
+                    'red_bull'     : '红牛', 
+                    'Nutri_express' : '营养快线',
+                    'Ad calcium milk': 'AD钙奶'
+                }
+                if class_name not in product_chinese_name:
+                    continue
                 obj_data = {
-                    "name": class_name,
+                    "name": product_chinese_name.get(class_name),
                     "confidence": confidence,
                     "box": [x1, y1, x2, y2]
                 }

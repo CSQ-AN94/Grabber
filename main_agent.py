@@ -164,6 +164,12 @@ def main():
                 vision_analyzer, camera_thread, calibration, arm_controller
             )
             robot_tools.init_real_hardware_mode()
+
+            # 临时测试
+            robot_tools.scan_shelf()
+            robot_tools.execute_grab("红牛")
+            return 0
+        
         else:
             # Mock模式：初始化预设商品
             robot_tools.init_mock_mode()
