@@ -1,309 +1,295 @@
 """
-语音输入系统 - VAD版本
-支持语音活动检测(VAD)的实时语音识别
+语音输入系统 - Agent集成版本
+支持完整的唤醒词->TTS响应->录音->识别->Gemini Agent工作流程
 """
 
+import os
+import sys
 import threading
 import time
 import logging
+from enum import Enum
 from typing import Callable, Optional
 import speech_recognition as sr
-import webrtcvad
 import pyaudio
 import numpy as np
+import pvporcupine
+
+# 添加项目路径
+project_root = os.path.dirname(os.path.dirname(__file__))
+sys.path.insert(0, project_root)
+
+from intelligence.speech import Speech
 
 logger = logging.getLogger(__name__)
 
-
-class VADDetector:
-    """VAD检测器 - 检测语音活动"""
-    
-    def __init__(self, sample_rate: int = 16000, frame_duration: int = 30):
-        """
-        初始化VAD检测器
-        
-        Args:
-            sample_rate: 采样率 (8000, 16000, 32000, 48000)
-            frame_duration: 帧长度毫秒 (10, 20, 30)
-        """
-        self.sample_rate = sample_rate
-        self.frame_duration = frame_duration
-        self.frame_bytes = int(sample_rate * frame_duration / 1000) * 2  # 16-bit
-        
-        # 创建VAD实例 (aggressiveness: 0-3, 3最激进)
-        self.vad = webrtcvad.Vad(1)
-        
-        # VAD状态
-        self.is_speech_active = False
-        self.speech_frames = []
-        self.silence_frames = 0
-        self.speech_frames_required = 4  # 连续4帧检测到语音才认为开始(120ms)
-        self.silence_frames_required = 10  # 连续10帧静音才认为结束(300ms)
-        
-    def process_frame(self, frame_data: bytes) -> bool:
-        """
-        处理音频帧，返回是否检测到语音活动
-        
-        Args:
-            frame_data: 音频帧数据
-            
-        Returns:
-            bool: True表示检测到语音活动变化
-        """
-        if len(frame_data) != self.frame_bytes:
-            return False
-        
-        try:
-            # VAD检测
-            is_speech = self.vad.is_speech(frame_data, self.sample_rate)
-            
-            if is_speech:
-                self.speech_frames.append(frame_data)
-                self.silence_frames = 0
-                
-                # 检测语音开始
-                if not self.is_speech_active and len(self.speech_frames) >= self.speech_frames_required:
-                    self.is_speech_active = True
-                    logger.info("VAD: 检测到语音开始")
-                    return True
-                    
-            else:
-                self.silence_frames += 1
-                
-                # 检测语音结束
-                if self.is_speech_active and self.silence_frames >= self.silence_frames_required:
-                    self.is_speech_active = False
-                    self.speech_frames = []
-                    logger.info("VAD: 检测到语音结束")
-                    return True
-                    
-        except Exception as e:
-            logger.error(f"VAD处理帧错误: {e}")
-            
-        return False
-
-
-class VoiceRecognizer:
-    """语音识别器"""
-    
-    def __init__(self):
-        self.recognizer = sr.Recognizer()
-        # 调整环境噪音
-        try:
-            with sr.Microphone(sample_rate=16000) as source:
-                logger.info("正在调整麦克风环境噪音...")
-                self.recognizer.adjust_for_ambient_noise(source, duration=1)
-                logger.info("环境噪音调整完成")
-        except Exception as e:
-            logger.warning(f"环境噪音调整失败: {e}")
-    
-    def recognize_audio(self, audio_data: sr.AudioData) -> str:
-        """识别音频数据"""
-        try:
-            text = self.recognizer.recognize_google(audio_data, language='zh-CN')
-            logger.info(f"语音识别结果: {text}")
-            return text
-        except sr.UnknownValueError:
-            logger.warning("语音识别：无法理解音频")
-            return ""
-        except sr.RequestError as e:
-            logger.error(f"语音识别服务错误: {e}")
-            return ""
-
+class VoiceState(Enum):
+    """语音系统状态"""
+    WAITING_WAKE_WORD = "waiting_wake_word"      # 待机状态，监听唤醒词
+    RESPONDING = "responding"                     # TTS播报"我在"
+    RECORDING = "recording"                       # 录音用户语音
+    PROCESSING = "processing"                     # 语音识别处理
+    WAITING_AGENT = "waiting_agent"              # 等待Gemini Agent响应
 
 class VoiceInputManager:
-    """VAD语音输入管理器"""
+    """Agent集成语音输入管理器 - 状态机版本"""
     
-    def __init__(self, on_speech_detected: Optional[Callable[[str], None]] = None):
+    def __init__(self, 
+                 on_speech_detected: Optional[Callable[[str], None]] = None,
+                 on_agent_response_ready: Optional[Callable[[], None]] = None):
         """
         初始化语音输入管理器
         
         Args:
-            on_speech_detected: 语音识别结果回调函数
+            on_speech_detected: 语音识别结果回调函数 - 将文本发送给Gemini Agent
+            on_agent_response_ready: Agent响应完成回调 - 恢复唤醒词监听
         """
         self.on_speech_detected = on_speech_detected
+        self.on_agent_response_ready = on_agent_response_ready
         
-        # 音频参数
-        self.sample_rate = 16000
-        self.chunk_size = 480  # 30ms at 16kHz
+        # 状态管理
+        self.current_state = VoiceState.WAITING_WAKE_WORD
+        self.state_lock = threading.Lock()
+        
+        self.keywords = ['小浦']
+
+        self.porcupine = pvporcupine.create(
+            access_key="jWbXv+CcgzxJJs5O8y4NoGsT8+B1szn6U8G2FKzB5D0uYgymSuYjyg==",
+            model_path="intelligence/models/porcupine_params_zh.pv",
+            keyword_paths=['intelligence/models/小浦_zh_linux_v3_0_0.ppn'],
+            keywords=self.keywords,
+            sensitivities=[0.6]
+        )
+        
+        # 获取音频参数
+        self.sample_rate = self.porcupine.sample_rate
+        self.chunk_size = self.porcupine.frame_length
         self.format = pyaudio.paInt16
         self.channels = 1
         
-        # 组件
-        self.vad_detector = VADDetector(self.sample_rate)
-        self.voice_recognizer = VoiceRecognizer()
+        # 语音识别器
+        self.recognizer = sr.Recognizer()
+        
+        # TTS系统
+        self.tts = Speech()
         
         # 音频流
         self.audio = pyaudio.PyAudio()
         self.stream = None
         
         # 控制变量
-        self.is_listening = False
-        self.is_recording = False
-        self.is_paused = False  # 暂停标志
-        self.listen_thread = None
+        self.is_active = False
+        self.main_thread = None
         self.audio_frames = []
         
-    def start_listening(self):
-        """开始持续监听"""
-        if self.is_listening:
-            logger.warning("已经在监听中")
-            return
-            
-        try:
-            # 打开音频流 - 容器内使用设备8 (hw:1,7 16kHz DMIC)
-            self.stream = self.audio.open(
-                format=self.format,
-                channels=self.channels,
-                rate=self.sample_rate,
-                input=True,
-                # input_device_index=8,  # 设备8: sof-hda-dsp (hw:1,7) 16kHz兼容
-                frames_per_buffer=self.chunk_size
-            )
-            
-            self.is_listening = True
-            self.listen_thread = threading.Thread(target=self._listen_loop, daemon=True)
-            self.listen_thread.start()
-            
-            logger.info("VAD监听已启动")
-            
-        except Exception as e:
-            logger.error(f"启动监听失败: {e}")
-            self.stop_listening()
-    
-    def stop_listening(self):
-        """停止监听"""
-        self.is_listening = False
+        # 录音配置
+        self.recording_timeout = 5  # 固定录音时长5秒
         
+    def start_system(self):
+        """启动语音系统"""
+        if self.is_active:
+            return
+        
+        self.stream = self.audio.open(
+            format=self.format,
+            channels=self.channels,
+            rate=self.sample_rate,
+            input=True,
+            frames_per_buffer=self.chunk_size
+        )
+        
+        self.is_active = True
+        self.current_state = VoiceState.WAITING_WAKE_WORD
+        self.main_thread = threading.Thread(target=self._main_loop, daemon=True)
+        self.main_thread.start()
+        print(f"[语音系统] 启动完成，当前状态: {self.current_state.value}")
+    
+    def stop_system(self):
+        """停止语音系统"""
+        self.is_active = False
         if self.stream:
             self.stream.stop_stream()
             self.stream.close()
             self.stream = None
-            
-        if self.listen_thread:
-            self.listen_thread.join(timeout=2)
-            
-        logger.info("VAD监听已停止")
+        print("[语音系统] 已停止")
     
-    def pause_listening(self):
-        """暂停监听（用于语音播报期间）"""
-        self.is_paused = True
-        logger.debug("VAD监听已暂停")
+    def agent_response_complete(self):
+        """Agent响应完成，恢复唤醒词监听"""
+        with self.state_lock:
+            if self.current_state == VoiceState.WAITING_AGENT:
+                self.current_state = VoiceState.WAITING_WAKE_WORD
+                print("[语音系统] Agent响应完成，恢复唤醒词监听")
     
-    def resume_listening(self):
-        """恢复监听"""
-        self.is_paused = False
-        logger.debug("VAD监听已恢复")
-    
-    def _listen_loop(self):
-        """监听循环"""
-        while self.is_listening:
+    def _main_loop(self):
+        """主循环 - 状态机核心"""
+        print("[语音系统] 主循环启动")
+        
+        while self.is_active:
             try:
-                # 读取音频数据（即使暂停也要读取，避免缓冲区溢出）
                 audio_chunk = self.stream.read(self.chunk_size, exception_on_overflow=False)
                 
-                # 如果暂停，跳过处理
-                if self.is_paused:
-                    time.sleep(0.01)
-                    continue
+                with self.state_lock:
+                    current_state = self.current_state
                 
-                # VAD检测
-                speech_change = self.vad_detector.process_frame(audio_chunk)
-                
-                if speech_change:
-                    if self.vad_detector.is_speech_active:
-                        # 开始录音
-                        self._start_recording()
-                    else:
-                        # 结束录音并识别
-                        self._stop_recording_and_recognize()
-                
-                # 如果在录音中，保存音频数据
-                if self.is_recording:
-                    self.audio_frames.append(audio_chunk)
+                if current_state == VoiceState.WAITING_WAKE_WORD:
+                    self._handle_wake_word_detection(audio_chunk)
+                elif current_state == VoiceState.RECORDING:
+                    self._handle_recording(audio_chunk)
+                # 其他状态不处理音频
                     
             except Exception as e:
-                logger.error(f"监听循环错误: {e}")
-                time.sleep(0.01)  # 避免错误循环
+                print(f"[语音系统] 主循环错误: {e}")
+                time.sleep(0.1)
     
-    def _start_recording(self):
-        """开始录音"""
-        if not self.is_recording:
-            self.is_recording = True
-            self.audio_frames = []
-            # 包含VAD检测到的语音帧
-            self.audio_frames.extend(self.vad_detector.speech_frames)
-            logger.info("开始录音...")
-    
-    def _stop_recording_and_recognize(self):
-        """停止录音并进行语音识别"""
-        if not self.is_recording:
-            return
-            
-        self.is_recording = False
-        logger.info("录音结束，开始识别...")
+    def _handle_wake_word_detection(self, audio_chunk):
+        """处理唤醒词检测"""
+        audio_frame = np.frombuffer(audio_chunk, dtype=np.int16)
+        keyword_index = self.porcupine.process(audio_frame)
         
-        # 处理音频数据
-        if self.audio_frames:
+        if keyword_index >= 0:
+            print(f"[语音系统] 检测到唤醒词: {self.keywords[keyword_index]}")
+            self._transition_to_responding()
+    
+    def _transition_to_responding(self):
+        """转换到响应状态"""
+        with self.state_lock:
+            self.current_state = VoiceState.RESPONDING
+        
+        print("[语音系统] 状态转换: 响应中...")
+        
+        # 在单独线程中播报"我在"
+        threading.Thread(target=self._play_response_and_start_recording, daemon=True).start()
+    
+    def _play_response_and_start_recording(self):
+        """播报响应并开始录音"""
+        try:
+            # TTS播报"我在"
+            success = self.tts.say("我在")
+            if success:
+                print("[语音系统] TTS播报完成")
+            else:
+                print("[语音系统] TTS播报失败")
+            
+            # 转换到录音状态
+            with self.state_lock:
+                self.current_state = VoiceState.RECORDING
+                self.audio_frames = []
+            
+            print(f"[语音系统] 开始录音，时长: {self.recording_timeout}秒")
+            
+            # 设置录音超时
+            threading.Timer(self.recording_timeout, self._stop_recording).start()
+            
+        except Exception as e:
+            print(f"[语音系统] 响应处理错误: {e}")
+            # 出错回到等待状态
+            with self.state_lock:
+                self.current_state = VoiceState.WAITING_WAKE_WORD
+    
+    def _handle_recording(self, audio_chunk):
+        """处理录音"""
+        self.audio_frames.append(audio_chunk)
+    
+    def _stop_recording(self):
+        """停止录音并开始处理"""
+        with self.state_lock:
+            if self.current_state != VoiceState.RECORDING:
+                return
+            self.current_state = VoiceState.PROCESSING
+        
+        print("[语音系统] 录音结束，开始语音识别...")
+        threading.Thread(target=self._process_speech, daemon=True).start()
+    
+    def _process_speech(self):
+        """处理语音识别"""
+        if not self.audio_frames:
+            print("[语音系统] 没有录音数据")
+            with self.state_lock:
+                self.current_state = VoiceState.WAITING_WAKE_WORD
+            return
+        
+        try:
             # 合并音频数据
             audio_data = b''.join(self.audio_frames)
-            
-            # 转换为AudioData对象
             audio_array = np.frombuffer(audio_data, dtype=np.int16)
-            audio_data_sr = sr.AudioData(
-                audio_array.tobytes(), 
-                self.sample_rate, 
-                2  # 16-bit
-            )
+            audio_data_sr = sr.AudioData(audio_array.tobytes(), self.sample_rate, 2)
             
-            # 异步识别
-            threading.Thread(
-                target=self._recognize_async, 
-                args=(audio_data_sr,), 
-                daemon=True
-            ).start()
+            # 语音识别
+            text = self.recognizer.recognize_google(audio_data_sr, language='zh-CN')
+            
+            print(f"[语音系统] 识别结果: '{text}'")
+            
+            # 转换到等待Agent状态
+            with self.state_lock:
+                self.current_state = VoiceState.WAITING_AGENT
+            
+            # 发送给Agent
+            if text and self.on_speech_detected:
+                self.on_speech_detected(text)
+            else:
+                # 没有识别结果，回到等待状态
+                with self.state_lock:
+                    self.current_state = VoiceState.WAITING_WAKE_WORD
+                    
+        except Exception as e:
+            print(f"[语音系统] 语音识别失败: {e}")
+            # 识别失败，回到等待状态
+            with self.state_lock:
+                self.current_state = VoiceState.WAITING_WAKE_WORD
         
-        self.audio_frames = []
-    
-    def _recognize_async(self, audio_data: sr.AudioData):
-        """异步语音识别"""
-        text = self.voice_recognizer.recognize_audio(audio_data)
-        if text and self.on_speech_detected:
-            self.on_speech_detected(text)
+        finally:
+            self.audio_frames = []
     
     def __del__(self):
         """析构函数"""
-        self.stop_listening()
-        if hasattr(self, 'audio'):
+        try:
+            self.stop_system()
+            self.porcupine.delete()
             self.audio.terminate()
+        except:
+            pass
 
 
 def main():
-    """测试VAD语音输入"""
-    print("=== VAD语音输入测试 ===")
+    """测试完整的Agent语音交互流程"""
+    print("=== Agent语音系统测试 ===")
     
-    def on_speech(text: str):
-        print(f"识别到语音: {text}")
+    def on_speech_detected(text: str):
+        """模拟发送给Gemini Agent"""
+        print(f"[模拟Agent] 收到用户语音: '{text}'")
+        print("[模拟Agent] 正在处理...")
+        
+        # 模拟Agent处理时间 (3秒)
+        def agent_processing():
+            time.sleep(3)
+            print("[模拟Agent] 处理完成，发送响应")
+            # 通知语音系统Agent响应完成
+            manager.agent_response_complete()
+        
+        threading.Thread(target=agent_processing, daemon=True).start()
     
-    # 创建管理器
-    manager = VoiceInputManager(on_speech_detected=on_speech)
+    def on_agent_ready():
+        """Agent响应完成回调"""
+        print("[语音系统] Agent响应完成，系统准备好下次交互")
+    
+    manager = VoiceInputManager(
+        on_speech_detected=on_speech_detected,
+        on_agent_response_ready=on_agent_ready
+    )
+    
+    manager.start_system()
+    print("\n[测试] 语音系统已启动")
+    print("[测试] 说 '小浦' 激活系统")
+    print("[测试] 系统会播报'我在'然后录音10秒")
+    print("[测试] 按Ctrl+C退出测试")
     
     try:
-        # 开始监听
-        manager.start_listening()
-        print("正在监听语音，请说话...")
-        print("按 Ctrl+C 退出")
-        
-        # 保持运行
         while True:
-            time.sleep(0.1)
-            
+            time.sleep(1)
     except KeyboardInterrupt:
-        print("\n退出VAD测试")
-    finally:
-        manager.stop_listening()
+        print("\n[测试] 退出测试")
+        manager.stop_system()
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     main()

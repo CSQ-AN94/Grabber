@@ -139,6 +139,7 @@ coverage.xml
 *.data
 large_files/
 data/
+*.pcm
 
 # Sensitive information
 secrets/
@@ -146,6 +147,7 @@ keys/
 certificates/
 CLAUDE.md
 .claude/
+docs/
 
 # Runtime files
 *.pid

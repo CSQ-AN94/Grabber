@@ -26,7 +26,7 @@ class GeminiAgent:
             self.enable_voice = enable_voice
             self.use_real_hardware = use_real_hardware
             self.speech = None
-            self.vad_manager = None
+            self.voice_manager = None
             
             # 初始化语音系统（如果启用）
             if self.enable_voice:
@@ -34,8 +34,11 @@ class GeminiAgent:
                 from intelligence.voice_input import VoiceInputManager
                 
                 self.speech = Speech()
-                self.vad_manager = VoiceInputManager(on_speech_detected=self._on_voice_input)
-                logger.info("语音系统初始化成功 (VAD+TTS)")
+                self.voice_manager = VoiceInputManager(
+                    on_speech_detected=self._on_voice_input,
+                    on_agent_response_ready=self._on_agent_ready
+                )
+                logger.info("语音系统初始化成功")
             
             # 创建chat会话
             self._create_chat_session()
@@ -123,7 +126,7 @@ class GeminiAgent:
     
     def _get_system_instruction(self) -> str:
         """生成详细的系统指令"""
-        base_instruction = """你是Grabber智能零售机器人。
+        base_instruction = """你是名为“小浦”的智能零售机器人。
 
 ## 核心工具函数
 
@@ -203,51 +206,55 @@ class GeminiAgent:
     
     
     def _say_response(self, text: str):
-        """语音播报响应（期间暂停VAD监听）"""
+        """语音播报响应（状态机会自动管理唤醒词检测）"""
         if not self.enable_voice or not self.speech or not text:
             return
         
         try:
-            # 暂停VAD监听，避免检测到自己的语音
-            if self.vad_manager:
-                self.vad_manager.pause_listening()
-            
-            # 语音播报
             self.speech.say(text)
+            print(f"[Agent] 播报完成: {text}")
             
         except Exception as e:
             logger.warning(f"语音播报失败: {e}")
-        finally:
-            # 恢复VAD监听
-            if self.vad_manager:
-                self.vad_manager.resume_listening()
+        
+        # 通知语音系统Agent响应完成，可以恢复唤醒词监听
+        if self.voice_manager:
+            self.voice_manager.agent_response_complete()
     
     def _on_voice_input(self, text: str):
-        """VAD语音输入回调处理"""
+        """语音输入回调处理 - 接收来自唤醒词系统的用户语音"""
         if text:
-            print(f"\n[用户说] {text}")
-            print("AI思考中...")
+            print(f"\n[Agent] 收到用户语音: '{text}'")
+            print("[Agent] AI思考中...")
             
             # 处理语音输入
             result = self.process_text(text)
             
             if result["success"]:
-                print(f"[AI回复] {result['text']}")
-                # 语音播报（会自动暂停VAD监听）
-                self._say_response(result['text'])
+                response_text = result['text']
+                print(f"[Agent] AI响应: {response_text}")
+                # 语音播报并通知状态机系统
+                self._say_response(response_text)
             else:
-                print(f"[处理失败] {result['error']}")
+                print(f"[Agent] 处理失败: {result['error']}")
+                # 处理失败也要恢复唤醒词监听
+                if self.voice_manager:
+                    self.voice_manager.agent_response_complete()
     
-    def start_vad_listening(self):
-        """启动VAD监听"""
-        if self.vad_manager:
-            self.vad_manager.start_listening()
-            print("VAD监听已启动，请说话...")
+    def _on_agent_ready(self):
+        """Agent响应完成回调 - 可选的额外处理"""
+        print("[Agent] 响应处理完成，系统准备下次交互")
+    
+    def start_voice_system(self):
+        """启动语音系统（唤醒词状态机）"""
+        if self.voice_manager:
+            self.voice_manager.start_system()
+            print("[Agent] 语音系统已启动，说 '小浦' 激活对话")
         else:
-            print("VAD未启用")
+            print("[Agent] 语音系统未启用")
     
-    def stop_vad_listening(self):
-        """停止VAD监听"""
-        if self.vad_manager:
-            self.vad_manager.stop_listening()
-            print("VAD监听已停止")
+    def stop_voice_system(self):
+        """停止语音系统"""
+        if self.voice_manager:
+            self.voice_manager.stop_system()
+            print("[Agent] 语音系统已停止")

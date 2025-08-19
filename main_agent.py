@@ -118,8 +118,8 @@ def main():
     
     # 1. 选择工具模式
     print("\n请选择运行模式:")
-    print("1. 文本对话模式 (无工具调用)")
-    print("2. 机器人工具模式 (支持工具调用)")
+    print("1. 无工具调用")
+    print("2. 支持工具调用")
     mode_choice = input("选择模式 (1-2, 默认1): ").strip()
     enable_tools = mode_choice == "2"
     
@@ -127,7 +127,7 @@ def main():
     use_real_hardware = False
     if enable_tools:
         print("\n请选择工具执行模式:")
-        print("1. Mock调试模式 (模拟工具响应，适合Agent调试)")
+        print("1. Mock调试模式 (调试Agent)")
         print("2. 真实硬件模式 (连接实际机器人，执行真实操作)")
         hardware_choice = input("选择模式 (1-2, 默认1): ").strip()
         use_real_hardware = hardware_choice == "2"
@@ -135,7 +135,7 @@ def main():
     # 3. 选择交互方式
     print("\n请选择交互方式:")
     print("1. 文本交互")
-    print("2. 语音交互 (VAD自动检测)")
+    print("2. 语音交互")
     voice_choice = input("选择交互方式 (1-2, 默认1): ").strip()
     enable_voice = voice_choice == "2"
     
@@ -175,7 +175,7 @@ def main():
             robot_tools.init_mock_mode()
         
         # 6. 初始化Agent
-        mode_text = '机器人工具模式' if enable_tools else '文本对话模式'
+        mode_text = '支持工具调用' if enable_tools else '无工具调用'
         hardware_text = '真实硬件' if use_real_hardware else 'Mock调试'
         voice_text = '语音交互' if enable_voice else '文本交互'
         
@@ -198,22 +198,26 @@ def main():
         if enable_voice:
             # 语音交互模式
             print("\n=== 语音交互模式 ===")
-            print("- 系统将自动检测您的语音并智能回复")
-            print("- 请对着麦克风说话，AI会自动回应")
-            print("- 输入 'quit' 退出程序")
+            print("- 说 '小浦' 激活系统，机器人会播报'我在'并开始录音")
+            print("- 录音5秒后自动识别并发送给AI")
+            print("- AI回复后语音播报，然后重新等待唤醒词")
+            print("- 完整流程：唤醒词 → TTS响应 → 录音 → 识别 → AI处理 → TTS播报")
+            print("- 按Ctrl+C退出程序")
             
-            # 启动VAD监听
-            agent.start_vad_listening()
+            # 启动语音系统
+            agent.start_voice_system()
             
             try:
+                print(f"\n[系统] 语音系统运行中...")
+                print(f"[系统] 当前时间: {time.strftime('%H:%M:%S')}")
+                print(f"[系统] 说 '小浦' 开始对话")
+                
                 while True:
-                    user_input = input("\n输入 'quit' 退出: ").strip()
-                    if user_input.lower() in ['quit', 'exit', 'q']:
-                        break
+                    time.sleep(1)  # 保持程序运行
             except KeyboardInterrupt:
-                print("\n程序被用户中断")
+                print("\n[系统] 程序被用户中断")
             finally:
-                agent.stop_vad_listening()
+                agent.stop_voice_system()
         else:
             # 文本交互模式
             print("\n=== 文本交互模式 ===")
