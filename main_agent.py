@@ -35,12 +35,12 @@ def initialize_hardware_systems():
     if VisionAnalyzer is None:
         raise RuntimeError("硬件模块导入失败，无法启动真实硬件模式")
     
-    config = load_config()
+    app_config = load_config()
     
     # 1. 初始化视觉分析器
     print("1. 初始化YOLO视觉分析器...")
     try:
-        model_path = config.vision.model_path
+        model_path = app_config.vision.model_path
         vision_analyzer = VisionAnalyzer(model_path=model_path)
         print(f"YOLO模型加载成功: {model_path}")
     except Exception as e:
@@ -77,7 +77,7 @@ def initialize_hardware_systems():
             raise ValueError("无法获取相机内参")
         
         # 创建标定对象
-        T_end_to_camera = config.calibration.T_end_to_camera
+        T_end_to_camera = app_config.calibration.T_end_to_camera
         calibration = Calibration(T_end_to_camera, K, dist)
         print("手眼标定矩阵配置成功")
         
@@ -88,8 +88,7 @@ def initialize_hardware_systems():
     # 4. 初始化机械臂控制器
     print("4. 初始化Realman机械臂...")
     try:
-        arm_controller = ArmController(config.arm.ip_address)
-        print(f"机械臂连接成功 (IP: {config.arm.ip_address})")
+        arm_controller = ArmController(app_config.connections, app_config.arm, app_config.gripper)
         
         # 验证机械臂状态
         _ = arm_controller.get_base_to_end_pose_matrix()
