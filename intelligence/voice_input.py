@@ -83,7 +83,7 @@ class VoiceInputManager:
         self.audio_frames = []
         
         # 录音配置
-        self.recording_timeout = 3  # 固定录音时长3秒
+        self.recording_timeout = 5  # 固定录音时长5秒
         
     def start_system(self):
         """启动语音系统"""

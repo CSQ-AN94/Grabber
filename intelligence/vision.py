@@ -6,8 +6,16 @@ from ultralytics import YOLO
 import time
 from PIL import Image, ImageDraw, ImageFont
 
+import sys
+import os
+
+# 添加项目路径
+project_root = os.path.dirname(os.path.dirname(__file__))
+sys.path.insert(0, project_root)
+
 from sensors.camera_thread import CameraThread
 from utils.config import load_config
+
 
 def draw_chinese_text(image, text, position, font_path, font_size, color):
     """
@@ -111,7 +119,7 @@ class VisionAnalyzer:
                 product_chinese_name = {
                     'mineral_water': '矿泉水',
                     'Orea': '奥利奥饼干',
-                    'chips': '乐事薯片',
+                    'chips': '薯片',
                     'Sprite': '雪碧',
                     'Milk': '纯牛奶',
                     'Orange': '橘子',

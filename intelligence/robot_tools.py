@@ -117,25 +117,26 @@ def scan_shelf() -> Dict[str, Any]:
         
         # 使用视觉分析器检测物体
         detections = vision_analyzer.analyze_image(color_rgb, depth_frame)
+        print(f"[函数调用] 视觉分析器检测到 {detections} ")
         
         # 转换检测结果格式，添加3D坐标信息
         objects = []
+        available_items = []  # 清空当前available_items
         for det in detections:
             obj_info = {
                 "name": det["name"],
                 "confidence": det["confidence"], 
                 "box": det["box"]
             }
-            
             objects.append(obj_info)
+            available_items.append(det["name"])  # 更新available_items
         
-        # 更新available_items（真实硬件模式）
-        detected_items = list(set([obj["name"] for obj in objects]))
-        update_available_items(detected_items)
+        print(f"[函数调用] 更新available_items: {available_items}")
+        update_available_items(available_items)
         
         # 构建返回结果
         if objects:
-            message = f"扫描完成，检测到{len(objects)}个商品：{', '.join(detected_items)}"
+            message = f"扫描完成，检测到{len(objects)}个商品：{', '.join(available_items)}"
         else:
             message = "扫描完成，未检测到任何商品"
         

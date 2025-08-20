@@ -40,7 +40,7 @@ def test_audio_recording(recognizer, mic):
     print("\n3. 测试音频录制和识别:")
     
     try:
-        print("   请说话 (3秒录音窗口)...")
+        print("   请说话 (5秒录音窗口)...")
         with mic as source:
             start_time = time.time()
             audio = recognizer.listen(source, timeout=3, phrase_time_limit=3)
