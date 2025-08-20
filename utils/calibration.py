@@ -5,71 +5,58 @@ import cv2
 
 class Calibration:
     """
-    坐标变换核心类
+    坐标变换核心类 - 简洁版本
     
-    职责：将相机坐标系下发现的物体坐标精确转换到基座坐标系
-    手眼标定：T_end_to_camera 表示 end_effector到相机光心的变换关系
-    输出坐标：直接是end_effector应到达的位置，无需额外offset
+    职责：像素坐标 → 基座坐标系3D点
     """
-    def __init__(self, T_end_to_camera, camera_matrix=None, distortion_coeffs=None):
+    def __init__(self, camera_matrix, distortion_coeffs):
         """
         Args:
-            T_end_to_camera (np.ndarray): end_effector到相机光心的4x4变换矩阵
             camera_matrix (np.ndarray): 相机内参矩阵 K
             distortion_coeffs (np.ndarray): 相机畸变系数
         """
-        self.T_end_to_camera = T_end_to_camera
         self.K = camera_matrix
         self.dist = distortion_coeffs
-
-    def transform_pixel_to_world(self, pixel_coords, depth_in_meters, T_base_to_end_effector):
+        self.T_cam_end = np.array([
+            [ 0,  1,  0, -0.08289],
+            [-1,  0,  0,  0.02375],
+            [ 0,  0,  1, -0.12   ],
+            [ 0,  0,  0,  1.     ]
+        ])
+    
+    def get_point_base(self, u, v, d, T_end_base):
         """
-        像素坐标到基座坐标系转换
-        
-        变换链：基座 ← end_effector ← 相机 ← 目标点
-        手眼标定：T_end_to_camera 表示 end_effector到相机的变换矩阵
+        像素坐标转基座坐标
         
         Args:
-            pixel_coords (tuple): (u, v) color像素坐标
-            depth_in_meters (float): 该像素点的深度值，单位为米  
-            T_base_to_end_effector (np.ndarray): 基座到end_effector的4x4变换矩阵
-
+            u (float): 像素坐标 x
+            v (float): 像素坐标 y
+            d (float): 深度值
+            T_end_base (np.ndarray): end_effector到base的4x4变换矩阵
+            
         Returns:
-            np.ndarray: 基座坐标系下的3D点 [x, y, z]，end_effector应到达的位置
+            np.ndarray: 基座坐标系中的3D点 [x, y, z]
         """
-        if self.K is None or self.dist is None:
-            raise ValueError("Camera intrinsics not initialized")
-        
-        if depth_in_meters <= 0:
+        if d <= 0:
             return None
-
-        # 1. 像素坐标去畸变
-        u, v = float(pixel_coords[0]), float(pixel_coords[1])
-        distorted_pixel = np.array([[[u, v]]], dtype=np.float32)
-        undistorted_pixel = cv2.undistortPoints(distorted_pixel, self.K, self.dist, P=self.K)
-        u_undist, v_undist = undistorted_pixel[0, 0]
-
-        # 2. 反投影到相机坐标系（构建目标点）
-        fx, fy = self.K[0, 0], self.K[1, 1] 
-        cx, cy = self.K[0, 2], self.K[1, 2]
+            
+        # 1. 像素去畸变
+        undist = cv2.undistortPoints(
+            np.array([[[u, v]]], dtype=np.float32), 
+            self.K, self.dist, P=self.K
+        )[0, 0]
         
-        X_cam = (u_undist - cx) * depth_in_meters / fx
-        Y_cam = (v_undist - cy) * depth_in_meters / fy
-        Z_cam = depth_in_meters
+        # 2. 反投影到相机坐标系
+        fx, fy, cx, cy = self.K[0,0], self.K[1,1], self.K[0,2], self.K[1,2]
+        cam_x = (undist[0] - cx) * d / fx
+        cam_y = (undist[1] - cy) * d / fy
+        cam_z = d
         
-        # 构建相机坐标系下目标点的变换矩阵
+        # 3. 构造相机坐标系下目标点的变换矩阵（参考reference做法）
         T_cam_target = np.eye(4)
-        T_cam_target[:3, 3] = [X_cam, Y_cam, Z_cam]
-
-        # 3. 坐标变换链
-        # 参考：T_base_touch_target = T_base_tool0_scan @ HAND_EYE_T_tool0_cam @ T_cam_grasp
-        # 
-        # T_base_to_end_effector: 基座到end_effector的变换（相当于T_base_tool0_scan）
-        # self.T_end_to_camera: end_effector到相机的变换（相当于HAND_EYE_T_tool0_cam）  
-        # T_cam_target: 相机坐标系下的目标变换（相当于T_cam_grasp）
-        T_base_target = T_base_to_end_effector @ self.T_end_to_camera @ T_cam_target
+        T_cam_target[:3, 3] = [cam_x, cam_y, cam_z]
         
-        # 4. 提取目标位置（基座坐标系）
-        target_position = T_base_target[:3, 3]
-        
-        return target_position
+        # 4. 坐标变换链：base ← end_effector ← cam ← target
+        T_base_target = T_end_base @ self.T_cam_end @ T_cam_target
+        # 5. 提取基座坐标系中的3D位置
+        return T_base_target[:3, 3]

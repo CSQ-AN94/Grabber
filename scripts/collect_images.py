@@ -13,11 +13,6 @@ import numpy as np
 from datetime import datetime
 import argparse
 
-# 添加项目根目录到路径
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from utils.config import load_config
-from intelligence.world_state import WorldState
 from sensors.camera_thread import CameraThread
 
 
@@ -43,7 +38,6 @@ class ImageCollector:
         os.makedirs(self.output_dir, exist_ok=True)
         
         # 初始化组件
-        self.world_state = WorldState()
         self.camera_thread = None
         
         self._initialize_camera()

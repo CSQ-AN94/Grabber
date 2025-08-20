@@ -19,19 +19,18 @@ def import_hardware_modules():
         from intelligence.vision import VisionAnalyzer
         from sensors.camera_thread import CameraThread
         from utils.config import load_config
-        from utils.calibration import Calibration
         from controllers.arm_controller import ArmController
-        return VisionAnalyzer, CameraThread, load_config, Calibration, ArmController
+        return VisionAnalyzer, CameraThread, load_config, ArmController
     except ImportError as e:
         print(f"硬件模块导入失败: {e}")
-        return None, None, None, None, None
+        return None, None, None, None
 
 def initialize_hardware_systems():
     """初始化所有硬件系统"""
     print("=== 初始化硬件系统 ===")
     
     # 动态导入硬件模块
-    VisionAnalyzer, CameraThread, load_config, Calibration, ArmController = import_hardware_modules()
+    VisionAnalyzer, CameraThread, load_config, ArmController = import_hardware_modules()
     if VisionAnalyzer is None:
         raise RuntimeError("硬件模块导入失败，无法启动真实硬件模式")
     
@@ -68,23 +67,6 @@ def initialize_hardware_systems():
         print(f"相机系统初始化失败: {e}")
         raise
     
-    # 3. 初始化坐标标定系统
-    print("3. 初始化手眼标定系统...")
-    try:
-        # 获取相机内参
-        K, dist = camera_thread.get_camera_intrinsics()
-        if K is None:
-            raise ValueError("无法获取相机内参")
-        
-        # 创建标定对象
-        T_end_to_camera = app_config.calibration.T_end_to_camera
-        calibration = Calibration(T_end_to_camera, K, dist)
-        print("手眼标定矩阵配置成功")
-        
-    except Exception as e:
-        print(f"标定系统初始化失败: {e}")
-        raise
-    
     # 4. 初始化机械臂控制器
     print("4. 初始化Realman机械臂...")
     try:
@@ -99,7 +81,7 @@ def initialize_hardware_systems():
         raise
     
     print("=== 硬件系统初始化完成 ===")
-    return vision_analyzer, camera_thread, calibration, arm_controller
+    return vision_analyzer, camera_thread, arm_controller
 
 def cleanup_hardware_systems(camera_thread=None):
     """清理硬件系统资源"""
@@ -142,12 +124,11 @@ def main():
     # 初始化硬件系统（仅在真实硬件模式下）
     vision_analyzer = None
     camera_thread = None
-    calibration = None
     arm_controller = None
     
     if use_real_hardware:
         try:
-            vision_analyzer, camera_thread, calibration, arm_controller = initialize_hardware_systems()
+            vision_analyzer, camera_thread, arm_controller = initialize_hardware_systems()
         except Exception as e:
             print(f"\n硬件系统初始化失败: {e}")
             print("程序退出")
@@ -161,14 +142,14 @@ def main():
         if use_real_hardware:
             # 真实硬件模式：设置硬件组件并初始化
             robot_tools.set_hardware_components(
-                vision_analyzer, camera_thread, calibration, arm_controller
+                vision_analyzer, camera_thread, arm_controller
             )
             robot_tools.init_real_hardware_mode()
 
             # 临时测试
-            robot_tools.scan_shelf()
-            robot_tools.execute_grab("红牛")
-            return 0
+            # robot_tools.scan_shelf()
+            # robot_tools.execute_grab("红牛")
+            # return 0
         
         else:
             # Mock模式：初始化预设商品

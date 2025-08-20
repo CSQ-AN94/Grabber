@@ -121,7 +121,7 @@ class VisionAnalyzer:
                     'apple': '苹果', 
                     'Coke': '百事可乐', 
                     'Coca_Coke': '可口可乐',
-                    'red_bull'     : '红牛', 
+                    'red_bull': '红牛', 
                     'Nutri_express' : '营养快线',
                     'Ad calcium milk': 'AD钙奶'
                 }

@@ -14,11 +14,10 @@ import numpy as np
 import time
 import math
 from typing import Dict, Any, Optional, List
+import cv2
 
 # 导入references中的核心算法
-from references.main_workflow import (
-    find_target_index_by_label, find_center_most_target
-)
+from references.main_workflow import *
 
 # 全局放置计数器（模拟reference中的placement_counter）
 _placement_counter = 0
@@ -63,31 +62,32 @@ def execute_grab_with_hardware(item_name: str,
         # === 第3步：基座旋转对准（使用统一硬件 + reference算法）===
         print("--- 第3步：基座旋转对准 ---")
         touch_pose, pre_grasp_pose = calculate_grasp_poses(selected_target, arm_controller)
-        if not touch_pose:
+        final_touch_pose, diff = pick_nearest_pose_lex(touch_pose, selected_target['box'], True)
+        if not final_touch_pose:
             return {"success": False, "message": "抓取位姿计算失败", "item_name": item_name}
         
-        success = orient_base_to_target(touch_pose[:3], arm_controller)
+        success = orient_base_to_target(final_touch_pose[:3], arm_controller)
         if not success:
             return {"success": False, "message": "基座旋转失败", "item_name": item_name}
         
-        # === 第4步：精定位扫描（reference策略）===
-        print("--- 第4步：精定位扫描 ---")
-        fine_targets = scan_with_camera(vision_analyzer, camera_thread)
-        if not fine_targets:
-            return {"success": False, "message": "精定位扫描失败", "item_name": item_name}
+        # # === 第4步：精定位扫描（reference策略）===
+        # print("--- 第4步：精定位扫描 ---")
+        # fine_targets = scan_with_camera(vision_analyzer, camera_thread)
+        # if not fine_targets:
+        #     return {"success": False, "message": "精定位扫描失败", "item_name": item_name}
         
-        # 选择最接近中心的目标
-        final_target = find_center_most_target(fine_targets, 640, 480)  # 640x480分辨率
-        if not final_target:
-            return {"success": False, "message": "精定位无法确定目标", "item_name": item_name}
+        # # 选择最接近中心的目标
+        # final_target = find_center_most_target(fine_targets, 640, 480)  # 640x480分辨率
+        # if not final_target:
+        #     return {"success": False, "message": "精定位无法确定目标", "item_name": item_name}
         
         # === 第5步：执行抓取序列（使用统一硬件）===
         print("--- 第5步：执行抓取序列 ---")
-        final_touch_pose, final_pre_grasp_pose = calculate_grasp_poses(final_target, arm_controller)
+        # final_touch_pose, final_pre_grasp_pose = calculate_grasp_poses(final_target, arm_controller)
         if not final_touch_pose:
             return {"success": False, "message": "最终位姿计算失败", "item_name": item_name}
         
-        success = execute_grasp_sequence(final_touch_pose, final_pre_grasp_pose, arm_controller)
+        success = execute_grasp(final_touch_pose, arm_controller)
         if not success:
             return {"success": False, "message": "抓取序列执行失败", "item_name": item_name}
         
@@ -123,7 +123,6 @@ def execute_grab_with_hardware(item_name: str,
             "success": True,
             "message": f"成功抓取并放置商品 '{item_name}' 到位置 {placement_index + 1}",
             "item_name": item_name,
-            "grasp_position": final_target.get('center_3d_base', final_target.get('coords_3d', [0,0,0])),
             "placement_index": placement_index,
             "placement_position": placement_position
         }
@@ -147,7 +146,7 @@ def scan_with_camera(vision_analyzer, camera_thread) -> List[Dict]:
             return []
         
         # 使用视觉分析器
-        detections = vision_analyzer.analyze_image(color_frame, depth_frame)
+        detections = vision_analyzer.analyze_image(cv2.cvtColor(color_frame, cv2.COLOR_BGR2RGB), depth_frame)
         
         # 转换为标准格式
         targets = []
@@ -182,12 +181,9 @@ def scan_with_camera(vision_analyzer, camera_thread) -> List[Dict]:
 
 
 def smart_target_selection(item_name: str, targets: List[Dict]) -> Optional[Dict]:
-    """使用reference智能目标选择算法"""
-    idx = find_target_index_by_label(item_name, targets)
-    if idx >= 0:
-        target = targets[idx]
-        print(f"智能匹配成功: '{item_name}' -> {target['name']} (置信度: {target['confidence']:.2f})")
-        return target
+    for target in targets:
+        if target.get('name') == item_name:
+            return target
     return None
 
 
@@ -253,6 +249,7 @@ def orient_base_to_target(world_coords_xyz, arm_controller) -> bool:
         # 计算目标角度
         target_angle_rad = math.atan2(target_y, target_x)
         target_angle_deg = math.degrees(target_angle_rad)
+        target_angle_deg = target_angle_deg + 180 # 加180
         
         if target_angle_deg > 180: 
             target_angle_deg -= 360
@@ -279,7 +276,7 @@ def orient_base_to_target(world_coords_xyz, arm_controller) -> bool:
         return False
 
 
-def execute_grasp_sequence(touch_pose, pre_grasp_pose, arm_controller) -> bool:
+def execute_grasp(touch_pose, arm_controller) -> bool:
     """执行抓取序列"""
     try:
         print("开始抓取序列...")
@@ -291,24 +288,14 @@ def execute_grasp_sequence(touch_pose, pre_grasp_pose, arm_controller) -> bool:
         
         # 2. 移动到预抓取位置
         print("2. 移动到预抓取位置")
-        if arm_controller.movej_to_cartesian_pose(pre_grasp_pose, speed=40, wait=True) != 0:
-            return False
-        
-        # 3. 缓慢接近目标
-        print("3. 接近目标")
-        if arm_controller.move_to_cartesian_pose(touch_pose, speed=15, wait=True) != 0:
+        if arm_controller.movej_to_cartesian_pose(touch_pose, speed=40, wait=True) != 0:
             return False
         
         # 4. 夹取物体
         print("4. 夹取物体")
-        if arm_controller.set_gripper_openness(0.2) != 0:
+        if arm_controller.set_gripper_openness(0.1) != 0:
             return False
         time.sleep(1)  # 确保夹取稳定
-        
-        # 5. 后撤到安全位置
-        print("5. 后撤到安全位置")
-        if arm_controller.movej_to_cartesian_pose(pre_grasp_pose, speed=30, wait=True) != 0:
-            return False
         
         print("抓取序列完成")
         return True
@@ -325,7 +312,7 @@ def go_to_home_position(arm_controller) -> bool:
         home_pose = [-0.006, -0.135, 0.458, 3.129, 1.530, -1.633]  # reference的HOME位姿
         
         print("--- 正在返回HOME位置 ---")
-        result = arm_controller.move_to_cartesian_pose(home_pose, speed=50, wait=True)
+        result = arm_controller.movej_to_cartesian_pose(home_pose, speed=50, wait=True)
         if result == 0:
             print("--- HOME位置到达成功 ---")
             return True
@@ -361,7 +348,7 @@ def place_object_at_position(arm_controller, placement_index: int = 0) -> bool:
         place_pose = placement_poses[actual_index]
         
         print(f"--- 准备移动到放置点 {actual_index + 1} ---")
-        result = arm_controller.move_to_cartesian_pose(place_pose, speed=30, wait=True)
+        result = arm_controller.movej_to_cartesian_pose(place_pose, speed=30, wait=True)
         if result != 0:
             print(f"移动到放置点失败，错误码: {result}")
             return False

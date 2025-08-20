@@ -12,6 +12,7 @@ class ArmController:
         self.config = arm_config
         self.arm = RoboticArm(rm_thread_mode_e.RM_TRIPLE_MODE_E)
         self.handle = self.arm.rm_create_robot_arm(conn_config.arm_ip, conn_config.arm_port)
+        self.movej_to_cartesian_pose([-0.006, -0.135, 0.458, 3.129, 1.530, -1.633])
         self.gripper_config = gripper_config
         self.openness = self._init_gripper(gripper_config)  # 初始化夹爪，初始的openness为0.0，表示全闭
         print(f"机械臂连接句柄: {self.handle.id}")

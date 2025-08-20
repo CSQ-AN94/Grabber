@@ -21,7 +21,7 @@ class GeminiAgent:
         """初始化Gemini客户端"""
         try:
             self.client = genai.Client(api_key="AIzaSyDoRYk_kU61IIeEsCuAUaRft2iaeKXtoFE")
-            self.model_name = "gemini-2.5-flash-lite"
+            self.model_name = "gemini-2.5-flash"
             self.enable_tools = enable_tools
             self.enable_voice = enable_voice
             self.use_real_hardware = use_real_hardware

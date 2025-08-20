@@ -21,12 +21,11 @@ available_items = []  # 当前货架上可用商品名称列表
 shopping_cart = []  # 购物车内商品列表，格式：[("商品名", 价格), ...]
 
 def set_hardware_components(vision_analyzer_instance=None, camera_thread_instance=None, 
-                          calibration_instance=None, arm_controller_instance=None):
+                           arm_controller_instance=None):
     """设置硬件组件实例（由main_agent.py调用）"""
     global vision_analyzer, camera_thread, calibration, arm_controller
     vision_analyzer = vision_analyzer_instance
-    camera_thread = camera_thread_instance  
-    calibration = calibration_instance
+    camera_thread = camera_thread_instance
     arm_controller = arm_controller_instance
 
 def init_mock_mode():
