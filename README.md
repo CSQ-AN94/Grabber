@@ -1,221 +1,140 @@
 # Grabber - 智能零售机器人系统
 
-一个智能零售机器人系统，结合6自由度机械臂（Realman RM-65B）与UGV底盘（AgileX Ranger Mini 3），实现自动库存扫描、物体识别和精确抓取。使用Google Gemini Live API进行实时语音交互，采用"感知-决策分离，执行可中断"的架构设计。
+**基于Agent驱动架构的智能零售机器人系统**
 
-## 当前状态
+一个集成6自由度机械臂(Realman RM-65B)和RGBD相机(Orbbec Gemini 336L)的智能零售机器人，通过Google Gemini + SpeechRecognition + porcupine实现自然语言交互，支持语音聊天、商品识别、自动抓取、结算商品等功能。采用Agent为中心的架构设计。
 
-目前处于**核心功能集成阶段**：
+## 项目概览
 
-- ✅ **硬件控制层**: 完整的机械臂、相机、夹爪控制
-- ✅ **视觉系统**: YOLOv11目标检测，支持中文标签和深度信息
-- ✅ **音频输出**: iFlytek TTS，生产者消费者架构，完整句子播放
-- ⚠️ **音频输入**: 基础实现存在，VAD功能待修复
-- ⚠️ **AI集成**: Gemini Live API基础架构完成，集成调试中
-- ⚠️ **精细抓取**: 硬编码坐标可用，精确标定和TCP待完成
+### 核心特性
 
-## 系统架构
+- **AI驱动决策**: Google Gemini 2.5 Flash模型，支持自然语言理解和工具函数自动调用
+- **双向语音交互**: 唤醒词激活 + 语音识别 + TTS语音反馈的完整对话系统
+- **智能视觉识别**: YOLOv8目标检测，支持16种零售商品的实时识别和定位
+- **精准操作控制**: 6DOF机械臂 + 自适应夹爪 + 手眼标定的毫米级抓取精度
+- **灵活运动平台**: 全向移动底盘，支持自主导航和精确定位
+- **完整购物体验**: 从商品扫描、智能推荐到抓取放置的全流程自动化
 
-系统采用严格的模块化架构，遵循"真实硬件优先、生产代码纯净、组件解耦"原则：
+## Agent驱动架构
 
-### 核心组件
+### main_agent.py
 
-**主入口**
-- `main.py`: 异步任务管理器和事件循环中心，管理GeminiAgent和RobotTools集成
+`main_agent.py`为系统入口：
 
-**智能层 (`intelligence/`)**
-- `gemini_agent.py`: 基于Gemini Live API的语音交互代理，集成工具函数调用
-- `robot_tools.py`: 连接AI决策与硬件执行的工具函数库（当前Mock，待真实实现）
-- `vision.py`: YOLOv11物体检测和分析，支持中文文本绘制
-- `speech_local.py`: iFlytek WebAPI异步语音合成，队列化处理
+1. **语音唤醒**: 用户说"小浦"激活系统
+2. **TTS响应**: 机器人语音回复"我在"
+3. **语音录制**: 自动录音5秒捕获用户指令
+4. **AI理解**: Gemini分析语音内容并决策
+5. **工具调用**: 自动调用相应的robot_tools函数
+6. **硬件执行**: 实际控制机械臂、相机等硬件
+7. **结果反馈**: 语音播报执行结果
 
-**硬件控制层 (`controllers/`)**
-- `arm_controller.py`: Realman RM-65B机械臂控制，集成Modbus RTU夹爪接口
-- `ugv_controller.py`: AgileX Ranger Mini 3 UGV控制系统
-- `pyagxrobots/`: 修正版pyagxrobots库，解决了原库的资源泄漏和线程死锁问题
+### 架构分层设计
 
-**传感器层 (`sensors/`)**
-- `camera_thread.py`: Orbbec相机连续帧捕获和缓冲管理
-- `smart_microphone.py`: 智能麦克风输入，集成VAD和实时音频流处理
+#### 智能决策层 (`intelligence/`)
+- **`gemini_agent.py`**: 基于Gemini API的agent，负责自然语言理解和决策
+- **`robot_tools.py`**: 工具函数库，连接AI决策与硬件执行
+- **`vision.py`**: YOLOv8视觉分析，16种商品实时检测
+- **`speech.py`**: iFlytek TTS异步语音合成
+- **`voice_input.py`**: 唤醒词激活和语音识别
 
-**工具层 (`utils/`)**
-- `state.py`: 线程安全的世界状态管理，包含完整商品数据库
-- `config.py`: 统一配置管理，已清理单位换算问题
-- `calibration.py`: 手眼标定和坐标变换系统
+#### 硬件控制层 (`controllers/`)
+- **`arm_controller.py`**: Realman RM-65B机械臂控制 + Modbus RTU夹爪
+- **`ugv_controller.py`**: AgileX Ranger Mini 3全向移动控制
 
-**接口抽象 (`interfaces/`)**
-- `audio_input.py`: 音频输入接口抽象，支持多种音频源
+#### 传感器层 (`sensors/`)
+- **`camera_thread.py`**: Orbbec相机实时图像流处理
 
-## 核心功能
+#### 工具层 (`utils/`)
+- **`config.py`**: 统一配置管理（硬件连接、AI模型、标定数据）
+- **`calibration.py`**: 手眼标定和坐标变换
+- **`items_info.py`**: 商品数据库（价格、规格、抓取参数）
 
-### 已实现功能
-- ✅ **实时语音合成**: 基于iFlytek WebAPI的异步TTS系统
-- ✅ **物体检测**: YOLOv11实时检测，支持中文标签和深度信息
-- ✅ **硬件控制**: 机械臂、夹爪的完整控制接口
-- ✅ **状态管理**: 线程安全的世界状态，包含商品数据库和位置信息
-- ✅ **手眼标定基础**: 坐标变换框架（需要新标定数据）
-
-### 开发中功能
-- 🔧 **语音输入**: SmartMicrophone基础实现，VAD功能调试中
-- 🔧 **AI集成**: Gemini Live API集成，音频格式适配优化中
-- 🔧 **精细抓取**: 基础坐标可用，TCP标定和视觉引导待完成
+---
 
 ## 快速开始
 
-### 开发环境
+### 环境要求
 
-**所有开发都在Docker容器内进行，禁止在主机系统上运行代码：**
+- **开发环境**: Ubuntu 22.04 + Docker
+- **硬件要求**: NVIDIA GPU
+
+### Docker环境搭建
+
+**所有开发都在Docker容器内进行，确保环境一致性和硬件抽象：**
 
 ```bash
-# 构建容器镜像
+# 1. 克隆项目并初始化子模块
+git clone <repository-url>
+cd Grabber
+git submodule update --init --recursive
+
+# 2. 构建开发环境镜像
 docker compose build
 
-# 进入开发容器
+# 3. 进入开发容器
 docker compose run --rm grabber_dev bash
 
-# 验证硬件访问
-nvidia-smi                  # 验证GPU访问
+# 4. 验证环境
+nvidia-smi                    # 验证GPU访问
 ```
 
-### 初始化依赖
-
-项目包含关键的git子模块：
+### 系统启动
 
 ```bash
-git submodule update --init --recursive
+# 在Docker容器内启动主程序
+python3 main_agent.py
 ```
 
-**依赖管理**：
-- 系统依赖：通过Dockerfile中的`apt install`
-- Python依赖：通过`requirements.txt`统一管理（已移除pyagxrobots）
-- SDK依赖：通过`external/`目录的git子模块
-- UGV控制：使用fork版本的git子模块`external/pyagxrobots/`（Adrian-NM/pyagxrobots）
+启动后根据需求选择运行模式：
+- **测试agent**: 选择"Mock调试模式 + 文本交互"
+- **测试语音**: 选择"Mock调试模式 + 语音交互" 
+- **真实操作**: 选择"真实硬件模式 + 语音交互"
 
-### 系统测试
-
-**硬件测试**（需要真实硬件）：
-```bash
-# UGV测试需要先初始化CAN接口
-ip link set can0 type can bitrate 500000
-ip link set can0 up
-
-python3 scripts/test_arm.py         # 机械臂和夹爪测试
-python3 scripts/test_ugv.py         # UGV控制测试
-python3 scripts/test_camera.py      # 相机捕获测试
-python3 scripts/test_calibration.py # 手眼标定测试
-```
-
-**软件测试**（容器内可运行）：
-```bash
-python3 scripts/collect_images.py        # 数据采集工具
-```
-
-## 修正版pyagxrobots库
-
-### 背景
-
-原版pyagxrobots库存在严重的资源管理问题，导致：
-- `SocketcanBus was not properly shut down` 警告
-- 线程死锁，需要Ctrl+C强制退出程序
-- CAN总线资源泄漏，影响多次运行
-
-### 修正内容
-
-**位置**: `external/pyagxrobots/`（git子模块，fork版本）
-
-**核心修复**:
-1. **DeviceCan类重构**: 移除无限循环和复杂async架构，使用简单的`can.Notifier`模式
-2. **资源清理链**: UGV → RangerBase → DeviceCan 全部添加`shutdown()`和`__del__()`方法
-3. **安全版本检测**: 用`_get_base_version_safely()`替换有问题的`GetBaseVersion()`
-4. **导入修复**: 修正相对导入，确保使用本地修改版本
-
-**效果对比**:
-```
-修复前: 需要Ctrl+C强制退出 + 资源泄漏警告
-修复后: 程序正常退出 + 完全资源清理
-```
-
-**使用方式**: 
-```python
-# 在UGV控制器中自动使用fork版本的git子模块
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'external', 'pyagxrobots', 'src'))
-import pyagxrobots
-
-ugv = pyagxrobots.pysdkugv.RangerBase()
-ugv.shutdown()  # 正常资源清理
-```
-
-### 向上游贡献
-
-这些修复已经准备就绪，可以向AgileX官方提交PR。目前使用的是fork版本（Adrian-NM/pyagxrobots），在充分测试后将向上游提交改进。
-
-**仓库链接**: https://github.com/Adrian-NM/pyagxrobots
-
-## 配置管理
-
-所有系统配置集中在`config.yaml`中：
-
-- **硬件连接**: 机械臂IP、相机设置、UGV参数
-- **AI配置**: Gemini API密钥、音频设置、模型路径
-- **标定数据**: 手眼变换矩阵（T_end_to_camera）
-- **操作参数**: 关节姿态、速度、阈值
-
-**注意**: 开发环境中API密钥已提交到配置文件，生产部署时使用环境变量覆盖。
-
-## 代码质量标准
-- **详细注释**: 特别是单位转换、坐标变换、异步流程
-- **统一错误格式**: `{"success": bool, "message": str, "error": str}`
-- **类型注解**: 复杂函数添加类型注解
-- **单位一致性**: 明确标注所有物理量单位
-
-## 精细抓取系统
-
-### 开发路径
-1. **手眼标定**: 基于清理后的单位系统重新标定
-2. **TCP标定**: 使用RM_API2获取工具坐标系
-3. **精确测试**: 夹爪中心到相机画面中心20cm深度点
-4. **AnyGrasp集成**: 抓取位姿估计算法（见`docs/AnyGrasp_Usage.md`）
-5. **真实grasp_by_id()**: 替换Mock实现
-
-### 坐标系统
-- **世界坐标**: UGV零点
-- **基座坐标系**：机械臂基座，目前与世界坐标系是同一个
-- **相机坐标**: Orbbec相机光心坐标系
-    - `transform_pixel_to_world()`, 相机坐标系到世界坐标系
-- **工具坐标**: 夹爪中心点（TCP）
-
-## 项目结构
+## 项目结构详解
 
 ```
 Grabber/
-├── main.py                   # 主入口点
-├── config.yaml              # 系统配置文件
-├── controllers/             # 硬件控制模块
-│   ├── arm_controller.py    # 机械臂控制
-│   └── ugv_controller.py    # UGV控制（使用external/pyagxrobots）
-├── intelligence/            # AI/视觉/语音模块
-│   ├── gemini_agent.py      # Gemini语音交互代理
-│   ├── robot_tools.py       # 机器人工具函数
-│   ├── vision.py            # YOLOv11视觉分析
-│   ├── speech_local.py      # iFlytek语音合成
-│   ├── models/              # YOLOv11模型文件
-│   └── data/                # 训练图像数据
-├── sensors/                 # 传感器接口
-│   ├── camera_thread.py     # 相机线程管理
-│   └── smart_microphone.py  # 智能麦克风输入
-├── utils/                   # 工具和配置
-│   ├── state.py             # 世界状态管理
-│   ├── config.py            # 配置加载
-│   └── calibration.py       # 手眼标定
-├── scripts/                 # 测试和工具脚本
-│   ├── test_*.py            # 各种测试脚本
-│   ├── collect_images.py    # 数据采集
-│   └── simple_reach_test.py # 精细抓取测试
-├── docs/                    # 项目文档
-├── external/                # Git子模块
-│   ├── RM_API2/             # 睿尔曼机械臂SDK
-│   ├── pyorbbecsdk/         # Orbbec相机SDK
-│   └── pyagxrobots/         # 修正版pyagxrobots库（fork版本）
-└── grabber_demo.py          # 硬编码的演示脚本
-```
+├── main_agent.py                 # 系统入口
+├── config.yaml                   # 统一系统配置
+├── requirements.txt               # pip依赖
+├── docker-compose.yml            # 容器编排配置
+├── Dockerfile                    # 多架构镜像构建
+│
+├── intelligence/                  # AI相关
+│   ├── gemini_agent.py           # Gemini AI核心
+│   ├── robot_tools.py            # agent工具函数库
+│   ├── vision.py                 # YOLOv8视觉检测系统
+│   ├── speech.py                 # iFlytek语音合成
+│   ├── voice_input.py            # 语音输入
+│   └── models/                   # 模型文件
+│       ├── 8_17.pt               # YOLOv8零售商品检测模型
+│       ├── 小浦_zh_linux_v3_0_0.ppn  # 中文唤醒词模型
+│       └── porcupine_params_zh.pv # Porcupine中文参数
+│
+├── controllers/                   # 硬件控制包装
+│   ├── arm_controller.py         # 机械臂+夹爪控制器
+│   └── ugv_controller.py         # 移动底盘控制器
+│
+├── sensors/                       # 传感器接口
+│   └── camera_thread.py          # 相机包装
+│
+├── utils/                         # 工具和配置
+│   ├── config.py                 # 配置加载
+│   ├── calibration.py            # 手眼标定和坐标变换
+│   ├── items_info.py             # 商品数据库
+│   └── handeye_calibrator.py     # 标定工具实现
+│
+├── scripts/                       # 测试和工具脚本
+│   ├── test_arm.py               # 机械臂功能测试
+│   ├── test_ugv.py               # UGV移动测试
+│   ├── test_camera.py            # 相机系统测试
+│   ├── test_calibration.py       # 标定测试
+│   ├── collect_images.py         # 数据采集工具
+│   ├── test_audio_output.py       # 语音合成和播报测试
+│   └── test_speech_recognition.py # 语音识别测试
+│
+├── external/                      # 外部依赖（Git子模块）
+│   ├── RM_API2/                  # 睿尔曼机械臂官方SDK
+│   ├── pyorbbecsdk/              # Orbbec相机官方SDK
+│   └── pyagxrobots/              # AgileX移动底盘SDK（fork修复版）

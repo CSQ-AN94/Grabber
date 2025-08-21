@@ -209,7 +209,8 @@ def scan_shelf_mock() -> Dict[str, Any]:
 
 def execute_grab(item_name: str) -> Dict[str, Any]:
     """
-    驱动机械臂完成抓取货架上指定名称的商品到购物车的全流程
+    驱动机械臂完成抓取货架上指定名称的商品到购物车的全流程。
+    一次只能抓取一个商品，但是可以连续调用多次抓取不同商品。
     
     Args:
         item_name: 要抓取的商品名称（如"苹果"、"可口可乐"、"红牛"）
@@ -284,5 +285,3 @@ def execute_grab_mock(item_name: str) -> Dict[str, Any]:
     
     print(f"[函数返回] {result['message']}")
     return result
-
-# 工具函数直接通过模块访问，无需额外的获取函数
