@@ -110,7 +110,6 @@ tmp/
 # Model files (usually large)
 *.pt
 *.pth
-*.onnx
 *.tflite
 models/weights/
 

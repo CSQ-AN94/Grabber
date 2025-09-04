@@ -15,7 +15,7 @@ sounddevice
 PyAudio
 SpeechRecognition
 webrtcvad-wheels
-pvporcupine
+sherpa-onnx
 
 # 机器人通信
 pyserial
