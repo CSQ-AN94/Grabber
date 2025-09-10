@@ -12,27 +12,14 @@ import traceback
 from intelligence.gemini_agent import GeminiAgent
 from intelligence import robot_tools
 
-# 在选择真实硬件模式时才导入硬件模块
-def import_hardware_modules():
-    """动态导入硬件模块，避免在Mock模式下的依赖问题"""
-    try:
-        from intelligence.vision import VisionAnalyzer
-        from sensors.camera_thread import CameraThread
-        from utils.config import load_config
-        from controllers.arm_controller import ArmController
-        return VisionAnalyzer, CameraThread, load_config, ArmController
-    except ImportError as e:
-        print(f"硬件模块导入失败: {e}")
-        return None, None, None, None
-
 def initialize_hardware_systems():
     """初始化所有硬件系统"""
     print("=== 初始化硬件系统 ===")
-    
-    # 动态导入硬件模块
-    VisionAnalyzer, CameraThread, load_config, ArmController = import_hardware_modules()
-    if VisionAnalyzer is None:
-        raise RuntimeError("硬件模块导入失败，无法启动真实硬件模式")
+
+    from intelligence.vision import VisionAnalyzer
+    from sensors.camera_thread import CameraThread
+    from utils.config import load_config
+    from controllers.arm_controller import ArmController
     
     app_config = load_config()
     
@@ -82,17 +69,6 @@ def initialize_hardware_systems():
     
     print("=== 硬件系统初始化完成 ===")
     return vision_analyzer, camera_thread, arm_controller
-
-def cleanup_hardware_systems(camera_thread=None):
-    """清理硬件系统资源"""
-    print("\n清理硬件系统资源...")
-    if camera_thread:
-        try:
-            camera_thread.stop()
-            camera_thread.join(timeout=3)
-            print("相机线程已停止")
-        except Exception as e:
-            print(f"相机清理失败: {e}")
 
 def main():
     """主程序入口"""
@@ -155,7 +131,7 @@ def main():
             # Mock模式：初始化预设商品
             robot_tools.init_mock_mode()
         
-        # 6. 初始化Agent
+        # 5. 初始化Agent
         mode_text = '支持工具调用' if enable_tools else '无工具调用'
         hardware_text = '真实硬件' if use_real_hardware else 'Mock调试'
         voice_text = '语音交互' if enable_voice else '文本交互'
@@ -169,24 +145,24 @@ def main():
         
         agent = GeminiAgent(enable_tools=enable_tools, enable_voice=enable_voice, use_real_hardware=use_real_hardware)
         
-        if not agent.is_ready():
+        if agent.client is None or agent.chat is None:
             print("Agent初始化失败")
             return
         
         print(f"Agent初始化成功")
         
-        # 7. 启动交互循环
+        # 6. 启动交互循环
         if enable_voice:
-            # 语音交互模式
             print("\n=== 语音交互模式 ===")
             print("- 说 '小浦' 激活系统，机器人会播报'我在'并开始录音")
-            print("- 录音5秒后自动识别并发送给AI")
-            print("- AI回复后语音播报，然后重新等待唤醒词")
-            print("- 完整流程：唤醒词 → TTS响应 → 录音 → 识别 → AI处理 → TTS播报")
+            print("- VAD智能检测语音结束，自动识别并发送给AI")
+            print("- AI回复后语音播报，然后根据响应内容决定下一步")
+            print("- 完整流程：唤醒词 → TTS响应 → VAD录音 → 识别 → AI处理 → TTS播报 → 状态决策")
             print("- 按Ctrl+C退出程序")
             
             # 启动语音系统
-            agent.start_voice_system()
+            agent.voice_manager.start_system()
+            print("[Agent] 语音系统已启动，说 '小浦' 激活对话")
             
             try:
                 print(f"\n[系统] 语音系统运行中...")
@@ -198,7 +174,7 @@ def main():
             except KeyboardInterrupt:
                 print("\n[系统] 程序被用户中断")
             finally:
-                agent.stop_voice_system()
+                agent.voice_manager.stop_system()
         else:
             # 文本交互模式
             print("\n=== 文本交互模式 ===")
@@ -230,10 +206,6 @@ def main():
     except Exception as e:
         print(f"\n程序发生错误: {e}")
         traceback.print_exc()
-    finally:
-        # 清理资源
-        if use_real_hardware:
-            cleanup_hardware_systems(camera_thread)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

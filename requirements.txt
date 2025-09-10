@@ -13,8 +13,6 @@ Pillow
 # 音频处理 
 sounddevice
 PyAudio
-SpeechRecognition
-webrtcvad-wheels
 sherpa-onnx
 
 # 机器人通信

@@ -55,8 +55,8 @@ speech:
 # 大语言模型配置
 llm:
   gemini_api_key: "AIzaSyAtCZCLxeRyRXK7dZAEnx0ydS_90VTcHxw"
-  model_name: "gemini-2.5-flash-lite"
+  model_name: "gemini-2.5-flash"
 
 # 计算机视觉配置
 vision:
-  model_path: "intelligence/models/8_17.pt"  # YOLOv8模型路径
+  model_path: "intelligence/yolo_models/8_17.pt"  # YOLOv8模型路径

@@ -25,18 +25,14 @@ class GeminiAgent:
             self.enable_tools = enable_tools
             self.enable_voice = enable_voice
             self.use_real_hardware = use_real_hardware
-            self.speech = None
             self.voice_manager = None
             
             # 初始化语音系统（如果启用）
             if self.enable_voice:
-                from intelligence.speech import Speech
-                from intelligence.voice_input import VoiceInputManager
+                from intelligence.voice_manager import VoiceManager
                 
-                self.speech = Speech()
-                self.voice_manager = VoiceInputManager(
-                    on_speech_detected=self._on_voice_input,
-                    on_agent_response_ready=self._on_agent_ready
+                self.voice_manager = VoiceManager(
+                    on_speech_detected=self._on_voice_input
                 )
                 logger.info("语音系统初始化成功")
             
@@ -200,29 +196,8 @@ class GeminiAgent:
             logger.error(f"Chat会话创建失败: {e}")
             raise
     
-    def is_ready(self) -> bool:
-        """检查Agent是否就绪"""
-        return self.client is not None and self.chat is not None
-    
-    
-    def _say_response(self, text: str):
-        """语音播报响应（状态机会自动管理唤醒词检测）"""
-        if not self.enable_voice or not self.speech or not text:
-            return
-        
-        try:
-            self.speech.say(text)
-            print(f"[Agent] 播报完成: {text}")
-            
-        except Exception as e:
-            logger.warning(f"语音播报失败: {e}")
-        
-        # 通知语音系统Agent响应完成，可以恢复唤醒词监听
-        if self.voice_manager:
-            self.voice_manager.agent_response_complete()
-    
     def _on_voice_input(self, text: str):
-        """语音输入回调处理 - 接收来自唤醒词系统的用户语音"""
+        """语音输入回调处理。接收来自VoiceManager的用户语音文本"""
         if text:
             print(f"\n[Agent] 收到用户语音: '{text}'")
             print("[Agent] AI思考中...")
@@ -233,28 +208,10 @@ class GeminiAgent:
             if result["success"]:
                 response_text = result['text']
                 print(f"[Agent] AI响应: {response_text}")
-                # 语音播报并通知状态机系统
-                self._say_response(response_text)
+                # 通知语音系统Agent响应完成，VoiceManager会处理TTS播报和状态转移
+                self.voice_manager.agent_response_complete(response_text)
             else:
                 print(f"[Agent] 处理失败: {result['error']}")
                 # 处理失败也要恢复唤醒词监听
                 if self.voice_manager:
-                    self.voice_manager.agent_response_complete()
-    
-    def _on_agent_ready(self):
-        """Agent响应完成回调 - 可选的额外处理"""
-        print("[Agent] 响应处理完成，系统准备下次交互")
-    
-    def start_voice_system(self):
-        """启动语音系统（唤醒词状态机）"""
-        if self.voice_manager:
-            self.voice_manager.start_system()
-            print("[Agent] 语音系统已启动，说 '小浦' 激活对话")
-        else:
-            print("[Agent] 语音系统未启用")
-    
-    def stop_voice_system(self):
-        """停止语音系统"""
-        if self.voice_manager:
-            self.voice_manager.stop_system()
-            print("[Agent] 语音系统已停止")
+                    self.voice_manager.agent_response_complete(None)

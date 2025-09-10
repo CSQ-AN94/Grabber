@@ -2,7 +2,7 @@
 
 **基于Agent驱动架构的智能零售机器人系统**
 
-一个集成6自由度机械臂(Realman RM-65B)和RGBD相机(Orbbec Gemini 336L)的智能零售机器人，通过Google Gemini + SpeechRecognition + porcupine实现自然语言交互，支持语音聊天、商品识别、自动抓取、结算商品等功能。采用Agent为中心的架构设计。
+一个集成6自由度机械臂(Realman RM-65B)和RGBD相机(Orbbec Gemini 336L)的智能零售机器人，通过Google Gemini + Sherpa Onnx + iFlyTeck API实现自然语言交互，支持语音聊天、商品识别、自动抓取、结算商品等功能。采用Agent为中心的架构设计。
 
 ## 项目概览
 
@@ -23,11 +23,12 @@
 
 1. **语音唤醒**: 用户说"小浦"激活系统
 2. **TTS响应**: 机器人语音回复"我在"
-3. **语音录制**: 自动录音5秒捕获用户指令
-4. **AI理解**: Gemini分析语音内容并决策
-5. **工具调用**: 自动调用相应的robot_tools函数
-6. **硬件执行**: 实际控制机械臂、相机等硬件
-7. **结果反馈**: 语音播报执行结果
+3. **语音录制**: VAD动态时长录音捕获用户指令
+4. **语音理解**：本地化onnx模型进行高速语音转文本，同时支持中/英/日/韩/粤 5种语言
+5. **AI理解**: Gemini分析语音内容并决策
+6. **工具调用**: 自动调用相应的robot_tools函数
+7. **硬件执行**: 实际控制机械臂、相机等硬件
+8. **结果反馈**: 语音播报执行结果
 
 ### 架构分层设计
 
@@ -36,7 +37,7 @@
 - **`robot_tools.py`**: 工具函数库，连接AI决策与硬件执行
 - **`vision.py`**: YOLOv8视觉分析，16种商品实时检测
 - **`speech.py`**: iFlytek TTS异步语音合成
-- **`voice_input.py`**: 唤醒词激活和语音识别
+- **`voice_manager.py`**: 语音系统状态机
 
 #### 硬件控制层 (`controllers/`)
 - **`arm_controller.py`**: Realman RM-65B机械臂控制 + Modbus RTU夹爪
@@ -76,8 +77,11 @@ docker compose build
 docker compose run --rm grabber_dev bash
 
 # 4. 验证环境
-nvidia-smi                    # 验证GPU访问
+nvidia-smi # 验证GPU访问
 ```
+
+### 下载语音模型
+从Releases获取`audio_models.zip`，解压为`intelligence/audio_models`
 
 ### 系统启动
 
@@ -106,11 +110,9 @@ Grabber/
 │   ├── robot_tools.py            # agent工具函数库
 │   ├── vision.py                 # YOLOv8视觉检测系统
 │   ├── speech.py                 # iFlytek语音合成
-│   ├── voice_input.py            # 语音输入
-│   └── models/                   # 模型文件
-│       ├── 8_17.pt               # YOLOv8零售商品检测模型
-│       ├── 小浦_zh_linux_v3_0_0.ppn  # 中文唤醒词模型
-│       └── porcupine_params_zh.pv # Porcupine中文参数
+│   ├── voice_manager.py          # 语音状态机管理
+|   ├── audio_models/             # 语音onnx模型文件
+│   └── yolo_models/              # yolo模型文件
 │
 ├── controllers/                   # 硬件控制包装
 │   ├── arm_controller.py         # 机械臂+夹爪控制器
