@@ -155,3 +155,6 @@ docs/
 # Keep project documentation and configuration
 !docs/
 !config.yaml
+
+# Local migration notes (not committed)
+/CHANGES.md

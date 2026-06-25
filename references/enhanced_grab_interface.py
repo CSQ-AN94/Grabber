@@ -112,12 +112,13 @@ def execute_grab_with_hardware(item_name: str,
         go_to_home_position(arm_controller)
         
         # 获取放置点坐标
+        # !! 占位值：需在双臂机器人实际场景中标定后填入 !!
         placement_poses = [
-            [0.465, 0.066, 0.300, 3.079, 1.322, -3.069],    # 放置点1
-            [0.468, 0.005, 0.292, 3.091, 1.269, 3.096],     # 放置点2  
-            [0.455, -0.096, 0.284, 3.103, 1.211, 2.89]      # 放置点3
+            [0.4, 0.2, 0.3, 0.0, 1.571, 0.0],
+            [0.4, 0.0, 0.3, 0.0, 1.571, 0.0],
+            [0.4, -0.2, 0.3, 0.0, 1.571, 0.0],
         ]
-        placement_position = placement_poses[placement_index][:3]  # 只取XYZ坐标
+        placement_position = placement_poses[placement_index][:3]
         
         return {
             "success": True,
@@ -158,11 +159,15 @@ def scan_with_camera(vision_analyzer, camera_thread) -> List[Dict]:
                 center_y = (bbox[1] + bbox[3]) / 2
                 depth = det['center_depth_m']
                 
-                # 使用相机内参计算
-                from yolo_model import MY_CAMERA_INTRINSICS
+                # 从 camera_thread 获取运行时内参（RealSense 相机）
+                K, _ = camera_thread.get_camera_intrinsics()
+                if K is None:
+                    continue
+                fx, fy = K[0, 0], K[1, 1]
+                cx_intr, cy_intr = K[0, 2], K[1, 2]
                 Z = depth
-                X = (center_x - MY_CAMERA_INTRINSICS['cx']) * Z / MY_CAMERA_INTRINSICS['fx']
-                Y = (center_y - MY_CAMERA_INTRINSICS['cy']) * Z / MY_CAMERA_INTRINSICS['fy']
+                X = (center_x - cx_intr) * Z / fx
+                Y = (center_y - cy_intr) * Z / fy
                 coords_3d = [Y, -X, Z]  # reference坐标系约定
                 
                 targets.append({
@@ -198,12 +203,13 @@ def calculate_grasp_poses(target: Dict, arm_controller) -> tuple:
         yolo_Y, yolo_neg_X, yolo_Z = coords_3d
         cam_x, cam_y, cam_z = yolo_Y, yolo_neg_X, yolo_Z
         
-        # reference手眼标定矩阵
+        # 手眼标定矩阵（T_tool0_to_camera）
+        # !! 占位值：更换为 RealSense 头部相机后必须重新标定 !!
         HAND_EYE_T_tool0_cam = np.array([
-            [ 1.0,  0.0,  0.0, -0.1020577],
-            [ 0.0,  1.0,  0.0,  0.0236675],
-            [ 0.0,  0.0,  1.0, -0.08289],
-            [ 0.0,  0.0,  0.0,  1.0]
+            [ 1.0,  0.0,  0.0, -0.05],
+            [ 0.0,  1.0,  0.0,  0.00],
+            [ 0.0,  0.0,  1.0, -0.08],
+            [ 0.0,  0.0,  0.0,  1.0 ]
         ])
         
         T_cam_grasp = np.identity(4)
@@ -308,8 +314,9 @@ def execute_grasp(touch_pose, arm_controller) -> bool:
 def go_to_home_position(arm_controller) -> bool:
     """返回HOME位置（参考reference实现）"""
     try:
-        # 使用reference的HOME位姿（与robot_controller.py一致）
-        home_pose = [-0.006, -0.135, 0.458, 3.129, 1.530, -1.633]  # reference的HOME位姿
+        # HOME 位姿（笛卡尔，[x,y,z,rx,ry,rz]，单位 m/rad）
+        # !! 占位值：需在双臂机器人上实测后填入 !!
+        home_pose = [0.3, 0.0, 0.5, 0.0, 1.571, 0.0]
         
         print("--- 正在返回HOME位置 ---")
         result = arm_controller.movej_to_cartesian_pose(home_pose, speed=50, wait=True)
@@ -337,11 +344,12 @@ def place_object_at_position(arm_controller, placement_index: int = 0) -> bool:
         bool: 放置是否成功
     """
     try:
-        # Reference中的放置点位姿（来自robot_controller.py）
+        # 放置点位姿（笛卡尔，[x,y,z,rx,ry,rz]，单位 m/rad）
+        # !! 占位值：需在双臂机器人实际场景中标定购物车位置后填入 !!
         placement_poses = [
-            [0.465, 0.066, 0.300, 3.079, 1.322, -3.069],    # 放置点1
-            [0.468, 0.005, 0.292, 3.091, 1.269, 3.096],     # 放置点2  
-            [0.455, -0.096, 0.284, 3.103, 1.211, 2.89]      # 放置点3
+            [0.4, 0.2, 0.3, 0.0, 1.571, 0.0],   # 放置点1
+            [0.4, 0.0, 0.3, 0.0, 1.571, 0.0],   # 放置点2
+            [0.4, -0.2, 0.3, 0.0, 1.571, 0.0],  # 放置点3
         ]
         
         actual_index = placement_index % len(placement_poses)

@@ -34,9 +34,14 @@ def initialize_hardware_systems():
         raise
     
     # 2. 初始化相机系统
-    print("2. 初始化Orbbec相机系统...")
+    print("2. 初始化RealSense相机系统...")
     try:
-        camera_thread = CameraThread()
+        camera_thread = CameraThread(
+            serial=app_config.camera.head_serial,
+            width=app_config.camera.width,
+            height=app_config.camera.height,
+            fps=app_config.camera.fps,
+        )
         camera_thread.start()
         print("相机线程启动成功")
         

@@ -22,9 +22,11 @@ class ConfigError(Exception):
 
 @dataclass
 class ConnectionsConfig:
-    """硬件连接配置"""
-    arm_ip: str
+    """硬件连接配置（双臂）"""
+    left_arm_ip: str
+    right_arm_ip: str
     arm_port: int
+    active_arm: str = "right"   # "left" 或 "right"，决定 ArmController 实际连接哪只臂
 
 
 @dataclass
@@ -43,10 +45,8 @@ class ArmConfig:
 
 @dataclass
 class GripperConfig:
-    """夹爪配置"""
-    zero_speed: int
-    init_speed: int
-    run_speed: int
+    """夹爪配置（Realman Plus 内置夹爪，JSON 指令控制）"""
+    open_time: float   # 夹爪从全闭到全开所需时间（秒），用于 sleep 估算
 
 
 @dataclass
@@ -83,6 +83,15 @@ class VisionConfig:
 
 
 @dataclass
+class CameraConfig:
+    """RealSense 相机配置"""
+    head_serial: str
+    width: int = 640
+    height: int = 480
+    fps: int = 30
+
+
+@dataclass
 class AppConfig:
     """应用程序主配置类"""
     connections: ConnectionsConfig
@@ -93,6 +102,7 @@ class AppConfig:
     speech: SpeechConfig
     llm: LLMConfig
     vision: VisionConfig
+    camera: CameraConfig
 
 
 def get_env_var(section: str, key: str, fallback: Any = None) -> Any:
@@ -145,11 +155,13 @@ def load_config(path: str = 'config.yaml') -> AppConfig:
             
             return section_data[key]
         
-        # 解析连接配置
+        # 解析连接配置（双臂）
         conn_data = config_data.get('connections', {})
         connections = ConnectionsConfig(
-            arm_ip=_get_value(conn_data, 'arm_ip', 'connections'),
-            arm_port=_get_value(conn_data, 'arm_port', 'connections', int)
+            left_arm_ip=_get_value(conn_data, 'left_arm_ip', 'connections'),
+            right_arm_ip=_get_value(conn_data, 'right_arm_ip', 'connections'),
+            arm_port=_get_value(conn_data, 'arm_port', 'connections', int),
+            active_arm=conn_data.get('active_arm', 'right'),
         )
         
         # 解析机械臂配置
@@ -166,12 +178,10 @@ def load_config(path: str = 'config.yaml') -> AppConfig:
             checkout_scan_pose_cartesian=_get_value(arm_data, 'checkout_scan_pose_cartesian')
         )
         
-        # 解析夹爪配置
+        # 解析夹爪配置（Realman Plus，仅需 open_time）
         gripper_data = config_data.get('gripper', {})
         gripper = GripperConfig(
-            zero_speed=_get_value(gripper_data, 'zero_speed', 'gripper', int),
-            init_speed=_get_value(gripper_data, 'init_speed', 'gripper', int),
-            run_speed=_get_value(gripper_data, 'run_speed', 'gripper', int)
+            open_time=_get_value(gripper_data, 'open_time', 'gripper', float),
         )
         
         # 解析UGV配置
@@ -208,7 +218,16 @@ def load_config(path: str = 'config.yaml') -> AppConfig:
         vision = VisionConfig(
             model_path=_get_value(vision_data, 'model_path', 'vision')
         )
-        
+
+        # 解析相机配置
+        cam_data = config_data.get('camera', {})
+        camera = CameraConfig(
+            head_serial=cam_data.get('head_serial', '153122071777'),
+            width=int(cam_data.get('width', 640)),
+            height=int(cam_data.get('height', 480)),
+            fps=int(cam_data.get('fps', 30)),
+        )
+
         # 创建主配置对象
         config = AppConfig(
             connections=connections,
@@ -219,6 +238,7 @@ def load_config(path: str = 'config.yaml') -> AppConfig:
             speech=speech,
             llm=llm,
             vision=vision,
+            camera=camera,
         )
         
         logging.info(f"Successfully loaded configuration from {path}")
