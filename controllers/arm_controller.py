@@ -1,7 +1,10 @@
 """
 双臂 Realman 机械臂控制器 — 新版官方 SDK 版本
 依赖：pip install robotic-arm  (睿尔曼官方 PyPI 包，支持 7-DOF)
-写指令前 SIGSTOP atom 进程以独占控制权，完成后 SIGCONT 恢复遥控。
+
+机器人后台有两个遥控进程（不停止则命令会被覆盖）：
+  atom            关节遥控（100Hz CANFD）→ 控制手臂前 SIGSTOP
+  zhixing_ctrl.py 夹爪遥控（10Hz）       → 控制夹爪前 SIGSTOP
 """
 
 from __future__ import annotations
@@ -32,52 +35,66 @@ class ArmController:
         self.lock = threading.Lock()
         self.config = arm_config
         self.gripper_config = gripper_config
-        self._atom_pid = self._find_atom_pid()
+        self._atom_pid         = self._find_atom_pid()           # 关节遥控
+        self._gripper_ctrl_pid = self._find_gripper_ctrl_pid()   # 夹爪遥控
 
         ip = (conn_config.right_arm_ip if conn_config.active_arm == "right"
               else conn_config.left_arm_ip)
         port = conn_config.arm_port
 
-        # 先 SIGSTOP atom，再建 SDK 连接，避免 atom 占住端口
-        if self._atom_pid:
-            os.kill(self._atom_pid, signal.SIGSTOP)
+        # 建立 SDK 连接前 SIGSTOP atom，避免连接被占用
+        self._stop(self._atom_pid)
         try:
             self.arm = RoboticArm(rm_thread_mode_e.RM_TRIPLE_MODE_E)
             self.handle = self.arm.rm_create_robot_arm(ip, port)
         finally:
-            if self._atom_pid:
-                os.kill(self._atom_pid, signal.SIGCONT)
+            self._cont(self._atom_pid)
 
         self.openness = self._init_gripper()
         print(f"[ArmController] {conn_config.active_arm} 臂 ({ip}:{port}), "
-              f"DOF={self.arm.arm_dof}, atom={self._atom_pid}")
+              f"DOF={self.arm.arm_dof}, atom={self._atom_pid}, "
+              f"gripper_ctrl={self._gripper_ctrl_pid}")
 
     # ------------------------------------------------------------------
-    # atom 进程管理
+    # 进程管理
     # ------------------------------------------------------------------
 
     def _find_atom_pid(self) -> Optional[int]:
+        """查找关节遥控进程（atom 可执行文件）PID"""
         try:
-            r = subprocess.run(
-                ["pgrep", "-f", "zhixing_ctrl.py"],
-                capture_output=True, text=True
-            )
+            r = subprocess.run(["pgrep", "-x", "atom"], capture_output=True, text=True)
             if r.returncode == 0 and r.stdout.strip():
                 return int(r.stdout.strip().split()[0])
         except Exception:
             pass
         return None
 
+    def _find_gripper_ctrl_pid(self) -> Optional[int]:
+        """查找夹爪遥控进程（zhixing_ctrl.py）PID"""
+        try:
+            r = subprocess.run(["pgrep", "-f", "zhixing_ctrl.py"], capture_output=True, text=True)
+            if r.returncode == 0 and r.stdout.strip():
+                return int(r.stdout.strip().split()[0])
+        except Exception:
+            pass
+        return None
+
+    def _stop(self, pid: Optional[int]) -> None:
+        if pid:
+            os.kill(pid, signal.SIGSTOP)
+
+    def _cont(self, pid: Optional[int]) -> None:
+        if pid:
+            os.kill(pid, signal.SIGCONT)
+
     @contextmanager
     def _arm_session(self):
-        """SIGSTOP atom → yield → SIGCONT atom"""
-        if self._atom_pid:
-            os.kill(self._atom_pid, signal.SIGSTOP)
+        """SIGSTOP atom（关节遥控）→ yield → SIGCONT atom"""
+        self._stop(self._atom_pid)
         try:
             yield
         finally:
-            if self._atom_pid:
-                os.kill(self._atom_pid, signal.SIGCONT)
+            self._cont(self._atom_pid)
 
     # ------------------------------------------------------------------
     # 运动接口（与旧版 ArmController 保持相同签名）
@@ -147,12 +164,16 @@ class ArmController:
     # ------------------------------------------------------------------
 
     def _init_gripper(self) -> float:
-        self.arm.rm_set_tool_voltage(3)         # 24V 上电
-        time.sleep(0.5)
-        self.arm.rm_set_rm_plus_mode(115200)    # 启用 Realman Plus 协议（115200 波特率）
-        time.sleep(0.3)
-        self.arm.rm_set_gripper_position(1000, True, 5)  # 全开，阻塞等待，超时 5s
-        time.sleep(self.gripper_config.open_time)
+        self._stop(self._gripper_ctrl_pid)
+        try:
+            self.arm.rm_set_tool_voltage(3)         # 24V 上电
+            time.sleep(0.5)
+            self.arm.rm_set_rm_plus_mode(115200)    # 启用 Realman Plus 协议（115200 波特率）
+            time.sleep(0.3)
+            self.arm.rm_set_gripper_position(1000, True, 5)  # 全开，阻塞等待，超时 5s
+            time.sleep(self.gripper_config.open_time)
+        finally:
+            self._cont(self._gripper_ctrl_pid)
         return 1.0
 
     def set_gripper_openness(self, openness: float) -> int:
@@ -160,9 +181,13 @@ class ArmController:
         openness  = float(np.clip(openness, 0.0, 1.0))
         raw_pos   = int(round(openness * 1000.0))
         move_time = abs(openness - self.openness) * self.gripper_config.open_time
-        with self._arm_session():
+        # 停止夹爪遥控（zhixing_ctrl.py），否则命令会被覆盖
+        self._stop(self._gripper_ctrl_pid)
+        try:
             with self.lock:
                 self.arm.rm_set_gripper_position(raw_pos, False, 5)
+        finally:
+            self._cont(self._gripper_ctrl_pid)
         self.openness = openness
         print(f"[ArmController] 夹爪 raw={raw_pos}, 等待 {move_time:.2f}s")
         time.sleep(move_time)
