@@ -9,18 +9,21 @@ Realman RM75 SDK 全功能测试 (dual-arm-sdk branch)
 
 测试流程:
   1. SDK 连接
-  2. 逐轴测试 J1-J7，每轴 +10°，验证后回原位
-  3. 夹爪测试：上电 → 全闭 → 全开
+  2. 逐轴测试 J1-J7（atom 整段停住，与 tcp_demo 一致）
+  3. 夹爪测试：上电 → 全开 → 半闭 → 全闭 → 全开
   4. 断开
 
-注意:
+关键说明:
   - SDK 关节角单位为度（不是毫度）
-  - rm_set_arm_run_mode 在 SDK 里是 0=仿真/1=实体，不是 tcp_demo 里的模式切换
-    → 不调用 rm_set_arm_run_mode，SIGSTOP atom 已足够
+  - atom 整段 SIGSTOP，避免每次 SIGCONT 后 CANFD 抢控造成粘滞感
+  - 序列结束后通过原生 TCP 发 set_arm_run_mode mode=1 恢复遥控
+    （SDK 的 rm_set_arm_run_mode 含义不同：0=仿真/1=实体）
 """
 
+import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -38,7 +41,6 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 def find_pids(name: str, flag: str = "-x") -> List[int]:
-    """返回所有匹配的 PID 列表。"""
     try:
         r = subprocess.run(["pgrep", flag, name], capture_output=True, text=True)
         if r.returncode == 0 and r.stdout.strip():
@@ -63,29 +65,36 @@ def resume_all(pids: List[int], name: str = "") -> None:
 
 
 # ---------------------------------------------------------------------------
-# 关节运动辅助
+# 原生 TCP 单次请求（用于发 set_arm_run_mode，SDK 无等效接口）
 # ---------------------------------------------------------------------------
 
-def movej_and_verify(arm: RoboticArm, target: list, atom_pids: list,
-                     label: str, speed: int = 20) -> bool:
-    """SIGSTOP atom → 清错 → movej → 验证 → SIGCONT。返回是否成功。"""
-    pause_all(atom_pids, "atom")
-    arm.rm_clear_system_err()
-    ret = arm.rm_movej(target, speed, 0, 0, 1)   # block=1
-    code, joints_now = arm.rm_get_joint_degree()
-    resume_all(atom_pids, "atom")
-
-    if ret != 0:
-        print(f"  [FAIL] {label}: rm_movej 返回 {ret}")
-        return False
-    if code != 0:
-        print(f"  [WARN] {label}: 读角失败，错误码 {code}")
-        return True
-    errs = [round(joints_now[i] - target[i], 2) for i in range(len(target))]
-    max_err = max(abs(e) for e in errs)
-    print(f"  {label}: 实际={[round(j, 2) for j in joints_now]}  "
-          f"误差={errs}  max={max_err:.2f}°  {'OK' if max_err < 2 else 'LARGE!'}")
-    return True
+def _raw_req(ip: str, port: int, cmd: dict, timeout: float = 3.0) -> Optional[dict]:
+    try:
+        s = socket.socket()
+        s.settimeout(timeout)
+        s.connect((ip, port))
+        s.sendall((json.dumps(cmd) + "\r\n").encode())
+        buf = b""
+        try:
+            while True:
+                c = s.recv(4096)
+                if not c:
+                    break
+                buf += c
+                if b"\r\n" in buf:
+                    break
+        except Exception:
+            pass
+        s.close()
+        for line in buf.split(b"\r\n"):
+            if line.strip():
+                try:
+                    return json.loads(line)
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"  [raw_req] {e}")
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +126,7 @@ def main():
     print(f"  连接成功  handle.id={handle.id}  DOF={arm.arm_dof}")
 
     # -----------------------------------------------------------------------
-    # [2] 读当前关节角（基准）
+    # [2] 读基准关节角
     # -----------------------------------------------------------------------
     print("\n[2] 读基准关节角 ...")
     code, origin = arm.rm_get_joint_degree()
@@ -128,65 +137,71 @@ def main():
     print(f"  基准角 (deg): {[round(j, 2) for j in origin]}")
 
     # -----------------------------------------------------------------------
-    # [3] 逐轴测试 J1-J7，每轴 +10°，验证后回原位
+    # [3] 逐轴测试 J1-J7（atom 整段停住，速度与 tcp_demo 一致）
     # -----------------------------------------------------------------------
-    print(f"\n[3] 逐轴测试（各 +10°，speed=20%）")
-    # J2 已接近上限（~121°），其余轴 +10°，J2 用 -10°
+    SPEED = 35
     DELTA = 10.0
+    # J2 已接近上限（~121°），用 -10°；其余 +10°
     deltas = [DELTA if i != 1 else -DELTA for i in range(len(origin))]
 
-    for i in range(len(origin)):
-        target = list(origin)
-        target[i] += deltas[i]
-        print(f"\n  --- J{i+1} ---")
-        d = deltas[i]
-        print(f"  目标: J{i+1} {origin[i]:.2f}° → {target[i]:.2f}°  (offset {d:+.0f}°)")
-        ok = movej_and_verify(arm, target, atom_pids, f"J{i+1}{d:+.0f}°")
-        if not ok:
-            print(f"  [SKIP] J{i+1} 失败，跳过回原位")
-            continue
+    print(f"\n[3] 逐轴测试（各±10°，speed={SPEED}%，atom 整段暂停）")
+    pause_all(atom_pids, "atom")
+    arm.rm_clear_system_err()
 
-        # 回原位
-        time.sleep(1)
-        movej_and_verify(arm, list(origin), atom_pids, f"J{i+1} 回原位")
-        time.sleep(0.5)
+    try:
+        for i in range(len(origin)):
+            d = deltas[i]
+            target = list(origin)
+            target[i] += d
+            print(f"\n  --- J{i+1} ---")
+            print(f"  目标: J{i+1} {origin[i]:.2f}° → {target[i]:.2f}°  ({d:+.0f}°)")
+
+            ret = arm.rm_movej(target, SPEED, 0, 0, 1)
+            code, joints_now = arm.rm_get_joint_degree()
+            if ret != 0:
+                print(f"  [FAIL] rm_movej 返回 {ret}")
+            elif code == 0:
+                errs = [round(joints_now[k] - target[k], 2) for k in range(len(target))]
+                max_e = max(abs(e) for e in errs)
+                print(f"  到达: {[round(j, 2) for j in joints_now]}"
+                      f"  误差={errs}  max={max_e:.2f}°  {'OK' if max_e < 2 else 'LARGE!'}")
+
+            time.sleep(1)
+
+            arm.rm_movej(list(origin), SPEED, 0, 0, 1)
+            code2, joints_back = arm.rm_get_joint_degree()
+            if code2 == 0:
+                err0 = round(joints_back[i] - origin[i], 2)
+                print(f"  归位: J{i+1}={joints_back[i]:.2f}°  误差={err0:+.2f}°")
+            time.sleep(0.5)
+
+    finally:
+        resume_all(atom_pids, "atom")
+        # 恢复遥控模式（与 tcp_demo finally 里的 set_arm_run_mode mode=1 一致）
+        _raw_req(ip, port, {"command": "set_arm_run_mode", "mode": 1})
+        print("  set_arm_run_mode mode=1 (遥控模式已恢复)")
 
     # -----------------------------------------------------------------------
     # [4] 夹爪测试
     # -----------------------------------------------------------------------
     print("\n[4] 夹爪测试（Realman Plus）")
-    print("  上电 + 初始化协议 ...")
     pause_all(gripper_pids, "zhixing_ctrl")
+    try:
+        ret_v = arm.rm_set_tool_voltage(3)
+        print(f"  rm_set_tool_voltage(3=24V) → {ret_v}")
+        time.sleep(0.5)
 
-    ret_v = arm.rm_set_tool_voltage(3)           # 24V
-    print(f"  rm_set_tool_voltage(3=24V) → {ret_v}")
-    time.sleep(0.5)
+        ret_m = arm.rm_set_rm_plus_mode(115200)
+        print(f"  rm_set_rm_plus_mode(115200) → {ret_m}")
+        time.sleep(0.3)
 
-    ret_m = arm.rm_set_rm_plus_mode(115200)      # 启用 Realman Plus
-    print(f"  rm_set_rm_plus_mode(115200) → {ret_m}")
-    time.sleep(0.3)
-
-    print("  全开 (position=1000) ...")
-    ret_o1 = arm.rm_set_gripper_position(1000, True, 5)
-    print(f"  rm_set_gripper_position(1000, block=True, timeout=5) → {ret_o1}")
-    time.sleep(2)
-
-    print("  半闭 (position=500) ...")
-    ret_h = arm.rm_set_gripper_position(500, True, 5)
-    print(f"  rm_set_gripper_position(500, block=True, timeout=5) → {ret_h}")
-    time.sleep(2)
-
-    print("  全闭 (position=0) ...")
-    ret_c = arm.rm_set_gripper_position(0, True, 8)
-    print(f"  rm_set_gripper_position(0, block=True, timeout=8) → {ret_c}")
-    time.sleep(2)
-
-    print("  全开 (position=1000) ...")
-    ret_o2 = arm.rm_set_gripper_position(1000, True, 5)
-    print(f"  rm_set_gripper_position(1000, block=True, timeout=5) → {ret_o2}")
-    time.sleep(2)
-
-    resume_all(gripper_pids, "zhixing_ctrl")
+        for label, pos, t in [("全开", 1000, 5), ("半闭", 500, 5),
+                               ("全闭", 0, 8),   ("全开", 1000, 5)]:
+            ret = arm.rm_set_gripper_position(pos, True, t)
+            print(f"  {label} (pos={pos}, timeout={t}s) → {ret}")
+            time.sleep(2)
+    finally:
+        resume_all(gripper_pids, "zhixing_ctrl")
 
     # -----------------------------------------------------------------------
     # [5] 断开
