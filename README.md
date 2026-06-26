@@ -2,6 +2,8 @@
 
 **当前阶段目标：识别商品，接收明确商品指令，然后直接抓取。**
 
+**主程序目前不保证有效, 但是目前 demo 应该是能跑通的**
+
 这个分支面向双臂 Realman + RealSense 迁移调试。自然语言、语音和 Gemini Agent 暂时不是主路径；主入口是 `direct_grab.py`，流程是：
 
 1. 初始化 YOLO 商品识别、RealSense 相机、Realman 机械臂。
@@ -10,6 +12,34 @@
 4. 系统按确定性指令执行抓取。
 
 旧的 `main_agent.py` 和 Gemini/语音模块仍保留在仓库里，后续需要自然语言交互时再接回。
+
+## 推荐阅读顺序
+
+1. 先读本 README，了解当前主路径、环境要求和项目结构。
+2. 再读 [READ.md](READ.md) (ai 写的, 没怎么认真看过, 仅供参考)，看当前直接抓取架构图和模块调用关系。
+3. 真机调试前读 [docs/demo_operation_guide.md](docs/demo_operation_guide.md) (**这个可以看**)，里面整理了 demo 用法、遥操进程冲突、ROS/相机/夹爪参考命令。
+
+## 当前 Demo 一览
+
+| 文件 | 作用 | 当前状态 |
+|------|------|----------|
+| `direct_grab.py` | 当前主入口。无 Gemini/语音，初始化 YOLO、RealSense、Realman 后按商品名或编号抓取。 | 主路径，但上真机前仍依赖标定和硬件连通检查。 |
+| `grasp_demo.py` | 右臂单次抓取安全 Demo。停遥操、纯 SDK 抓取、官方 upstart 重启遥操。 | 右臂已填入一组 HOME/抓取位姿，可用于安全流程验证。 |
+| `grasp_demo_left.py` | 左臂单次抓取 Demo 模板。结构与右臂一致。 | 需要先用 `pose_reader.py 169.254.128.18` 记录左臂位姿，再把 `LEFT_POSES_VERIFIED` 改成 `True`。 |
+| `pose_reader.py` | 遥操时实时读取关节角和末端位姿，不停止 `atom`。 | 用于给 `grasp_demo.py` / `grasp_demo_left.py` 记录 HOME 和抓取位姿。 |
+| `sdk_demo.py` | Realman SDK 双臂关节和夹爪低层测试。 | 调硬件连通用；不是推荐的完整抓取流程。 |
+
+更详细的运行步骤和注意事项见 [docs/demo_operation_guide.md](docs/demo_operation_guide.md)。
+
+## 本分支主要改动
+
+- 新增 `direct_grab.py` 作为确定性扫描/抓取入口，绕过旧 Gemini Agent 和语音状态机。
+- `intelligence/robot_tools.py`、`references/enhanced_grab_interface.py` 当前服务于直接抓取路径，避免把旧 `main_workflow` 和旧 RM_API2 控制器拉回主流程。
+- `controllers/arm_controller.py` 切到 Realman 官方 `robotic-arm` SDK，并支持双臂 IP、Realman Plus 夹爪和 RealSense 手眼变换读取。
+- `config.yaml` 改成双臂 Realman + RealSense 配置，位姿、手眼矩阵和放置点仍是迁移初始值，需要真机重新标定。
+- Docker 文件保留为开发容器草案，但真实机器人部署优先在机器人主机 Python 环境中验证。
+- 新增/整理了 `grasp_demo.py`、`grasp_demo_left.py`、`pose_reader.py` 等真机调试脚本，用于安全地验证单臂抓取、读取位姿和恢复遥操。
+- `grasp_demo.py` 的夹爪流程改为：通信初始化后先闭合到默认状态，抓取前再打开，夹取后释放，最后恢复默认闭合；关键夹爪动作都检查返回值，避免失败后继续运动。
 
 ## 当前主入口
 
@@ -87,7 +117,7 @@ python3 direct_grab.py scan
 python3 direct_grab.py grab 红牛
 ```
 
-### Docker 状态说明
+### Docker 状态说明 (这部分是 ai 写的, 我还没确认过)
 
 Docker 相关文件是**开发容器草案**，不是已经验证过的机器人部署方式。
 
@@ -135,10 +165,18 @@ python3 direct_grab.py --help
 Grabber/
 ├── direct_grab.py                # 当前主入口：无 Gemini 的直接扫描/抓取
 ├── main_agent.py                 # 旧 Agent/语音入口，当前非主路径
+├── grasp_demo.py                 # 右臂固定点抓取安全 Demo
+├── grasp_demo_left.py            # 左臂固定点抓取 Demo 模板
+├── pose_reader.py                # 遥操时读取关节角和末端位姿
+├── sdk_demo.py                   # Realman SDK 低层连通测试
+├── READ.md                       # 当前架构图
 ├── config.yaml                   # 统一系统配置
 ├── requirements.txt               # pip依赖
 ├── docker-compose.yml            # 容器编排配置
 ├── Dockerfile                    # 多架构镜像构建
+│
+├── docs/
+│   └── demo_operation_guide.md   # Demo、真机安全、ROS/相机/夹爪操作参考
 │
 ├── intelligence/                  # AI相关
 │   ├── gemini_agent.py           # 旧 Gemini AI 核心
