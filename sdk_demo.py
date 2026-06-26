@@ -177,7 +177,8 @@ def main():
 
     finally:
         resume_all(atom_pids, "atom")
-        # 恢复遥控模式（与 tcp_demo finally 里的 set_arm_run_mode mode=1 一致）
+        arm.rm_delete_robot_arm()
+        time.sleep(0.3)
         _raw_req(ip, port, {"command": "set_arm_run_mode", "mode": 1})
         print("  set_arm_run_mode mode=1 (遥控模式已恢复)")
 
@@ -203,11 +204,6 @@ def main():
     finally:
         resume_all(gripper_pids, "zhixing_ctrl")
 
-    # -----------------------------------------------------------------------
-    # [5] 断开
-    # -----------------------------------------------------------------------
-    print("\n[5] 断开 SDK 连接 ...")
-    arm.rm_delete_robot_arm()
     print("  Done.\n")
 
 
