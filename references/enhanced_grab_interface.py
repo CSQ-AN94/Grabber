@@ -15,9 +15,7 @@ import time
 import math
 from typing import Dict, Any, Optional, List
 import cv2
-
-# 导入references中的核心算法
-from references.main_workflow import *
+from scipy.spatial.transform import Rotation
 
 # 全局放置计数器（模拟reference中的placement_counter）
 _placement_counter = 0
@@ -28,6 +26,66 @@ def get_next_placement_index():
     index = _placement_counter % 3  # 循环使用3个放置点
     _placement_counter += 1
     return index
+
+
+def matrix_to_pose6d(matrix):
+    """Convert a 4x4 pose matrix to [x, y, z, roll, pitch, yaw]."""
+    rotation = Rotation.from_matrix(matrix[:3, :3])
+    roll, pitch, yaw = rotation.as_euler("xyz", degrees=False)
+    x, y, z = matrix[:3, 3]
+    return [float(x), float(y), float(z), float(roll), float(pitch), float(yaw)]
+
+
+def _build_pose_row(z: float, roll: float, pitch: float, yaw: float) -> np.ndarray:
+    """Build a provisional shelf pose row until the dual-arm shelf is recalibrated."""
+    xs = np.linspace(-0.15, 0.19, 35)
+    return np.asarray([[float(x), 0.30, z, roll, pitch, yaw] for x in xs], dtype=float)
+
+
+# Temporary pose rows for direct mode. These are intentionally simple because
+# config.yaml still marks all dual-arm shelf/dropoff poses as calibration TODOs.
+ROW1_POSES = _build_pose_row(0.61, 0.20, 1.30, 1.55)
+ROW2_POSES = _build_pose_row(0.40, 2.85, 1.40, -1.75)
+
+
+def pick_nearest_pose_lex(target_pose6d, yolopose=None, image_match=False):
+    """
+    Select a shelf pose without importing the legacy main_workflow module.
+
+    If image_match is enabled, choose row by image y and x by a simple calibrated
+    pixel-to-shelf-x mapping. Otherwise choose row by target z and pose by x.
+    """
+    row1_mat = ROW1_POSES
+    row2_mat = ROW2_POSES
+
+    if image_match and yolopose is not None:
+        yolo_x = (yolopose[0] + yolopose[2]) / 2
+        yolo_y = (yolopose[1] + yolopose[3]) / 2
+        shelf_x = 0.0009812949 * yolo_x - 0.30355394
+        selected = row1_mat if 0 < yolo_y < 210 else row2_mat
+        idx = int(np.argmin(np.abs(selected[:, 0] - shelf_x)))
+        best_vec = selected[idx]
+        print(f"位姿库选择: image row={'ROW1' if selected is row1_mat else 'ROW2'}, x={shelf_x:.3f}, idx={idx}")
+        return [float(v) for v in best_vec.tolist()], 0
+
+    if not target_pose6d or len(target_pose6d) < 3:
+        return None, None
+
+    tx, ty, tz = float(target_pose6d[0]), float(target_pose6d[1]), float(target_pose6d[2])
+    zdiff_row1 = float(np.min(np.abs(row1_mat[:, 2] - tz)))
+    zdiff_row2 = float(np.min(np.abs(row2_mat[:, 2] - tz)))
+    selected = row1_mat if zdiff_row1 <= zdiff_row2 else row2_mat
+    selected_row_name = "ROW1" if selected is row1_mat else "ROW2"
+    idx = int(np.argmin(np.abs(selected[:, 0] - tx)))
+    best_vec = selected[idx]
+    bx, by, bz = float(best_vec[0]), float(best_vec[1]), float(best_vec[2])
+    diffs = (bz - tz, bx - tx, by - ty)
+    print(
+        f"位姿库选择: {selected_row_name}, idx={idx}, "
+        f"delta_z={diffs[0]:+.3f}, delta_x={diffs[1]:+.3f}, delta_y={diffs[2]:+.3f}"
+    )
+    return [float(v) for v in best_vec.tolist()], diffs
+
 
 def execute_grab_with_hardware(item_name: str, 
                               vision_analyzer, camera_thread, arm_controller) -> Dict[str, Any]:
@@ -234,7 +292,6 @@ def calculate_grasp_poses(target: Dict, arm_controller) -> tuple:
         T_base_pre_grasp_target[:3, 3] = pre_grasp_position
         
         # 转换为6D位姿格式
-        from robot_controller import matrix_to_pose6d
         touch_pose_6d = matrix_to_pose6d(T_base_touch_target)
         pre_grasp_pose_6d = matrix_to_pose6d(T_base_pre_grasp_target)
         

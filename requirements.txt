@@ -1,21 +1,23 @@
-# 核心AI框架
+# 核心视觉框架
 torch
 torchvision
 ultralytics
-google-genai
 
 # 计算机视觉
 opencv-python
 numpy<2.0
 scipy
 Pillow
+pyrealsense2
 
-# 音频处理 
+# 直接抓取主流程不需要自然语言；以下语音依赖保留给旧 main_agent.py
 sounddevice
 PyAudio
 sherpa-onnx
+google-genai
 
 # 机器人通信
+robotic-arm
 pyserial
 pymodbus
 python-can

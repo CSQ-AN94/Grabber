@@ -48,22 +48,6 @@ COPY requirements.txt .
 # --- 安装Python核心依赖 ---
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY external/ ./external/
-
-# --- 编译并强制安装pyorbbecsdk ---
-RUN cd /app/external/pyorbbecsdk && \
-    echo "Skipping sdk's requirements.txt to avoid pre-installation." && \
-    mkdir -p build && cd build && \
-    cmake -Dpybind11_DIR=$(pybind11-config --cmakedir) .. && \
-    make -j$(nproc) && \
-    make install && \
-    cd .. && \
-    python3 setup.py bdist_wheel && \
-    pip install --force-reinstall ./dist/pyorbbecsdk-*.whl && \
-    rm -rf /app/external/pyorbbecsdk/build /app/external/pyorbbecsdk/dist
-# --- 安装udev规则 ---
-RUN bash /app/external/pyorbbecsdk/scripts/install_udev_rules.sh
-
 COPY . .
 ENV PYTHONPATH=/app
-CMD ["bash"]
+CMD ["python3", "direct_grab.py"]
