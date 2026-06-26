@@ -188,12 +188,23 @@ def main():
 
         print("\n[8] 回 HOME ...")
         check(arm.rm_movej(HOME_JOINTS, SPEED_JOINT, 0, 0, 1), "movej HOME (final)")
+
+        print("\n[9] 夹爪松开（释放物体）...")
+        r = arm.rm_set_gripper_position(1000, True, 5)
+        print(f"  夹爪已全开" if r == 0 else f"  [WARN] 夹爪松开失败 ret={r}")
+
         grasp_ok = True
         print("\n✓ 抓取序列完成")
 
     except Exception as e:
         print(f"\n[ERROR] {e}")
     finally:
+        # 保险：无论是否完成，确保夹爪松开
+        try:
+            arm.rm_set_gripper_position(1000, False, 3)
+        except Exception:
+            pass
+        time.sleep(0.5)
         # [5] 断 SDK → 官方重启遥操
         arm.rm_delete_robot_arm()
         time.sleep(0.5)
