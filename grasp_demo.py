@@ -28,8 +28,9 @@ except ImportError:
     sys.exit(1)
 
 # ── 参数（根据 pose_reader 记录填入）────────────────────────────────────
-IP   = sys.argv[1] if len(sys.argv) > 1 else "169.254.128.19"
-PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 8080
+IP      = sys.argv[1] if len(sys.argv) > 1 else "169.254.128.19"
+PORT    = int(sys.argv[2]) if len(sys.argv) > 2 else 8080
+LEFT_IP = "169.254.128.18"   # 结束时也要恢复左臂遥控
 
 # HOME 位置（关节角，度）
 HOME_JOINTS = [-5.6, 121.6, 50.4, 8.2, 165.8, -6.1, 51.0]
@@ -63,10 +64,10 @@ def resume_all(pids, name=""):
     for pid in pids: os.kill(pid, signal.SIGCONT)
     if pids: print(f"  [SIGCONT] {name} {pids}")
 
-def raw_req(cmd, timeout=3.0):
+def raw_req(cmd, timeout=3.0, ip_override=None):
     try:
         s = socket.socket(); s.settimeout(timeout)
-        s.connect((IP, PORT))
+        s.connect((ip_override or IP, PORT))
         s.sendall((json.dumps(cmd) + "\r\n").encode())
         buf = b""
         try:
@@ -176,8 +177,11 @@ def main():
         resume_all(atom_pids, "atom")
         arm.rm_delete_robot_arm()          # 先断 SDK 连接
         time.sleep(0.3)                    # 等端口完全释放
-        raw_req({"command": "set_arm_run_mode", "mode": 1})  # 再恢复遥控模式
-        print("  SDK 断开，遥控已恢复")
+        # 双臂都恢复遥控模式（左臂 IP 也要发，否则左臂卡在位置控制模式）
+        for restore_ip in [IP, LEFT_IP]:
+            raw_req({"command": "clear_system_err"}, ip_override=restore_ip)
+            raw_req({"command": "set_arm_run_mode", "mode": 1}, ip_override=restore_ip)
+        print("  SDK 断开，双臂遥控已恢复")
 
 if __name__ == "__main__":
     main()
