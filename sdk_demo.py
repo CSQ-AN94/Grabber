@@ -205,8 +205,9 @@ def main():
                 ret_m = arm.rm_set_rm_plus_mode(115200)
                 print(f"  rm_set_rm_plus_mode(115200)  → {ret_m}")
                 time.sleep(0.3)
-                for label, pos, t in [("全开", 1000, 5), ("半闭", 500, 5),
-                                       ("全闭",    0, 8), ("全开", 1000, 5)]:
+                for label, pos, t in [("全闭", 0, 8), ("半开", 500, 5),
+                                       ("全闭",  0, 8), ("全开", 1000, 5),
+                                       ("全闭",  0, 8)]:
                     ret = arm.rm_set_gripper_position(pos, True, t)
                     print(f"  {label} pos={pos:4d}  timeout={t}s  → {ret}")
                     time.sleep(2)
