@@ -60,7 +60,7 @@ python3 direct_grab.py grab 红牛
 
 ---
 
-## 快速开始
+## 运行方式
 
 ### 环境要求
 
@@ -70,35 +70,54 @@ python3 direct_grab.py grab 红牛
 - RealSense 深度相机
 - Realman 机械臂网络可达
 
-### Docker环境搭建
+### 推荐路径：机器人主机 Python 环境
 
-```bash
-# 1. 克隆项目并初始化子模块
-git clone <repository-url>
-cd Grabber
-
-# 2. 构建开发环境镜像
-docker compose build
-
-# 3. 进入开发容器
-docker compose run --rm grabber_dev bash
-
-# 4. 验证环境
-nvidia-smi # 验证GPU访问
-```
-
-Docker 镜像默认命令是：
-
-```bash
-python3 direct_grab.py
-```
-
-### 本机 Python 启动
+当前分支还没有在 Docker 内完整验证过 RealSense、Realman SDK、GPU、USB/CAN 权限组合。迁移调试时，优先在机器人主机的 Python 环境里跑：
 
 ```bash
 pip install -r requirements.txt
 python3 direct_grab.py
 ```
+
+最小冒烟测试：
+
+```bash
+python3 direct_grab.py --help
+python3 direct_grab.py scan
+python3 direct_grab.py grab 红牛
+```
+
+### Docker 状态说明
+
+Docker 相关文件是**开发容器草案**，不是已经验证过的机器人部署方式。
+
+- [Dockerfile](Dockerfile) 会构建 CUDA/Jetson 基础镜像，安装系统包和 `requirements.txt`。
+- 当前分支使用 RealSense，因此 Dockerfile 不再编译旧 Orbbec `pyorbbecsdk`。
+- [docker-compose.yml](docker-compose.yml) 使用 `privileged: true`、`network_mode: host`，挂载 USB、声卡、X11、PulseAudio，并声明 GPU。
+- compose 里有 `command: tail -f /dev/null`，所以 `docker compose up` 只是让容器常驻，不会自动运行抓取程序。
+- 这套 Docker 配置还没有在目标机器人上确认过 `pyrealsense2`、`robotic-arm`、GPU、USB 设备映射是否都可用。
+
+如果要试 Docker，建议按“先建容器，再手动进容器跑命令”的方式：
+
+```bash
+git clone <repository-url>
+cd Grabber
+
+docker compose build
+docker compose up -d
+docker compose exec grabber_dev bash
+```
+
+进入容器后再检查：
+
+```bash
+nvidia-smi
+python3 -c "import pyrealsense2 as rs; print('realsense ok')"
+python3 -c "from Robotic_Arm.rm_robot_interface import RoboticArm; print('realman sdk ok')"
+python3 direct_grab.py --help
+```
+
+这些检查通过后，再接真实硬件扫描和抓取。
 
 ### 标定状态
 
