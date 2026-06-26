@@ -141,68 +141,72 @@ def main():
     # -----------------------------------------------------------------------
     SPEED = 35
     DELTA = 10.0
-    # J2 已接近上限（~121°），用 -10°；其余 +10°
-    deltas = [DELTA if i != 1 else -DELTA for i in range(len(origin))]
+    # J2 方向：正值时接近上限用 -10°，负值时接近下限用 +10°（兼容左右臂）
+    deltas = [DELTA if i != 1 else (-DELTA if origin[1] > 0 else DELTA)
+              for i in range(len(origin))]
 
-    print(f"\n[3] 逐轴测试（各±10°，speed={SPEED}%，atom 整段暂停）")
-    pause_all(atom_pids, "atom")
-    arm.rm_clear_system_err()
-
+    # ------------------------------------------------------------------
+    # [3] + [4] 共用一个 arm 连接，统一在最外层 finally 断开
+    # ------------------------------------------------------------------
     try:
-        for i in range(len(origin)):
-            d = deltas[i]
-            target = list(origin)
-            target[i] += d
-            print(f"\n  --- J{i+1} ---")
-            print(f"  目标: J{i+1} {origin[i]:.2f}° → {target[i]:.2f}°  ({d:+.0f}°)")
+        # [3] 逐轴测试（atom 整段 SIGSTOP）
+        print(f"\n[3] 逐轴测试（各±10°，speed={SPEED}%，atom 整段暂停）")
+        pause_all(atom_pids, "atom")
+        arm.rm_clear_system_err()
+        try:
+            for i in range(len(origin)):
+                d = deltas[i]
+                target = list(origin)
+                target[i] += d
+                print(f"\n  --- J{i+1} ---")
+                print(f"  目标: J{i+1} {origin[i]:.2f}° → {target[i]:.2f}°  ({d:+.0f}°)")
 
-            ret = arm.rm_movej(target, SPEED, 0, 0, 1)
-            code, joints_now = arm.rm_get_joint_degree()
-            if ret != 0:
-                print(f"  [FAIL] rm_movej 返回 {ret}")
-            elif code == 0:
-                errs = [round(joints_now[k] - target[k], 2) for k in range(len(target))]
-                max_e = max(abs(e) for e in errs)
-                print(f"  到达: {[round(j, 2) for j in joints_now]}"
-                      f"  误差={errs}  max={max_e:.2f}°  {'OK' if max_e < 2 else 'LARGE!'}")
+                ret = arm.rm_movej(target, SPEED, 0, 0, 1)
+                code, joints_now = arm.rm_get_joint_degree()
+                if ret != 0:
+                    print(f"  [FAIL] rm_movej 返回 {ret}")
+                elif code == 0:
+                    errs = [round(joints_now[k] - target[k], 2) for k in range(len(target))]
+                    max_e = max(abs(e) for e in errs)
+                    print(f"  到达: {[round(j, 2) for j in joints_now]}"
+                          f"  误差={errs}  max={max_e:.2f}°  {'OK' if max_e < 2 else 'LARGE!'}")
 
-            time.sleep(1)
+                time.sleep(1)
 
-            arm.rm_movej(list(origin), SPEED, 0, 0, 1)
-            code2, joints_back = arm.rm_get_joint_degree()
-            if code2 == 0:
-                err0 = round(joints_back[i] - origin[i], 2)
-                print(f"  归位: J{i+1}={joints_back[i]:.2f}°  误差={err0:+.2f}°")
+                arm.rm_movej(list(origin), SPEED, 0, 0, 1)
+                code2, joints_back = arm.rm_get_joint_degree()
+                if code2 == 0:
+                    err0 = round(joints_back[i] - origin[i], 2)
+                    print(f"  归位: J{i+1}={joints_back[i]:.2f}°  误差={err0:+.2f}°")
+                time.sleep(0.5)
+        finally:
+            resume_all(atom_pids, "atom")
+
+        # [4] 夹爪测试（zhixing_ctrl 整段 SIGSTOP，arm 连接保持）
+        print("\n[4] 夹爪测试（Realman Plus）")
+        pause_all(gripper_pids, "zhixing_ctrl")
+        try:
+            ret_v = arm.rm_set_tool_voltage(3)
+            print(f"  rm_set_tool_voltage(3=24V) → {ret_v}")
             time.sleep(0.5)
 
+            ret_m = arm.rm_set_rm_plus_mode(115200)
+            print(f"  rm_set_rm_plus_mode(115200) → {ret_m}")
+            time.sleep(0.3)
+
+            for label, pos, t in [("全开", 1000, 5), ("半闭", 500, 5),
+                                   ("全闭", 0, 8),   ("全开", 1000, 5)]:
+                ret = arm.rm_set_gripper_position(pos, True, t)
+                print(f"  {label} (pos={pos}, timeout={t}s) → {ret}")
+                time.sleep(2)
+        finally:
+            resume_all(gripper_pids, "zhixing_ctrl")
+
     finally:
-        resume_all(atom_pids, "atom")
         arm.rm_delete_robot_arm()
         time.sleep(0.3)
         _raw_req(ip, port, {"command": "set_arm_run_mode", "mode": 1})
         print("  set_arm_run_mode mode=1 (遥控模式已恢复)")
-
-    # -----------------------------------------------------------------------
-    # [4] 夹爪测试
-    # -----------------------------------------------------------------------
-    print("\n[4] 夹爪测试（Realman Plus）")
-    pause_all(gripper_pids, "zhixing_ctrl")
-    try:
-        ret_v = arm.rm_set_tool_voltage(3)
-        print(f"  rm_set_tool_voltage(3=24V) → {ret_v}")
-        time.sleep(0.5)
-
-        ret_m = arm.rm_set_rm_plus_mode(115200)
-        print(f"  rm_set_rm_plus_mode(115200) → {ret_m}")
-        time.sleep(0.3)
-
-        for label, pos, t in [("全开", 1000, 5), ("半闭", 500, 5),
-                               ("全闭", 0, 8),   ("全开", 1000, 5)]:
-            ret = arm.rm_set_gripper_position(pos, True, t)
-            print(f"  {label} (pos={pos}, timeout={t}s) → {ret}")
-            time.sleep(2)
-    finally:
-        resume_all(gripper_pids, "zhixing_ctrl")
 
     print("  Done.\n")
 
