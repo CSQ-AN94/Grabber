@@ -111,11 +111,9 @@ def main():
     pause(atom_pid, "atom")
     arm.rm_clear_system_err()
     ret = arm.rm_movej(target, 20, 0, 0, 1)   # speed=20%, block=1
-    resume(atom_pid, "atom")
     print(f"  rm_movej 返回: {ret}")
 
-    # --- 验证 ---
-    time.sleep(0.5)
+    # --- 验证（atom 仍 SIGSTOP，读数不受遥控干扰）---
     code, joints_now = arm.rm_get_joint_degree()
     if code == 0:
         print(f"  运动后关节角 (deg): {[round(j, 3) for j in joints_now]}")
@@ -123,6 +121,7 @@ def main():
         print(f"  J1 实际偏移: {delta:+.2f}°  (期望 +20°)")
     else:
         print(f"  [WARN] 验证读角失败，错误码: {code}")
+    resume(atom_pid, "atom")
 
     # --- 等待 ---
     print("\n[4] 等待 3 秒后回原位 ...")
@@ -135,8 +134,11 @@ def main():
     pause(atom_pid, "atom")
     arm.rm_clear_system_err()
     ret2 = arm.rm_movej(origin, 20, 0, 0, 1)
-    resume(atom_pid, "atom")
     print(f"  rm_movej 返回: {ret2}")
+    code2, joints_back = arm.rm_get_joint_degree()
+    if code2 == 0:
+        print(f"  回原位后关节角 (deg): {[round(j, 3) for j in joints_back]}")
+    resume(atom_pid, "atom")
 
     # --- 断开 ---
     time.sleep(0.5)
