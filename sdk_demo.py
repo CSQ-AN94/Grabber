@@ -27,12 +27,11 @@ except ImportError:
     print("[FATAL] 未找到 Robotic_Arm 模块，请先运行: pip install robotic-arm")
     sys.exit(1)
 
-LEFT_IP    = "169.254.128.18"
-RIGHT_IP   = "169.254.128.19"
-PORT       = 8080
-SPEED      = 35
-DELTA      = 10.0
-GRIPPER_IP = RIGHT_IP   # 夹爪在右臂
+LEFT_IP  = "169.254.128.18"
+RIGHT_IP = "169.254.128.19"
+PORT     = 8080
+SPEED    = 35
+DELTA    = 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -189,31 +188,34 @@ def main():
             _raw_req(ip, {"command": "set_arm_run_mode", "mode": 1})
         print("  set_arm_run_mode mode=1 → 双臂遥控模式已恢复")
 
-    # ── 夹爪测试（右臂，zhixing_ctrl 整段 SIGSTOP）──────────────────────
+    # ── 夹爪测试（双臂，zhixing_ctrl 整段 SIGSTOP）──────────────────────
     if do_gripper:
-        print(f"\n[夹爪测试] 右臂 {GRIPPER_IP}")
-        arm = RoboticArm(rm_thread_mode_e.RM_TRIPLE_MODE_E)
-        handle = arm.rm_create_robot_arm(GRIPPER_IP, PORT)
-        if handle.id == -1:
-            print("  [FAIL] 夹爪臂 SDK 连接失败")
-        else:
-            pause_all(gripper_pids, "zhixing_ctrl")
-            try:
-                ret_v = arm.rm_set_tool_voltage(3)
-                print(f"  rm_set_tool_voltage(3=24V)   → {ret_v}")
-                time.sleep(0.5)
-                ret_m = arm.rm_set_rm_plus_mode(115200)
-                print(f"  rm_set_rm_plus_mode(115200)  → {ret_m}")
-                time.sleep(0.3)
-                for label, pos, t in [("全闭", 0, 8), ("半开", 500, 5),
-                                       ("全闭",  0, 8), ("全开", 1000, 5),
-                                       ("全闭",  0, 8)]:
-                    ret = arm.rm_set_gripper_position(pos, True, t)
-                    print(f"  {label} pos={pos:4d}  timeout={t}s  → {ret}")
-                    time.sleep(2)
-            finally:
-                resume_all(gripper_pids, "zhixing_ctrl")
-                arm.rm_delete_robot_arm()
+        pause_all(gripper_pids, "zhixing_ctrl")
+        try:
+            for ip, label in arms_to_test:
+                print(f"\n[夹爪测试] {label} ({ip})")
+                arm = RoboticArm(rm_thread_mode_e.RM_TRIPLE_MODE_E)
+                handle = arm.rm_create_robot_arm(ip, PORT)
+                if handle.id == -1:
+                    print("  [FAIL] SDK 连接失败")
+                    continue
+                try:
+                    arm.rm_set_tool_voltage(3); time.sleep(0.5)
+                    arm.rm_set_rm_plus_mode(115200); time.sleep(0.5)
+                    # 非阻塞预全闭：不管初始是开还是关，先强制到 0
+                    arm.rm_set_gripper_position(0, False, 0)
+                    time.sleep(2.0)
+                    for g_label, pos, t in [("全闭", 0, 8), ("半开", 500, 5),
+                                             ("全闭",  0, 8), ("全开", 1000, 5),
+                                             ("全闭",  0, 8)]:
+                        ret = arm.rm_set_gripper_position(pos, True, t)
+                        print(f"  {g_label} pos={pos:4d}  → {'OK' if ret == 0 else f'FAIL({ret})'}")
+                        time.sleep(1.5)
+                finally:
+                    arm.rm_delete_robot_arm()
+                    time.sleep(0.3)
+        finally:
+            resume_all(gripper_pids, "zhixing_ctrl")
 
     # ── 汇总 ─────────────────────────────────────────────────────────────
     print("\n" + "="*50)
@@ -222,7 +224,7 @@ def main():
     for label, ok in joint_results.items():
         print(f"  {label} 关节测试: {'✓ OK' if ok else '✗ 有失败'}")
     if do_gripper:
-        print(f"  夹爪测试: ✓ 完成（详见上方输出）")
+        print(f"  夹爪测试: ✓ 完成（左臂+右臂，详见上方输出）")
     print()
 
 
