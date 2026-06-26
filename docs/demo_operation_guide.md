@@ -20,7 +20,45 @@
 
 
 
-## 2. 机器人与环境信息
+## 2. 重要后台进程
+
+真机上最容易出问题的是控制权冲突。机器人电脑后台常驻两个进程：
+
+```text
+atom            关节遥操控制器。它会约 100Hz 向机械臂持续发送关节保持/遥操指令。
+zhixing_ctrl.py 夹爪遥操控制器。它会约 10Hz 向夹爪持续发送开合位置指令。
+```
+
+这两个进程的作用是让机器人在遥操模式下保持可控：
+
+```text
+atom            负责机械臂关节，不停告诉从臂当前应该保持/跟随到哪里。
+zhixing_ctrl.py 负责夹爪，不停告诉夹爪当前应该开到什么位置。
+```
+
+但是跑 SDK、ROS 或 TCP demo 时，程序也会向机械臂和夹爪发命令。如果后台遥操进程还在运行，就会出现两个控制源同时发命令：
+
+```text
+程序发 movej / movel          atom 又立刻发关节保持命令覆盖它。
+程序发 gripper open / close   zhixing_ctrl.py 又立刻发夹爪遥操命令覆盖它。
+```
+
+所以跑抓取 demo 前，通常要先停止它们，让 SDK 独占控制权：
+
+```bash
+pkill -x atom
+pkill -f zhixing_ctrl.py
+```
+
+`grasp_demo.py` 和 `grasp_demo_left.py` 会自动做这件事，并在结束时调用官方 `upstart_all.sh` 恢复遥操。不要随便用 `SIGSTOP` 冻住 `atom` 后直接恢复遥操，因为主从位置可能错位，恢复瞬间可能产生危险动作。
+
+检查它们是否在运行：
+
+```bash
+ps aux | grep -E 'atom|zhixing' | grep -v grep
+```
+
+## 3. 机器人与环境信息
 
 远程机器人电脑：
 
@@ -54,7 +92,7 @@ conda activate lerobot
 
 Grabber 仓库运行环境优先使用机器人主机 Python 环境。Docker 目前只是开发容器草案，还没有完整验证 RealSense、Realman SDK、GPU、USB/CAN 权限组合。
 
-## 3. 安全规则
+## 4. 安全规则
 
 开始前确认：
 
@@ -82,7 +120,7 @@ zhixing_ctrl.py 夹爪遥操控制器，约 10Hz 向夹爪发位置命令。
 ps aux | grep -E 'atom|zhixing' | grep -v grep
 ```
 
-## 4. Demo 速查
+## 5. Demo 速查
 
 ### `pose_reader.py`
 
@@ -303,7 +341,7 @@ q       退出
 
 这个 ID=1 的舵机应该存在问题, 摄像头不可以上下移动, 只可以左右移动.
 
-## 5. ROS 右臂 driver 与夹爪参考
+## 6. ROS 右臂 driver 与夹爪参考
 
 ROS 控制不属于当前 Grabber 主路径，但对排查 driver、topic 和夹爪链路很有用。
 
@@ -372,7 +410,7 @@ pkill -x atom
 
 优先使用 `block: false`。如果 `block: true` 时后台遥操仍在发夹爪命令，超时后可能导致夹爪控制器锁死。
 
-## 6. 读取右臂状态
+## 7. 读取右臂状态
 
 状态查询命令 topic：
 
@@ -400,7 +438,7 @@ ros2 topic pub --once /right_arm_controller/rm_driver/get_current_arm_state_cmd 
 
 当前不要用 `/joint_states` 判断真实关节角，因为它可能全是 0。以上 result topic 里的 `joint` 更可靠。
 
-## 7. RealSense 相机快照
+## 8. RealSense 相机快照
 
 进入相机项目：
 
@@ -449,7 +487,7 @@ scp -r rm@192.168.3.68:/home/rm/Dev/bi_realman_ws/third_party/lerobot_robot_bi_r
 open ~/Downloads/realman_captured_images
 ```
 
-## 8. 常见问题
+## 9. 常见问题
 
 ### 命令发出但手臂不动
 
