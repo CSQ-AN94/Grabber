@@ -227,6 +227,14 @@ req({"command": "hand_follow_pos", "hand_pos": [0]})     # 闭合
 | `left_wrist_0` | 左臂腕部 | 左臂末端局部视角 |
 | `right_wrist_0` | 右臂腕部 | 右臂末端局部视角 |
 
+各相机对应的图像 key 和 RealSense 序列号：
+
+| 位置 | 图像 key | RealSense serial |
+|------|------|------|
+| 头部/底座相机 | `base_0_rgb` / `head` | `153122071777` |
+| 左腕相机 | `left_wrist_0_rgb` / `left_hand` | `335522072194` |
+| 右腕相机 | `right_wrist_0_rgb` / `right_hand` | `405622073249` |
+
 ### 拍快照
 
 ```bash
