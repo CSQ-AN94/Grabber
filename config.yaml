@@ -39,13 +39,25 @@ ugv:
   speed: 0.1
 
 # 手眼标定配置 - 4x4变换矩阵 T_end_to_camera
-# !! 以下为占位值，更换相机后必须重新手眼标定 !!
+# !! 以下为占位值（腕部相机eye-in-hand用，还没做），更换相机后必须重新手眼标定 !!
 calibration:
   T_end_to_camera:
     - [ 1.0,  0.0,  0.0, -0.05]
     - [ 0.0,  1.0,  0.0,  0.00]
     - [ 0.0,  0.0,  1.0, -0.08]
     - [ 0.0,  0.0,  0.0,  1.0 ]
+
+  # 头部相机(base_0) eye-to-hand 真实标定结果，2026-07-08 用
+  # scripts/run_eye_to_hand_calibration.py 实测标定（13/13姿态成功检测棋盘格）。
+  # 前提：头部舵机固定在 scripts/head_position_lock.py 的 HEAD_REFERENCE
+  # (angle1=398, angle2=516)，标左臂那轮之前不能再动头部。
+  # 还没接入 utils/config.py 的 CalibrationConfig 解析，暂时只是存档，
+  # 后续接检测流程时需要加对应字段。
+  T_base_right_to_camera_head:
+    - [-0.726498, -0.385993,  0.568517, -0.118502]
+    - [-0.684975,  0.472837, -0.554287,  0.300971]
+    - [ 0.054865,  0.792108,  0.607911,  0.108026]
+    - [ 0.0,       0.0,       0.0,       1.0]
 
 # RealSense 头部相机序列号
 camera:
