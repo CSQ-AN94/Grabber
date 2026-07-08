@@ -1,6 +1,6 @@
 # Realman 双臂机器人 · 使用指南
 
-本文档覆盖从开机到数据采集、模型训练与推理的完整流程。  
+本文档覆盖从开机、网络连接、控制方式到硬件验证的完整流程。  
 进阶操作见 [docs/](docs/) 目录下的各专项文档。
 
 ---
@@ -14,11 +14,8 @@
 5. [控制方式](#五控制方式)
 6. [相机](#六相机)
 7. [硬件验证（首次上手）](#七硬件验证首次上手)
-8. [数据采集（LeRobot）](#八数据采集lerobot)
-9. [模型训练（openpi）](#九模型训练openpi)
-10. [模型推理](#十模型推理)
-11. [常见问题](#十一常见问题)
-12. [参考文档](#十二参考文档)
+8. [常见问题](#八常见问题)
+9. [参考文档](#九参考文档)
 
 ---
 
@@ -343,181 +340,7 @@ sh test/run_head_servo.sh    # 使用机器人本机 Python（含 pyserial）
 
 ---
 
-## 八、数据采集（LeRobot）
-
-数据采集在**遥操模式**下进行，`atom` 和 `zhixing_ctrl.py` 保持运行，不需要停止。
-
-数采代码位于机器人主机：
-
-```bash
-cd ~/Dev/bi_realman_ws/third_party/lerobot_robot_bi_realman
-conda activate lerobot
-```
-
-### 8.1 采集前检查
-
-```bash
-python3 scripts/smoke_test.py    # 查看当前关节角和夹爪状态
-```
-
-### 8.2 采集命令
-
-```bash
-python3 scripts/record.py \
-  --robot.type=bi_realman \
-  --dataset.repo_id=yourname/task_name \
-  --dataset.single_task="pick up the carrot and place it in the bowl" \
-  --dataset.root=./data/task_name \
-  --dataset.num_episodes=10 \
-  --dataset.episode_time_s=30 \
-  --dataset.reset_time_s=10 \
-  --dataset.push_to_hub=false \
-  --display_data=true
-```
-
-| 参数 | 说明 |
-|------|------|
-| `--dataset.single_task` | 任务描述，会作为训练 prompt |
-| `--dataset.root` | 数据集保存路径 |
-| `--dataset.num_episodes` | 本次采集条数 |
-| `--dataset.episode_time_s` | 每条采集时长（秒）|
-| `--dataset.reset_time_s` | 两条之间的复位等待时间（秒）|
-| `--resume=true` | 第二次及以后追加采集时加上 |
-
-**采集数量建议：** 简单 pick-and-place 任务建议至少采集 **120 条**，60 条时成功率明显偏低。
-
-### 8.3 数据格式转换
-
-采集到的数据是 LeRobot **v3.0** 格式，训练框架需要 **v2.1**。可在采集目录的 `info.json` 中确认当前版本。
-
-使用 [any4lerobot](https://github.com/ziweitianshi/any4lerobot) 项目的 `convert_dataset_v30_to_v21.py` 脚本：
-
-```bash
-conda activate lerobot
-
-# 必须先降级 datasets，否则计算 norm-stat 时会报错
-pip install "datasets<4.0.0"
-
-# 运行转换（repo-id 仅作标识符，root 是本地实际路径）
-python convert_dataset_v30_to_v21.py \
-  --repo-id=task_name \
-  --root=/path/to/data/task_name
-```
-
----
-
-## 九、模型训练（openpi）
-
-在**训练服务器**上进行，不在机器人主机。
-
-### 9.1 环境配置
-
-```bash
-conda create -n openpi python=3.11
-conda activate openpi
-
-git clone --recurse-submodules https://github.com/PhysicalIntelligence/openpi.git
-cd openpi
-
-pip install uv
-GIT_LFS_SKIP_SMUDGE=1 uv sync          # 先不下载大文件
-GIT_LFS_SKIP_SMUDGE=1 uv pip install -e .
-```
-
-克隆完成后下载配置文件包，替换以下文件：
-
-- `openpi/src/openpi/training/config.py`
-- 添加两个 `Realman-policy.py` 到 `openpi/src/openpi/policies/`
-- `openpi/scripts/serve_policy.py`
-
-### 9.2 训练配置
-
-在 `config.py` 中添加 `TrainConfig` 条目。关键字段：
-
-```python
-TrainConfig(
-    name="task-name",                      # 配置名，训练命令中用到
-    checkpoint_base_dir="/path/to/model",
-    model=pi0_config.Pi0Config(
-        pi05=True,
-        action_dim=32,                     # 双臂：(7关节+1夹爪)×2 + 升降 = 16/32，按实际调整
-        action_horizon=16,
-        paligemma_variant="gemma_2b_lora",
-        action_expert_variant="gemma_300m_lora",
-    ),
-    data=LeRobotRealmanDataConfig(
-        repo_id="/path/to/data/task-name",
-        base_config=DataConfig(prompt_from_task=True),
-        assets=AssetsConfig(
-            asset_id="task-name",
-            assets_dir="/path/to/data",    # assets_dir/asset_id 拼合等于 repo_id
-        ),
-    ),
-    weight_loader=weight_loaders.CheckpointWeightLoader("/path/to/pi05_base/params"),
-    batch_size=32,
-    num_train_steps=10000,
-    lr_schedule=_optimizer.CosineDecaySchedule(
-        warmup_steps=2000, peak_lr=5e-5,
-        decay_steps=4000, decay_lr=3e-6,
-    ),
-    save_interval=1000,
-    keep_period=1000,                      # 通常与 save_interval 保持整数倍关系
-)
-```
-
-### 9.3 计算归一化统计量
-
-```bash
-uv run scripts/compute_norm_stats.py --config-name task-name
-```
-
-### 9.4 开始训练
-
-```bash
-export WANDB_API_KEY=你的API_KEY
-
-CUDA_VISIBLE_DEVICES=0 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 \
-uv run python scripts/train.py task-name \
-  --exp-name=exp1 \
-  --overwrite      # 首次用 --overwrite，续训用 --resume
-```
-
----
-
-## 十、模型推理
-
-需要两台机器同时运行：训练服务器（policy 服务端）+ 机器人主机（客户端）。
-
-### 服务端（训练服务器）
-
-```bash
-CUDA_VISIBLE_DEVICES=0 uv run scripts/serve_policy.py \
-  policy:checkpoint \
-  --policy.config task-name \
-  --policy.dir /path/to/model/task-name/exp1/9999
-```
-
-### 客户端（机器人主机）
-
-```bash
-cd ~/Dev/bi_realman_ws
-python run_bi_client.py \
-  --prompt='pick up the carrot and put it in the box near it.' \
-  --enable-control \
-  --open-loop-horizon=16 \
-  --max-steps=200
-```
-
-| 参数 | 说明 |
-|------|------|
-| `--prompt` | 任务描述，需与训练时使用的 task 一致 |
-| `--enable-control` | 实际发送指令（去掉则只推理不控制，用于调试）|
-| `--open-loop-horizon` | 每次推理后开环执行的步数 |
-| `--max-steps` | 最大总推理步数 |
-
----
-
-## 十一、常见问题
+## 八、常见问题
 
 ### 发了命令但手臂不动
 
@@ -557,19 +380,13 @@ conda activate lerobot
 which python3    # 应为 /home/rm/miniconda3/envs/lerobot/bin/python3
 ```
 
-### 训练时 datasets API 报错
-
-```bash
-pip install "datasets<4.0.0"    # 降级后重新运行 compute_norm_stats
-```
-
 ### 头部舵机串口打不开
 
 确认在机器人**本机**运行（非 SSH），检查 `/dev/rmUSB3` 是否存在；不存在则修改 `test/test_head_servo.py` 里的 `PORT` 变量。
 
 ---
 
-## 十二、参考文档
+## 九、参考文档
 
 | 文档 | 内容 |
 |------|------|
