@@ -78,6 +78,15 @@ BOARD_TYPE = "chessboard"
 CHESSBOARD_CORNERS = (6, 9)       # (内角点列数, 内角点行数)
 CHESSBOARD_SQUARE_LENGTH = 0.024  # 方格边长，米（"2.4cm"待确认）
 
+# 逐帧重投影误差过滤（像素）：单帧PnP解算的RMS重投影误差超过这个阈值就直接丢弃这一帧，
+# 不让个别检测有问题的姿态污染整体标定结果。之前那次跑的时候没开这个，13组一致性很差
+# 但具体是不是某一两帧检测有问题拖累了整体，当时没有办法定位。
+MAX_REPROJECTION_ERROR_PX = 2.0
+
+# 传了这个目录，每个姿态拍到的原图 + 最终解算数据都会存盘，标定失败/一致性不好时
+# 可以离线复查具体是哪几组姿态有问题，不用重新跑一遍机械臂。
+OUTPUT_DIR = os.path.join(_SCRIPT_DIR, "..", "outputs", "eye_to_hand_right_calibration")
+
 # 2026-07-08 现场用 scripts/collect_calibration_poses.py 采集，13组均已验证棋盘格可检测
 CALIBRATION_POSES_DEG = [
     [33.41, 101.25, 52.31, 65.18, 9.38, 20.46, -146.35],
@@ -133,11 +142,16 @@ def main():
             board_type=BOARD_TYPE,
             chessboard_corners=CHESSBOARD_CORNERS,
             chessboard_square_length=CHESSBOARD_SQUARE_LENGTH,
+            max_reprojection_error_px=MAX_REPROJECTION_ERROR_PX,
         )
-        T_base_to_camera = calibrator.run_eye_to_hand_calibration(CALIBRATION_POSES_DEG)
+        T_base_to_camera = calibrator.run_eye_to_hand_calibration(
+            CALIBRATION_POSES_DEG, output_dir=OUTPUT_DIR
+        )
 
         if T_base_to_camera is None:
-            print("\n标定失败，请检查标定板是否在各姿态下都完整看到所有内角点（棋盘格不容忍遮挡）。")
+            print("\n标定失败/一致性不通过。原始数据已存到")
+            print(f"  {OUTPUT_DIR}")
+            print("可以离线检查 samples.npz 里的 reprojection_errors_px，看是不是某几组姿态检测质量差。")
             return
 
         print("\n" + "=" * 60)

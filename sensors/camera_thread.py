@@ -29,7 +29,14 @@ class CameraThread(threading.Thread):
     通过序列号指定相机；默认为双臂机器人头部相机 153122071777。
     """
 
-    def __init__(self, serial: str = "153122071777", width: int = 640, height: int = 480, fps: int = 30):
+    def __init__(
+        self,
+        serial: str = "153122071777",
+        width: int = 640,
+        height: int = 480,
+        fps: int = 30,
+        strict_serial: bool = False,
+    ):
         super().__init__()
         self.daemon = True
         self.stop_event = threading.Event()
@@ -38,6 +45,7 @@ class CameraThread(threading.Thread):
         self._width = width
         self._height = height
         self._fps = fps
+        self._strict_serial = strict_serial
 
         self._pipeline: Optional[rs.pipeline] = None
         self._align: Optional[rs.align] = None
@@ -70,6 +78,12 @@ class CameraThread(threading.Thread):
                 return False
 
             if self._serial not in serials:
+                if self._strict_serial:
+                    print(
+                        f"[CameraThread] CRITICAL: 指定序列号 {self._serial} 未找到，"
+                        f"可用设备: {serials}。严格模式下拒绝切换到其他相机。"
+                    )
+                    return False
                 print(
                     f"[CameraThread] 序列号 {self._serial} 未找到，"
                     f"可用设备: {serials}，使用第一个"

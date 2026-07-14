@@ -171,7 +171,11 @@ class ArmController:
         x, y, z = pose[:3]
         rx, ry, rz = pose[3], pose[4], pose[5]
         T = np.eye(4)
-        T[:3, :3] = Rotation.from_euler('ZYX', [rx, ry, rz], degrees=False).as_matrix()
+        # Realman 的 pose 顺序是 [x, y, z, rx, ry, rz]，其中 rx/ry/rz
+        # 分别是绕 X/Y/Z 轴的欧拉角。这里必须按 xyz 传给 SciPy；之前使用
+        # 'ZYX' 却仍传 [rx, ry, rz]，会把 rx 当作 Z 轴角、rz 当作 X 轴角，
+        # 直接污染手眼标定使用的末端旋转矩阵。
+        T[:3, :3] = Rotation.from_euler('xyz', [rx, ry, rz], degrees=False).as_matrix()
         T[:3, 3] = [x, y, z]
         return T
 

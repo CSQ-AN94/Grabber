@@ -9,27 +9,28 @@
 固定的标定板。
 
 前提条件（缺一不可）：
-  1. 棋盘格标定板牢固固定在桌面/支架上，标定过程中绝对不能挪动。
-  2. WRIST_CAMERA_SERIAL 还没确认——机器人上另外两个RealSense序列号
-     （405622073249 / 335522072194）哪个是右腕、哪个是左腕，需要现场用
-     每个序列号各起一次相机拍张照确认（比如晃动右臂夹爪，看哪个相机画面里
-     跟着动，就是 right_wrist_0）。确认后把下面的占位值替换掉。
+  1. ChArUco标定板牢固固定在桌面/支架上，标定过程中绝对不能挪动。
+  2. WRIST_CAMERA_SERIAL 必须是已确认的右腕相机序列号；严格模式下找不到它会
+     直接退出，不会误用另外一台RealSense。
   3. RIGHT_POSES_DEG 需要用 pose_reader.py 遥操右臂 + 看右腕相机画面采集，
      保证标定板在每个姿态下都能被右腕相机看到（近景，姿态范围跟头部相机那轮
      完全不同，不能沿用）。
 
 用法:
-  python3 scripts/run_eye_in_hand_calibration_right.py
+  python3 scripts/run_eye_in_hand_calibration_right.py --poses right_wrist_poses.json
 """
 
 import sys
 import os
 import time
 import dataclasses
+import argparse
+import json
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
+import cv2
 
 from utils.config import load_config
 from utils.handeye_calibrator import HandEyeCalibrator
@@ -38,13 +39,18 @@ from controllers.arm_controller import ArmController
 
 TARGET_ARM = "right"
 
-# !! 占位值：现场确认右腕相机的真实序列号后替换 !!
 WRIST_CAMERA_SERIAL = "405622073249"  # 已实测确认：right_wrist_0
 
-# 标定板参数——跟头部相机那两轮一致（同一块板子）
-BOARD_TYPE = "chessboard"
-CHESSBOARD_CORNERS = (6, 9)
-CHESSBOARD_SQUARE_LENGTH = 0.024
+# ChArUco板固定在环境中，重量不影响eye-in-hand标定。下面尺寸必须按实物核对：
+# squares_x/y是方格数，square/marker length单位均为米。
+BOARD_TYPE = "charuco"
+CHARUCO_SQUARES_X = 9
+CHARUCO_SQUARES_Y = 12
+CHARUCO_SQUARE_LENGTH = 0.030
+CHARUCO_MARKER_LENGTH = 0.0225
+CHARUCO_DICT_ID = cv2.aruco.DICT_5X5_250
+MIN_CHARUCO_CORNERS = 12
+MAX_REPROJECTION_ERROR_PX = 2.0
 
 # !! 占位值：必须用 pose_reader.py 现场采集，替换成右腕相机能看到标定板的右臂姿态 !!
 RIGHT_POSES_DEG = [
@@ -53,13 +59,36 @@ RIGHT_POSES_DEG = [
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--poses",
+        default="right_wrist_poses.json",
+        help="collect_calibration_poses.py生成的关节姿态JSON",
+    )
+    parser.add_argument("--output-dir", help="保存原图和标定位姿；默认按时间创建目录")
+    args = parser.parse_args()
+
+    poses_deg = RIGHT_POSES_DEG
+    if os.path.exists(args.poses):
+        with open(args.poses, encoding="utf-8") as f:
+            poses_deg = json.load(f)
+        print(f"=== 从 {args.poses} 加载 {len(poses_deg)} 组右腕标定姿态 ===")
+
     if WRIST_CAMERA_SERIAL.startswith("REPLACE_ME"):
         print("[FATAL] WRIST_CAMERA_SERIAL 还是占位值，先现场确认右腕相机真实序列号。")
         sys.exit(1)
-    if len(RIGHT_POSES_DEG) < 5:
-        print("[FATAL] RIGHT_POSES_DEG 里的姿态不够（至少5组）。")
-        print("        先用 pose_reader.py 遥操右臂 + 看右腕相机画面，采集标定板可见的姿态。")
+    if len(poses_deg) < 5:
+        print("[FATAL] 右腕标定姿态不够（至少5组，建议10-15组）。")
+        print("        请先运行 collect_calibration_poses.py 的右腕ChArUco采集命令。")
         sys.exit(1)
+    pose_array = np.asarray(poses_deg, dtype=float)
+    if pose_array.ndim != 2 or pose_array.shape[1] != 7 or not np.all(np.isfinite(pose_array)):
+        print("[FATAL] 姿态JSON必须是有限数值组成的 N×7 关节角数组（单位：度）")
+        sys.exit(1)
+
+    output_dir = args.output_dir or os.path.join(
+        "outputs", "handeye", f"right_wrist_{time.strftime('%Y%m%d_%H%M%S')}"
+    )
 
     app_config = load_config()
     conn_config = dataclasses.replace(app_config.connections, active_arm=TARGET_ARM)
@@ -70,7 +99,11 @@ def main():
         width=app_config.camera.width,
         height=app_config.camera.height,
         fps=app_config.camera.fps,
+        strict_serial=True,
     )
+    if not camera_thread.initialization_successful:
+        print("[FATAL] 指定的右腕相机初始化失败，拒绝继续标定")
+        sys.exit(1)
     camera_thread.start()
     time.sleep(3)
     if camera_thread.get_latest_frames()[0] is None:
@@ -87,13 +120,20 @@ def main():
         calibrator = HandEyeCalibrator(
             arm_controller, camera_thread,
             board_type=BOARD_TYPE,
-            chessboard_corners=CHESSBOARD_CORNERS,
-            chessboard_square_length=CHESSBOARD_SQUARE_LENGTH,
+            squares_x=CHARUCO_SQUARES_X,
+            squares_y=CHARUCO_SQUARES_Y,
+            square_length=CHARUCO_SQUARE_LENGTH,
+            marker_length=CHARUCO_MARKER_LENGTH,
+            aruco_dict_id=CHARUCO_DICT_ID,
+            min_charuco_corners=MIN_CHARUCO_CORNERS,
+            max_reprojection_error_px=MAX_REPROJECTION_ERROR_PX,
         )
-        T_end_to_camera = calibrator.run_calibration_process(RIGHT_POSES_DEG)
+        T_end_to_camera = calibrator.run_calibration_process(
+            poses_deg, output_dir=output_dir
+        )
 
         if T_end_to_camera is None:
-            print("\n标定失败，请检查标定板是否在各姿态下都被右腕相机看到。")
+            print(f"\n标定失败；原图和有效样本已保存在 {output_dir}，请查看上方具体质量门禁。")
             return
 
         print("\n" + "=" * 60)
