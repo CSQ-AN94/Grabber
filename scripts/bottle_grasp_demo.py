@@ -55,14 +55,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="抓取抬升后把瓶子放回桌面并退开（不加则保持抓着不动）",
     )
     parser.add_argument(
-        "--trust-prior",
-        action="store_true",
-        help=(
-            "resume模式下直接信任最近保存的完整视野定位作为抓取点，"
-            "本轮视觉只做存在性确认（手臂已贴近、视野截断时使用）"
-        ),
-    )
-    parser.add_argument(
         "--resume-at-wrist",
         action="store_true",
         help="keep the current right-arm pose and resume wrist visual grasping",

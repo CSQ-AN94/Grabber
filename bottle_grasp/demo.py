@@ -853,62 +853,31 @@ class BottleDemo:
             )
             self.head_scene_voxels = []
             self.scene_voxels = []
-            if self.args.trust_prior:
-                # 手臂已经很靠近瓶子、当前视野被截断时使用：直接信任最近
-                # 一次保存的完整视野锁定作为抓取点，本轮定位只做"瓶子还在
-                # 画面里"的存在性确认，位置偏差仅记录不覆盖。
-                presence_params = replace(
-                    self.params,
-                    samples=self.params.wrist_relocalization_samples,
-                    max_position_spread_m=0.05,
+            # 首次续抓定位必须全靠实测深度（不传先验），保证位置是独立
+            # 测量：桌子/瓶子可能在两次运行之间被挪动过，陈旧先验会污染
+            # 绝对位置。保存的先验只用作跳变门槛的参照。
+            wrist_target = self.localize(
+                "右腕续抓定位",
+                lambda: self.robot.current_flange()
+                @ self.T_flange_wrist_camera,
+                self.params,
+            )
+            jump = float(
+                np.linalg.norm(
+                    np.asarray(wrist_target.point_base)
+                    - np.asarray(prior.point_base)
                 )
-                check = self.localize(
-                    "续抓存在性确认",
-                    lambda: self.robot.current_flange()
-                    @ self.T_flange_wrist_camera,
-                    presence_params,
-                    depth_prior_base=np.asarray(prior.point_base),
+            )
+            if jump > self.params.resume_prior_jump_m:
+                raise SafetyAbort(
+                    f"续抓目标相对保存位置跳变 {jump * 1000:.1f} mm"
                 )
-                offset = float(
-                    np.linalg.norm(
-                        np.asarray(check.point_base)
-                        - np.asarray(prior.point_base)
-                    )
+            if jump > self.params.max_relocalization_jump_m:
+                LOG.warning(
+                    "续抓目标相对保存先验偏移 %.1f mm"
+                    "（桌子/瓶子可能被挪动过），以本次腕部定位为准",
+                    jump * 1000,
                 )
-                self.stage(
-                    "信任先验锁定",
-                    (
-                        f"抓取点 {np.round(prior.point_base, 4).tolist()}；"
-                        f"当前视野估计偏移 {offset * 1000:.1f} mm（仅记录）"
-                    ),
-                )
-                wrist_target = prior
-            else:
-                # 首次续抓定位必须全靠实测深度（不传先验），保证位置是独立
-                # 测量：桌子/瓶子可能在两次运行之间被挪动过，陈旧先验会污染
-                # 绝对位置。
-                wrist_target = self.localize(
-                    "右腕续抓定位",
-                    lambda: self.robot.current_flange()
-                    @ self.T_flange_wrist_camera,
-                    self.params,
-                )
-                jump = float(
-                    np.linalg.norm(
-                        np.asarray(wrist_target.point_base)
-                        - np.asarray(prior.point_base)
-                    )
-                )
-                if jump > self.params.resume_prior_jump_m:
-                    raise SafetyAbort(
-                        f"续抓目标相对保存位置跳变 {jump * 1000:.1f} mm"
-                    )
-                if jump > self.params.max_relocalization_jump_m:
-                    LOG.warning(
-                        "续抓目标相对保存先验偏移 %.1f mm"
-                        "（桌子/瓶子可能被挪动过），以本次腕部定位为准",
-                        jump * 1000,
-                    )
             if self.args.stop_after_observation:
                 self.stage("续抓视觉确认完成", "本轮不发送运动命令")
                 time.sleep(self.args.observe_seconds)

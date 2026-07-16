@@ -98,7 +98,7 @@ scripts/run_bottle_grasp_resume.sh cycle   # 或者：抓取+抬升+放回+退�
 ## 六、相关文件
 
 - `bottle_grasp/` — demo 状态机、感知、规划、围栏（核心）
-- `scripts/bottle_grasp_demo.py` — 入口；`--resume-at-wrist` `--place-back` `--trust-prior`
+- `scripts/bottle_grasp_demo.py` — 入口；`--resume-at-wrist` `--place-back`
 - `scripts/run_bottle_grasp_resume.sh` — 本手册第二节的一键脚本
 - `scripts/start_bottle_demo.sh` — 完整流程（头部定位起步）的一键脚本，含 dashboard
 - `scripts/wrist_camera_server.py` — 腕部相机直播
