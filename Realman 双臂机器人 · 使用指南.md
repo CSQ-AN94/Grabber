@@ -14,8 +14,9 @@
 5. [控制方式](#五控制方式)
 6. [相机](#六相机)
 7. [硬件验证（首次上手）](#七硬件验证首次上手)
-8. [常见问题](#八常见问题)
-9. [参考文档](#九参考文档)
+8. [错误码参考](#八错误码参考)
+9. [常见问题](#九常见问题)
+10. [参考文档](#十参考文档)
 
 ---
 
@@ -291,6 +292,8 @@ ros2 topic pub --once /right_arm_controller/rm_driver/get_current_arm_state_cmd 
 
 > 当前不要用 `/joint_states` 判断关节角，它可能全是 0。
 
+返回结果里的 `arm_err`（机械臂错误码）、`sys_err`（系统错误码）、`joint_error`（每关节错误码）含义见 [八、错误码参考](#八错误码参考)。
+
 ### 7.3 升降测试
 
 ```bash
@@ -340,7 +343,65 @@ sh test/run_head_servo.sh    # 使用机器人本机 Python（含 pyserial）
 
 ---
 
-## 八、常见问题
+## 八、错误码参考
+
+机械臂状态查询（`get_current_arm_original_state_result` 等接口）会返回三类错误信息：
+
+| 字段 | 含义 | 来源 |
+|------|------|------|
+| `sys_err` | 系统 / 接口层错误码 | 驱动 `rm_define.h`，见下表 |
+| `arm_err` | 机械臂本体错误码 | 官方 SDK，当前无本地对照表 |
+| `joint_error` | 每个关节独立的错误码（数组，一个关节一个值）| 官方 SDK，当前无本地对照表 |
+
+`arm_err` 为 `0`、`joint_error` 各项为 `0` 都表示无错误。这两类具体数值含义官方 SDK 文档未在本地资料中给出完整定义，现场遇到非 0 值时建议先按下表思路排查（是否通信超时、控制器是否 busy），仍无法判断再联系睿尔曼技术支持核对码值。
+
+### `sys_err` 系统错误码
+
+来自驱动源码 `rm_define.h`（`ROS功能包/ROS2/.../dual_rm_driver/rm_driver/include/rm_driver/rm_define.h`）：
+
+| 十进制 | 十六进制 | 宏名 | 含义 |
+|---:|---|---|---|
+| 0 | 0x0000 | `SYS_NORMAL` | 系统运行正常 |
+| 1 | 0x0001 | `CONTROLLER_DATE_RETURN_FALSE` | 消息请求返回 FALSE |
+| 2 | 0x0002 | `INIT_MODE_ERR` | 机械臂未初始化或输入型号非法 |
+| 3 | 0x0003 | `INIT_TIME_ERR` | 非法超时时间 |
+| 4 | 0x0004 | `INIT_SOCKET_ERR` | Socket 初始化失败 |
+| 5 | 0x0005 | `SOCKET_CONNECT_ERR` | Socket 连接失败 |
+| 6 | 0x0006 | `SOCKET_SEND_ERR` | Socket 发送失败 |
+| 7 | 0x0007 | `SOCKET_TIME_OUT` | Socket 通讯超时 |
+| 8 | 0x0008 | `UNKNOWN_ERR` | 未知错误 |
+| 9 | 0x0009 | `CONTROLLER_DATA_LOSE_ERR` | 数据不完整 |
+| 10 | 0x000A | `CONTROLLER_DATE_ARR_NUM_ERR` | 数组长度错误 |
+| 11 | 0x000B | `WRONG_DATA_TYPE` | 数据类型错误 |
+| 12 | 0x000C | `MODEL_TYPE_ERR` | 型号错误 |
+| 13 | 0x000D | `CALLBACK_NOT_FIND` | 缺少回调函数 |
+| 14 | 0x000E | `ARM_ABNORMAL_STOP` | 机械臂异常停止 |
+| 15 | 0x000F | `TRAJECTORY_FILE_LENGTH_ERR` | 轨迹文件名称过长 |
+| 16 | 0x0010 | `TRAJECTORY_FILE_CHECK_ERR` | 轨迹文件校验失败 |
+| 17 | 0x0011 | `TRAJECTORY_FILE_READ_ERR` | 轨迹文件读取失败 |
+| 18 | 0x0012 | `CONTROLLER_BUSY` | 控制器忙，请稍后再试 |
+| 19 | 0x0013 | `ILLEGAL_INPUT` | 非法输入 |
+| 20 | 0x0014 | `QUEUE_LENGTH_FULL` | 数据队列已满 |
+| 21 | 0x0015 | `CALCULATION_FAILED` | 计算失败 |
+| 22 | 0x0016 | `FILE_OPEN_ERR` | 文件打开失败 |
+| 23 | 0x0017 | `FORCE_AUTO_STOP` | 力控标定手动停止 |
+| 24 | 0x0018 | `DRAG_TEACH_FLAG_FALSE` | 没有可保存轨迹 |
+| 25 | 0x0019 | `LISTENER_RUNNING_ERR` | UDP 监听接口运行报错 |
+
+> 示例：[7.2 关节状态读取](#72-关节状态读取)里如果 `sys_err` 返回 `9`，对照上表是 `CONTROLLER_DATA_LOSE_ERR`（数据不完整）——这是当前 driver fallback 读取时的已知情况，不代表机械臂本体故障，关节角仍可通过 `Service_Get_Joint_Degree` 正常获取。
+
+### 清除机械臂错误码
+
+ROS2 提供了清除接口（先确认周围安全，`arm_err` 不为 0 且不明原因时不要直接清错继续运动）：
+
+```text
+命令 topic：/right_arm_controller/rm_driver/set_joint_err_clear_cmd
+结果 topic：/right_arm_controller/rm_driver/set_joint_err_clear_result
+```
+
+---
+
+## 九、常见问题
 
 ### 发了命令但手臂不动
 
@@ -386,7 +447,7 @@ which python3    # 应为 /home/rm/miniconda3/envs/lerobot/bin/python3
 
 ---
 
-## 九、参考文档
+## 十、参考文档
 
 | 文档 | 内容 |
 |------|------|
