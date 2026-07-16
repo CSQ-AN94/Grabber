@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
 from dataclasses import asdict, replace
@@ -159,7 +160,12 @@ class BottleDemo:
             require_verified=self.args.execute,
         )
         self.scene_boxes = self.safety.moveit_collision_boxes()
-        if self.safety.guided_path:
+        # --guided-path 覆盖 profile 里配置的走廊：方便现场刚录完一条
+        # 『垂下→观察位』走廊直接用，不必改 profile。
+        guided_override = getattr(self.args, "guided_path", None)
+        if guided_override:
+            self.guided_path = load_guided_joint_path(Path(guided_override))
+        elif self.safety.guided_path:
             self.guided_path = load_guided_joint_path(
                 self.safety.guided_path
             )
@@ -844,6 +850,8 @@ class BottleDemo:
             raise SafetyAbort("移动过程中符合形状的 bottle 检测丢失")
 
     def run(self):
+        if getattr(self.args, "full_cycle", False):
+            return self.run_full_cycle()
         self.initialize()
         if self.args.resume_at_wrist:
             prior = self._load_resume_localization()
@@ -952,6 +960,22 @@ class BottleDemo:
         self._finish_grasp_from_wrist(wrist_target)
 
     def _finish_grasp_from_wrist(self, wrist_target: Localization):
+        """续抓/普通模式收尾：抓取抬升后按 --place-back 决定放回或保持。"""
+        self._grasp_and_lift(wrist_target)
+        if getattr(self.args, "place_back", False):
+            self._place_back()
+            self.stage("完成并保持", "已放回；STOP/Ctrl+C 结束")
+        else:
+            self.stage("完成并保持", "不搬运、不放置；STOP/Ctrl+C 只保持")
+        while not self.stop_event.wait(0.5):
+            pass
+
+    def _grasp_and_lift(self, wrist_target: Localization) -> Localization:
+        """从当前腕部姿态完成：分段接近 → 最后接近 → 力控夹取 → 抬升 5cm。
+
+        返回锁定用的 refined 定位；不做放回、不阻塞——后续由调用方决定
+        （run() 保持/放回，run_full_cycle() 放回并返回垂下姿态）。
+        """
         self.stage(
             "从当前腕部姿态续抓",
             "视觉闭环、局部 MoveIt 规划和分段接近",
@@ -1025,12 +1049,7 @@ class BottleDemo:
                 indent=2,
             )
         )
-        if getattr(self.args, "place_back", False):
-            self._place_back()
-            return
-        self.stage("完成并保持", "不搬运、不放置；STOP/Ctrl+C 只保持")
-        while not self.stop_event.wait(0.5):
-            pass
+        return refined
 
     def _place_back(self):
         """把瓶子放回桌面原位：放低→张开→沿接近轴反向退开（2026-07-16真机验证过的顺序）。"""
@@ -1064,7 +1083,168 @@ class BottleDemo:
         self.stage("退开", f"沿接近轴反向 {self.params.pregrasp_standoff_m * 100:.0f} cm")
         for pose in retreat_path:
             self.robot.move_linear(pose, self.params.final_speed)
-        self.stage("放回完成", "瓶子已放回，手臂已退开；STOP/Ctrl+C 结束")
+        self.stage("放回完成", "瓶子已放回，手臂已退开")
+
+    # ---------------- 完整循环：垂下 → 观察 → 抓取 → 放回 → 垂回 ----------------
+
+    def _corridor_points(self) -> list[list[float]]:
+        """返回示教转移走廊的关节路点（首点=垂下起始姿态，末点=观察位）。"""
+        if not self.guided_path:
+            raise SafetyAbort(
+                "完整循环需要一条示教转移走廊，但当前没有加载到。"
+                "先用 scripts/record_right_arm_guided_path.py 录一条"
+                "『垂下起始 → 右腕观察位』的安全路线，再用 --guided-path 指定，"
+                "或把它填进 safety profile 的 guided_path。"
+            )
+        return [list(map(float, p)) for p in self.guided_path["points_deg"]]
+
+    def _assert_at_pose(self, joints_target, label: str):
+        """确认右臂当前关节角在目标姿态容差内，否则中止（避免从错误起点乱走）。"""
+        current = np.asarray(self.robot.joints_deg(), dtype=float)
+        target = np.asarray(joints_target, dtype=float)
+        error = float(np.max(np.abs(current - target)))
+        if error > self.safety.guided_start_tolerance_deg:
+            raise SafetyAbort(
+                f"{label}：当前关节距目标最大 {error:.1f}° > 容差 "
+                f"{self.safety.guided_start_tolerance_deg}°。"
+                "请先把右臂拖到走廊起点（垂下姿态）附近再运行。"
+            )
+        self.stage(label, f"当前距目标 {error:.2f}°，在容差内")
+
+    def _preflight(self):
+        """真机运动前只读自检：机械臂在线、无错误码、夹爪使能。plan-only 跳过。"""
+        if not self.args.execute:
+            return
+        self.robot.current_tcp()  # 内部校验 arm_err/sys_err，异常即抛
+        state = self.robot.gripper_state()
+        self.stage(
+            "运动前自检",
+            f"机械臂在线无错误码；夹爪 enable={state.get('enable_state')}",
+        )
+
+    def _execute_joint_waypoints(
+        self,
+        name: str,
+        points_deg: list[list[float]],
+        start_joints: list[float] | None = None,
+    ):
+        """离线电子围栏逐点复核 + SDK 执行一串关节路点（转移段专用）。
+
+        走廊是人工示教录制的，全臂几何天然无碰撞；离线复核用密集插值 FK 逐点
+        校验 TCP 是否越过桌面禁入区/工作空间，兜住"桌子挪了/走廊选错"这类粗错。
+        """
+        checked = self.robot.validate_planned_joints(
+            points_deg,
+            self.params.planned_joint_step_deg,
+            self.safety,
+            start_joints_deg=start_joints,
+        )
+        self.stage("转移离线复核", f"{name}：{checked} 个密集 TCP 点通过电子围栏")
+        if not self.args.execute:
+            self.stage(name, f"plan-only：{len(points_deg)} 个路点未执行")
+            return
+        self.robot.execute_planned_joints(
+            points_deg,
+            self.params.travel_speed,
+            self.params.planned_joint_step_deg,
+        )
+
+    def _restore_teleop(self):
+        """best-effort 恢复官方遥操（--restore-teleop）。找不到脚本就只打印提示。"""
+        import subprocess
+
+        script = os.environ.get(
+            "UPSTART_ALL", "/home/rm/rmc_aida_l_atom/scripts/upstart_all.sh"
+        )
+        if not os.path.exists(script):
+            LOG.warning(
+                "未找到 %s，无法自动恢复遥操；请手动运行官方 upstart_all.sh", script
+            )
+            return
+        self.stage("恢复遥操", f"运行 {script}")
+        subprocess.Popen(
+            f"bash '{script}' > /home/rm/upstart_all_from_demo.log 2>&1 &",
+            shell=True,
+        )
+
+    def run_full_cycle(self):
+        """完整一轮：垂下 → 观察位 → 抓取 → 抬升 → 放回 → 垂回垂下姿态。
+
+        转移段（垂下↔观察位）默认用示教走廊：人工录制的安全路线，离线电子围栏
+        逐点复核，环境未变时全臂安全——这是当前 MoveIt 碰撞检查失效情况下唯一
+        可信的大范围转移方式。抓取段是自主视觉闭环。修好 MoveIt 碰撞后可用
+        --autonomous-transit 换成全自主规划（见 docs 手册）。
+        """
+        self.initialize()
+        self._preflight()
+
+        corridor = self._corridor_points()
+        hang_pose = corridor[0]
+        observation_pose = corridor[-1]
+        self.stage(
+            "完整循环",
+            f"走廊 {len(corridor)} 点；起始垂下姿态 J={np.round(hang_pose, 1).tolist()}",
+        )
+
+        # 1. 必须从走廊起点（垂下姿态）附近开始
+        self._assert_at_pose(hang_pose, "确认起始垂下姿态")
+
+        # 2. 头部粗定位水瓶（固定头部相机）
+        head_params = replace(
+            self.params,
+            min_depth_m=self.params.head_min_depth_m,
+            max_depth_m=self.params.head_max_depth_m,
+            max_position_spread_m=0.045,
+        )
+        head_target = self.localize(
+            "头部粗定位", lambda: self.T_base_head_camera, head_params
+        )
+        self.safety.assert_tcp_point(
+            head_target.point_base, label="头部定位的水瓶抓取点"
+        )
+        self._build_head_scene(head_target)
+
+        # 3. 转移：垂下 → 观察位（示教走廊正向）
+        self._execute_joint_waypoints(
+            "前往观察位（示教走廊）", corridor, start_joints=hang_pose
+        )
+        if not self.args.execute:
+            self.stage(
+                "plan-only 完成",
+                "已离线复核走廊+头部定位；抓取与返回段需真机 --execute 现场验证",
+            )
+            time.sleep(self.args.observe_seconds)
+            return
+
+        # 4. 腕部完整视野锁定抓取点
+        self._start_camera("right_wrist")
+        wrist_target = self.localize(
+            "右腕精定位",
+            lambda: self.robot.current_flange() @ self.T_flange_wrist_camera,
+            self.params,
+            depth_prior_base=np.asarray(head_target.point_base),
+        )
+
+        # 5. 抓取 + 抬升
+        self.stage("打开夹爪")
+        self.robot.open_gripper(self.params)
+        self._grasp_and_lift(wrist_target)
+
+        # 6. 放回桌面 + 退开
+        self._place_back()
+
+        # 7. 返回：先回到走廊终点（观察位），再反向走廊回垂下姿态
+        self._execute_joint_waypoints("回到走廊终点（观察位）", [observation_pose])
+        self._execute_joint_waypoints(
+            "返回垂下姿态（示教走廊反向）",
+            corridor[::-1],
+            start_joints=observation_pose,
+        )
+        self._assert_at_pose(hang_pose, "确认已回到垂下姿态")
+
+        self.stage("完整循环完成", "已回到垂下姿态，夹爪张开；一轮结束")
+        if getattr(self.args, "restore_teleop", False):
+            self._restore_teleop()
 
     def close(self):
         self.stop_event.set()

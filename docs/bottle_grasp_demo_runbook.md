@@ -76,18 +76,56 @@ scripts/run_bottle_grasp_resume.sh cycle   # 或者：抓取+抬升+放回+退�
    `max[2]` = 实测桌面 z + 0.005；前沿 `min[1]` 按桌边实际位置留 2~3cm 余量
 3. 跑单测确认围栏行为：`python -m pytest test/bottle_grasp/test_algorithms.py`
 
+## 4.5、完整循环：垂下 → 观察 → 抓取 → 放回 → 垂回
+
+一条命令跑完整一轮。转移段（垂下↔观察位）走**你录制的一条示教走廊**——人工
+示教的安全路线，离线电子围栏逐点复核，环境未变时全臂安全。抓取段是自主视觉闭环。
+这是当前 MoveIt 碰撞检查失效（见第五节 #1）下唯一可信的大范围转移方式。
+
+**明天上机最短路径（脚本 `scripts/run_bottle_full_cycle.sh`）：**
+
+```bash
+# 1) 一次性录制『垂下→观察位』走廊（拖动示教，约5分钟，之后可反复复用）
+scripts/run_bottle_full_cycle.sh record
+#   先把右臂拖到你要的“垂下起始”姿态；再按住绿色按钮，从垂下缓慢、走安全路线
+#   （远离桌面）拖到右腕观察位（相机距瓶~30cm、瓶子完整居中）；Ctrl+C 停录。
+
+# 2) 纯离线复核：不动机器人，验证走廊+头部检测都不报错
+scripts/run_bottle_full_cycle.sh plan
+
+# 3) 真机跑完整一轮（有人守急停）
+scripts/run_bottle_full_cycle.sh cycle
+```
+
+**关键约束**：
+- 每轮开始时右臂必须在走廊起点（垂下姿态）**3° 容差内**，否则直接中止并提示
+  “请先把右臂拖到走廊起点附近”。一轮结束会自动回到这个姿态，所以连续跑无需重摆。
+- 走廊起点=你录制时的第一帧。想要“真正垂下”的循环，录制时就从垂下姿态开始。
+- 结束自动放回并退开；加 `--restore-teleop` 可在结束后自动恢复遥操
+  （否则照旧手动 `upstart_all.sh`）。
+- `plan` 模式会连真机只读校验当前姿态，所以它也能提前告诉你“手臂没在起点”。
+
+**全自主转移（不用示教走廊）**：需要先修好 MoveIt 碰撞检查。先跑
+`scripts/run_bottle_full_cycle.sh selftest` 判定（内部用一个罩住整臂的巨型盒子
+探针）。返回“正常”后才谈得上放行 `--autonomous-transit`（该开关目前预留、未接线，
+接线前务必先过 selftest）。返回“失效”就继续用示教走廊，安全且已验证。
+
 ## 五、已知遗留问题（影响范围与状态）
 
 1. **MoveIt 碰撞检查完全失效**（2026-07-16 确诊）：场景里有障碍盒、防撞体已附着、
    ACM 正常，但"目标在桌子内部10cm"的规划照样瞬间成功；所有状态 validity 恒为
    valid。`is_diff` 修复（moveit_plan_once.py / moveit_validate_path.py）已提交但
-   **不是根因**——嫌疑在碰撞几何/URDF/碰撞环境层面，自碰撞探针还没跑（机器人关机）。
-   **当前真正的防线是我们自己的电子围栏离线复核**（每条轨迹1.5°密集插值逐点FK校验），
-   当晚两次正确拦截了擦桌路径。在修好之前：**禁止依赖 MoveIt 做全局自由规划**，
-   只用局部短距离规划（fence 兜底覆盖得住）。
-   离线复核工具：`/tmp/fk_check.py`（机器人上，验证任意 plan json 是否违规）。
-2. **"垂下→抓取→垂下"全自主循环**：被 #1 挡住。修好 MoveIt 碰撞后，
-   走原有全流程（头部定位→自动选观察位→规划过去）即可，不需要示教。
+   **不是根因**——嫌疑在碰撞几何/URDF/碰撞环境层面。**下机第一件事**：跑
+   `scripts/run_bottle_full_cycle.sh selftest`（`bottle_grasp/moveit_collision_selftest.py`，
+   用巨型盒子罩住整臂的世界碰撞探针）几秒内定论；若判失效，重点查 URDF 的
+   collision 标签/网格是否加载。**当前真正的防线是电子围栏离线复核**（每条轨迹
+   1.5°密集插值逐点FK校验），当晚两次正确拦截擦桌路径。修好前：**禁止 MoveIt 全局
+   自由规划**，大范围转移只用示教走廊（见 4.5 节），局部抓取段用短距离规划（fence
+   兜得住）。离线复核工具：`/tmp/fk_check.py`（验证任意 plan json 是否违规）。
+2. **"垂下→抓取→垂下"完整循环**：已实现（`--full-cycle`，见 4.5 节），转移段用
+   示教走廊。**全自主转移**（省掉示教、自动规划垂下↔观察位）仍被 #1 挡住——
+   修好 MoveIt 碰撞后接线 `--autonomous-transit` 即可（改用 `_plan_flange` 自由规划
+   代替走廊，其余不变）。
 3. **透明瓶深度双峰**：前壁/后壁差一个瓶径（~4.5cm）。带标签的不透明瓶无此问题。
    当晚最终 demo 用的是不透明瓶。
 4. **遥操未恢复**：demo 会杀 atom/zhixing_ctrl。需要遥操时在机器人上跑官方
@@ -98,8 +136,10 @@ scripts/run_bottle_grasp_resume.sh cycle   # 或者：抓取+抬升+放回+退�
 ## 六、相关文件
 
 - `bottle_grasp/` — demo 状态机、感知、规划、围栏（核心）
-- `scripts/bottle_grasp_demo.py` — 入口；`--resume-at-wrist` `--place-back`
-- `scripts/run_bottle_grasp_resume.sh` — 本手册第二节的一键脚本
+- `scripts/bottle_grasp_demo.py` — 入口；`--resume-at-wrist` `--place-back` `--full-cycle` `--guided-path` `--restore-teleop`
+- `scripts/run_bottle_grasp_resume.sh` — 第二节（续抓）一键脚本
+- `scripts/run_bottle_full_cycle.sh` — 4.5节（完整循环）一键脚本：`record`/`plan`/`cycle`/`selftest`
+- `bottle_grasp/moveit_collision_selftest.py` — MoveIt 碰撞检查自检探针
 - `scripts/start_bottle_demo.sh` — 完整流程（头部定位起步）的一键脚本，含 dashboard
 - `scripts/wrist_camera_server.py` — 腕部相机直播
 - `bottle_grasp/safety_profiles.json` — 电子围栏（桌面禁入区在这里）

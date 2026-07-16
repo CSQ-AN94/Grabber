@@ -55,6 +55,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="抓取抬升后把瓶子放回桌面并退开（不加则保持抓着不动）",
     )
     parser.add_argument(
+        "--full-cycle",
+        action="store_true",
+        help=(
+            "完整一轮：垂下→观察位→抓取→抬升→放回→垂回。"
+            "转移段走示教走廊（--guided-path 或 profile 的 guided_path）"
+        ),
+    )
+    parser.add_argument(
+        "--guided-path",
+        default=None,
+        help="覆盖示教转移走廊 JSON（grabber_guided_path_v1，首点=垂下姿态）",
+    )
+    parser.add_argument(
+        "--restore-teleop",
+        action="store_true",
+        help="完整循环结束后自动运行官方 upstart_all.sh 恢复遥操",
+    )
+    parser.add_argument(
         "--resume-at-wrist",
         action="store_true",
         help="keep the current right-arm pose and resume wrist visual grasping",
