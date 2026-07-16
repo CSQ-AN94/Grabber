@@ -110,6 +110,38 @@ scripts/run_bottle_full_cycle.sh cycle
 探针）。返回“正常”后才谈得上放行 `--autonomous-transit`（该开关目前预留、未接线，
 接线前务必先过 selftest）。返回“失效”就继续用示教走廊，安全且已验证。
 
+## 4.6、全自主观察位规划（瓶子放桌角，测试免示教）
+
+`table_demo` profile 默认配了一条示教走廊（`guided_paths/table_demo_right.json`），
+所以默认跑法（不加 `--full-cycle`）实际会用示教走廊而不是自主规划，即使代码里
+自主规划那条支路（`_select_observation_flange`+`_plan_flange`）一直都在。
+
+**`--autonomous-observation` 强制忽略示教走廊，走真正的 MoveIt 自主规划**：
+头部定位水瓶 → MoveIt 规划一条到右腕观察位的路 → 腕部精定位 → 抓取。
+适合"瓶子放桌角、周围空旷，避障几何简单"的场景验证。
+
+```bash
+scripts/run_bottle_grasp_autonomous.sh plan     # 纯离线：头部定位+MoveIt规划，不动机器人
+scripts/run_bottle_grasp_autonomous.sh observe  # 真机移动到观察位+腕部定位，不抓取
+scripts/run_bottle_grasp_autonomous.sh grasp    # 真机抓取+抬升，保持
+scripts/run_bottle_grasp_autonomous.sh cycle    # 真机抓取+抬升+放回+退开
+```
+
+建议顺序：`plan` 看MoveIt规划路径点数/耗时正常 → `observe` 看真机移动到观察位后
+瓶子能不能被腕部相机稳定检测到 → 确认无误再 `grasp`/`cycle`。
+
+**安全边界要说清楚**：MoveIt自己的碰撞检查是坏的（见第五节#1），这条自主规划
+路径真正的安全网是电子围栏离线复核——MoveIt规划完的每条轨迹，执行前都会被独立
+的密集插值FK逐点校验，一旦违规直接安全中止、不执行。但这层复核**只挡得住"越过
+配置好的桌面禁入区/工作空间"**，挡不住撞到没建模的东西（显示器/其他物体）。
+瓶子放桌角、周围清空能明显降低风险，但不是零风险——`observe` 这一步就是低速
+先验证一次真机移动是否符合预期，再决定要不要抓。
+
+**这不是货架部署的答案**：货架场景更复杂、周围不空旷，靠"简化几何绕开碰撞检测
+坏掉的问题"这条路走不远。长期看，货架自主避障还是要先把 MoveIt 碰撞检查修好
+（见第五节#1的selftest），不能一直靠人工示教（人工示教本身也要求现场有人，
+跟"以后没有遥操/无人值守"的部署目标冲突）。
+
 ## 五、已知遗留问题（影响范围与状态）
 
 1. **MoveIt 碰撞检查完全失效**（2026-07-16 确诊）：场景里有障碍盒、防撞体已附着、
@@ -136,9 +168,10 @@ scripts/run_bottle_full_cycle.sh cycle
 ## 六、相关文件
 
 - `bottle_grasp/` — demo 状态机、感知、规划、围栏（核心）
-- `scripts/bottle_grasp_demo.py` — 入口；`--resume-at-wrist` `--place-back` `--full-cycle` `--guided-path` `--restore-teleop`
+- `scripts/bottle_grasp_demo.py` — 入口；`--resume-at-wrist` `--place-back` `--full-cycle` `--guided-path` `--restore-teleop` `--autonomous-observation`
 - `scripts/run_bottle_grasp_resume.sh` — 第二节（续抓）一键脚本
-- `scripts/run_bottle_full_cycle.sh` — 4.5节（完整循环）一键脚本：`record`/`plan`/`cycle`/`selftest`
+- `scripts/run_bottle_full_cycle.sh` — 4.5节（完整循环，示教走廊）一键脚本：`record`/`plan`/`cycle`/`selftest`
+- `scripts/run_bottle_grasp_autonomous.sh` — 4.6节（全自主观察位规划）一键脚本：`plan`/`observe`/`grasp`/`cycle`
 - `bottle_grasp/moveit_collision_selftest.py` — MoveIt 碰撞检查自检探针
 - `scripts/start_bottle_demo.sh` — 完整流程（头部定位起步）的一键脚本，含 dashboard
 - `scripts/wrist_camera_server.py` — 腕部相机直播

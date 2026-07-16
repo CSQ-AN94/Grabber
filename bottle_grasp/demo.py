@@ -913,7 +913,12 @@ class BottleDemo:
             return
 
         self._build_head_scene(head_target)
-        if self.guided_path:
+        # --autonomous-observation 强制走 MoveIt 自主规划，即使 profile 配了
+        # 示教走廊也不用它——用于验证"目标几何简单（如桌角）时能否不靠示教"。
+        use_guided = self.guided_path and not getattr(
+            self.args, "autonomous_observation", False
+        )
+        if use_guided:
             observation_plan = self._guided_observation_plan()
         else:
             observation_flange, observation_goal_joints = (

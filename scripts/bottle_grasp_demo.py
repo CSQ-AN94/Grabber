@@ -55,6 +55,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="抓取抬升后把瓶子放回桌面并退开（不加则保持抓着不动）",
     )
     parser.add_argument(
+        "--autonomous-observation",
+        action="store_true",
+        help=(
+            "头部定位后强制用 MoveIt 自主规划移动到右腕观察位，"
+            "忽略 profile 里配置的示教走廊（测试简单几何场景，如瓶子放桌角）"
+        ),
+    )
+    parser.add_argument(
         "--full-cycle",
         action="store_true",
         help=(
