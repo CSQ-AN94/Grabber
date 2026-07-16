@@ -22,7 +22,7 @@
   python3 scripts/collect_calibration_poses.py [ARM_IP] [--out collected_poses.json] [--target 13]
   DISPLAY=:0 python3 scripts/collect_calibration_poses.py 169.254.128.19 \
     --camera-serial 405622073249 --board-type charuco --display \
-    --square 0.030 --marker 0.0225 --squares-x 9 --squares-y 12 \
+    --square 0.030 --marker 0.0225 --squares-x 12 --squares-y 9 \
     --out right_wrist_poses.json --target 13
   默认 ARM_IP: 169.254.128.19（右臂）
 """
@@ -55,11 +55,11 @@ APPROX_K = np.array([[609.3, 0, 316.1], [0, 609.7, 247.6], [0, 0, 1]], dtype=np.
 APPROX_DIST = np.zeros(5)
 
 
-def fetch_snapshot(camera_thread=None):
+def fetch_snapshot(camera_thread=None, snapshot_url=SNAPSHOT_URL):
     if camera_thread is not None:
         return camera_thread.get_latest_frames()[0]
     try:
-        with urllib.request.urlopen(SNAPSHOT_URL, timeout=3) as resp:
+        with urllib.request.urlopen(snapshot_url, timeout=3) as resp:
             data = resp.read()
         arr = np.frombuffer(data, dtype=np.uint8)
         return cv2.imdecode(arr, cv2.IMREAD_COLOR)
@@ -78,12 +78,16 @@ def main():
     parser.add_argument("--square", type=float, default=0.024, help="方格边长(米)")
     parser.add_argument("--board-type", choices=["chessboard", "charuco"], default="chessboard")
     parser.add_argument("--camera-serial", help="直接打开指定RealSense；腕部标定时使用")
+    parser.add_argument(
+        "--snapshot-url", default=SNAPSHOT_URL,
+        help="从无界面相机服务读取图像；用于在本地终端经SSH采集腕部姿态",
+    )
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--display", action="store_true", help="在机器人桌面显示实时腕部画面")
-    parser.add_argument("--squares-x", type=int, default=9, help="ChArUco横向方格数")
-    parser.add_argument("--squares-y", type=int, default=12, help="ChArUco纵向方格数")
+    parser.add_argument("--squares-x", type=int, default=12, help="ChArUco横向方格数")
+    parser.add_argument("--squares-y", type=int, default=9, help="ChArUco纵向方格数")
     parser.add_argument("--marker", type=float, default=0.0225, help="ChArUco marker边长(米)")
     parser.add_argument("--min-charuco-corners", type=int, default=12)
     args = parser.parse_args()
@@ -152,7 +156,7 @@ def main():
                 continue
             joints_deg = [round(float(j), 2) for j in joints_deg[:7]]
 
-            img = fetch_snapshot(camera_thread)
+            img = fetch_snapshot(camera_thread, args.snapshot_url)
             if img is None:
                 continue
 

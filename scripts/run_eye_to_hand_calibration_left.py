@@ -70,9 +70,28 @@ BOARD_TYPE = "chessboard"
 CHESSBOARD_CORNERS = (6, 9)
 CHESSBOARD_SQUARE_LENGTH = 0.024
 
-# !! 占位值：必须用 pose_reader.py 现场采集，替换成真实、安全、能看到标定板的左臂姿态 !!
+# 逐帧重投影误差过滤（像素），跟右臂那轮保持一致
+MAX_REPROJECTION_ERROR_PX = 2.0
+
+# 原始数据（图片+位姿+重投影误差）存盘目录，标定失败时可以离线复查
+OUTPUT_DIR = os.path.join(_SCRIPT_DIR, "..", "outputs", "eye_to_hand_left_calibration")
+
+# 2026-07-14 现场用 scripts/collect_calibration_poses.py 采集（棋盘格已从右臂
+# 挪到左臂夹爪，头部角度全程保持跟右臂那轮一致的基准值）
 CALIBRATION_POSES_DEG = [
-    # [j1, j2, j3, j4, j5, j6, j7],
+    [-47.68, -119.14, 145.81, 17.61, 130.61, -71.15, 207.33],
+    [-55.94, -119.15, 142.26, 17.65, 117.57, -47.01, 198.78],
+    [-69.29, -119.21, 142.32, 18.61, 110.79, -33.74, 189.77],
+    [-58.33, -119.14, 143.38, 20.95, 122.52, -35.68, 188.65],
+    [-64.59, -117.17, 138.38, 4.54, 86.12, -59.81, 188.41],
+    [-34.66, -117.98, 153.8, 22.88, 97.3, -67.16, 188.38],
+    [-44.97, -118.06, 163.91, 22.87, 101.97, -86.08, 188.36],
+    [-44.63, -117.51, 163.66, 19.75, 78.26, -50.21, 187.46],
+    [-49.69, -117.47, 163.47, 37.35, 85.97, -71.23, 197.52],
+    [-51.42, -117.19, 159.37, 26.47, 85.57, -78.41, 197.47],
+    [-51.45, -117.13, 157.99, 44.52, 90.42, -62.21, 197.46],
+    [-51.45, -117.01, 146.87, 42.27, 67.93, -77.94, 197.49],
+    [-51.45, -117.12, 166.0, 34.97, 75.87, -75.64, 197.47],
 ]
 
 
@@ -113,11 +132,15 @@ def main():
             board_type=BOARD_TYPE,
             chessboard_corners=CHESSBOARD_CORNERS,
             chessboard_square_length=CHESSBOARD_SQUARE_LENGTH,
+            max_reprojection_error_px=MAX_REPROJECTION_ERROR_PX,
         )
-        T_base_to_camera = calibrator.run_eye_to_hand_calibration(CALIBRATION_POSES_DEG)
+        T_base_to_camera = calibrator.run_eye_to_hand_calibration(
+            CALIBRATION_POSES_DEG, output_dir=OUTPUT_DIR
+        )
 
         if T_base_to_camera is None:
-            print("\n标定失败，请检查标定板是否在各姿态下都被相机看到。")
+            print("\n标定失败/一致性不通过。原始数据已存到")
+            print(f"  {OUTPUT_DIR}")
             return
 
         print("\n" + "=" * 60)

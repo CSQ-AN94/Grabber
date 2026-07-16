@@ -58,8 +58,79 @@ class UGVConfig:
 
 @dataclass
 class CalibrationConfig:
-    """标定配置"""
-    T_end_to_camera: np.ndarray  # 4x4变换矩阵
+    """双臂三相机标定配置；T_A_to_B 把B系坐标变换到A系。"""
+    active_arm: str
+    T_end_right_to_camera_rightwrist: np.ndarray
+    T_end_left_to_camera_leftwrist: np.ndarray
+    T_base_right_to_camera_head: np.ndarray
+    T_base_left_to_camera_head: np.ndarray
+    T_base_right_to_base_left: np.ndarray
+    T_base_left_to_base_right: np.ndarray
+
+    def wrist_extrinsic(self, arm: str) -> np.ndarray:
+        """返回对应手臂的 T_end_to_camera_wrist。"""
+        if arm == "right":
+            return self.T_end_right_to_camera_rightwrist
+        if arm == "left":
+            return self.T_end_left_to_camera_leftwrist
+        raise ValueError(f"Unknown arm: {arm!r}; expected 'left' or 'right'")
+
+    def head_extrinsic(self, arm: str) -> np.ndarray:
+        """返回头部相机到指定手臂基座的固定外参。"""
+        if arm == "right":
+            return self.T_base_right_to_camera_head
+        if arm == "left":
+            return self.T_base_left_to_camera_head
+        raise ValueError(f"Unknown arm: {arm!r}; expected 'left' or 'right'")
+
+    def base_transform(self, target_arm: str, source_arm: str) -> np.ndarray:
+        """返回把 source_arm 基座坐标变换到 target_arm 基座的矩阵。"""
+        if target_arm == source_arm and target_arm in ("left", "right"):
+            return np.eye(4)
+        if target_arm == "right" and source_arm == "left":
+            return self.T_base_right_to_base_left
+        if target_arm == "left" and source_arm == "right":
+            return self.T_base_left_to_base_right
+        raise ValueError(
+            f"Unknown arm pair: target={target_arm!r}, source={source_arm!r}"
+        )
+
+    def camera_to_arm_base(
+        self,
+        camera: str,
+        target_arm: str,
+        T_base_to_end: np.ndarray = None,
+    ) -> np.ndarray:
+        """组合出把指定相机坐标变换到目标手臂基座的矩阵。
+
+        ``camera`` 可取 ``head``、``right_wrist``、``left_wrist``。头部相机
+        是固定相机，不需要末端位姿；腕部相机随手臂运动，必须传入该腕部所属
+        手臂当前的 ``T_base_to_end``。
+        """
+        if target_arm not in ("left", "right"):
+            raise ValueError(f"Unknown target arm: {target_arm!r}")
+        if camera == "head":
+            return self.head_extrinsic(target_arm)
+        if camera not in ("right_wrist", "left_wrist"):
+            raise ValueError(
+                f"Unknown camera: {camera!r}; expected head/right_wrist/left_wrist"
+            )
+        if T_base_to_end is None:
+            raise ValueError(f"{camera} requires its current T_base_to_end")
+        T_base_to_end = np.asarray(T_base_to_end, dtype=float)
+        if T_base_to_end.shape != (4, 4):
+            raise ValueError("T_base_to_end must be a 4x4 matrix")
+
+        source_arm = "right" if camera == "right_wrist" else "left"
+        T_source_base_to_camera = (
+            T_base_to_end @ self.wrist_extrinsic(source_arm)
+        )
+        return self.base_transform(target_arm, source_arm) @ T_source_base_to_camera
+
+    @property
+    def T_end_to_camera(self) -> np.ndarray:
+        """兼容旧调用：根据 connections.active_arm 选择对应腕部外参。"""
+        return self.wrist_extrinsic(self.active_arm)
 
 
 @dataclass
@@ -86,9 +157,20 @@ class VisionConfig:
 class CameraConfig:
     """RealSense 相机配置"""
     head_serial: str
+    right_wrist_serial: str
+    left_wrist_serial: str
     width: int = 640
     height: int = 480
     fps: int = 30
+
+    def serial_for(self, camera: str) -> str:
+        if camera == "head":
+            return self.head_serial
+        if camera == "right_wrist":
+            return self.right_wrist_serial
+        if camera == "left_wrist":
+            return self.left_wrist_serial
+        raise ValueError(f"Unknown camera: {camera!r}")
 
 
 @dataclass
@@ -193,9 +275,28 @@ def load_config(path: str = 'config.yaml') -> AppConfig:
         
         # 解析标定配置
         calibration_data = config_data.get('calibration', {})
-        T_matrix = _get_value(calibration_data, 'T_end_to_camera')
+
+        def _transform(key: str) -> np.ndarray:
+            value = np.asarray(_get_value(calibration_data, key), dtype=float)
+            if value.shape != (4, 4) or not np.all(np.isfinite(value)):
+                raise ConfigError(f"calibration.{key} must be a finite 4x4 matrix")
+            if not np.allclose(value[3], [0, 0, 0, 1], atol=1e-6):
+                raise ConfigError(f"calibration.{key} has an invalid homogeneous last row")
+            rotation = value[:3, :3]
+            if not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-4):
+                raise ConfigError(f"calibration.{key} rotation is not orthonormal")
+            if not np.isclose(np.linalg.det(rotation), 1.0, atol=1e-4):
+                raise ConfigError(f"calibration.{key} rotation determinant is not +1")
+            return value
+
         calibration = CalibrationConfig(
-            T_end_to_camera=np.array(T_matrix, dtype=float)
+            active_arm=connections.active_arm,
+            T_end_right_to_camera_rightwrist=_transform('T_end_right_to_camera_rightwrist'),
+            T_end_left_to_camera_leftwrist=_transform('T_end_left_to_camera_leftwrist'),
+            T_base_right_to_camera_head=_transform('T_base_right_to_camera_head'),
+            T_base_left_to_camera_head=_transform('T_base_left_to_camera_head'),
+            T_base_right_to_base_left=_transform('T_base_right_to_base_left'),
+            T_base_left_to_base_right=_transform('T_base_left_to_base_right'),
         )
         
         # 解析语音配置
@@ -223,6 +324,8 @@ def load_config(path: str = 'config.yaml') -> AppConfig:
         cam_data = config_data.get('camera', {})
         camera = CameraConfig(
             head_serial=cam_data.get('head_serial', '153122071777'),
+            right_wrist_serial=cam_data.get('right_wrist_serial', '405622073249'),
+            left_wrist_serial=cam_data.get('left_wrist_serial', '335522072194'),
             width=int(cam_data.get('width', 640)),
             height=int(cam_data.get('height', 480)),
             fps=int(cam_data.get('fps', 30)),

@@ -35,13 +35,12 @@ from controllers.arm_controller import ArmController
 
 TARGET_ARM = "left"
 
-WRIST_CAMERA_SERIAL = "335522072194"  # 已实测确认：left_wrist_0
-
 # ChArUco板固定在环境中，重量不影响eye-in-hand标定。下面尺寸必须按实物核对：
 # squares_x/y是方格数，square/marker length单位均为米。
 BOARD_TYPE = "charuco"
-CHARUCO_SQUARES_X = 9
-CHARUCO_SQUARES_Y = 12
+# 与右腕使用同一块实物板：横向12格、纵向9格（54个marker）。
+CHARUCO_SQUARES_X = 12
+CHARUCO_SQUARES_Y = 9
 CHARUCO_SQUARE_LENGTH = 0.030
 CHARUCO_MARKER_LENGTH = 0.0225
 CHARUCO_DICT_ID = cv2.aruco.DICT_5X5_250
@@ -63,6 +62,8 @@ def main():
     )
     parser.add_argument("--output-dir", help="保存原图和标定位姿；默认按时间创建目录")
     args = parser.parse_args()
+    app_config = load_config()
+    wrist_camera_serial = app_config.camera.left_wrist_serial
 
     poses_deg = LEFT_POSES_DEG
     if os.path.exists(args.poses):
@@ -70,7 +71,7 @@ def main():
             poses_deg = json.load(f)
         print(f"=== 从 {args.poses} 加载 {len(poses_deg)} 组左腕标定姿态 ===")
 
-    if WRIST_CAMERA_SERIAL.startswith("REPLACE_ME"):
+    if wrist_camera_serial.startswith("REPLACE_ME"):
         print("[FATAL] WRIST_CAMERA_SERIAL 还是占位值，先现场确认左腕相机真实序列号。")
         sys.exit(1)
     if len(poses_deg) < 5:
@@ -86,12 +87,11 @@ def main():
         "outputs", "handeye", f"left_wrist_{time.strftime('%Y%m%d_%H%M%S')}"
     )
 
-    app_config = load_config()
     conn_config = dataclasses.replace(app_config.connections, active_arm=TARGET_ARM)
 
-    print(f"=== 启动左腕相机 ({WRIST_CAMERA_SERIAL}) ===")
+    print(f"=== 启动左腕相机 ({wrist_camera_serial}) ===")
     camera_thread = CameraThread(
-        serial=WRIST_CAMERA_SERIAL,
+        serial=wrist_camera_serial,
         width=app_config.camera.width,
         height=app_config.camera.height,
         fps=app_config.camera.fps,

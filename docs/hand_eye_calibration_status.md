@@ -1,4 +1,4 @@
-# 多相机 + 双臂手眼标定 — 进度与说明（更新于 2026-07-14）
+# 多相机 + 双臂手眼标定 — 进度与说明（更新于 2026-07-15）
 
 ## 目标
 
@@ -31,11 +31,27 @@
 
 ## 标定板
 
-从 ChArUco 板换成了普通黑白棋盘格（用户反馈"ChArUco质感不如棋盘格"）：
-- **7×10格（短边7、长边10），内角点 6×9，方格边长实测 24mm**
-- 检测代码在 `HandEyeCalibrator._find_chessboard()`，优先用 `cv2.findChessboardCornersSB`（比经典 `findChessboardCorners` 鲁棒很多，实拍图片经典算法检测失败、SB算法能成功）
+- eye-to-hand 使用普通黑白棋盘格：**7×10格、6×9内角点、24mm方格**。
+- eye-in-hand 使用固定在桌面的 ChArUco：**12×9格、30mm方格、22.5mm marker、DICT_5X5_250**。
+- 两类标定互相独立，可以使用不同标定板。
 
-## 当前状态：第1轮已完成并验证通过，其余三轮待做
+## 当前统一结果（2026-07-15）
+
+四轮标定均已完成，全部矩阵写入 `config.yaml.calibration`，统一约定
+`p_A = T_A_to_B @ p_B`。运行时可通过 `CalibrationConfig.camera_to_arm_base()`
+把头部、左腕或右腕相机坐标组合到任意一条手臂基座。
+
+| 外参 | 质量 |
+|---|---|
+| 头部 → 右臂基座 | 良好：9.3mm / 1.09deg max |
+| 头部 → 左臂基座 | 中等：12.8mm / 1.09deg max |
+| 右腕 → 右末端 | 中等：22.8mm / 2.84deg max |
+| 左腕 → 左末端 | 中等：19.6mm / 3.44deg max |
+
+由两套头部外参组合得到的左右基座安装间距约 `0.1211m`；正反矩阵闭环数值误差
+小于 `1e-12`。腕部两套结果应先用于低速粗定位验证，尚不建议直接用于精细抓取。
+
+## 历史记录
 
 > 2026-07-10 更新：进一步检查发现 `ArmController.get_base_to_end_pose_matrix()`
 > 曾错误地把 `[rx, ry, rz]` 传给 SciPy 的 `ZYX` 轴序列。真机用 Realman SDK
@@ -91,7 +107,7 @@ Euler角度bug修复后棋盘格本身工作正常，暂时没有再触发方向
 - `scripts/capture_calibration_pose.py` — 单次读关节角+拍照确认（只读，不碰遥操）
 - `scripts/collect_calibration_poses.py` — 交互式批量采集标定姿态（现场操作，命令行内自助完成，不用来回问答），需要配合 `head_camera_control.py`（`/home/rm/test/`目录，机器人自带的网页取景工具，提供 `/snapshot.jpg` 接口）实时看画面
 - `scripts/run_eye_to_hand_calibration.py` / `_left.py` — 第1/2轮驱动脚本
-- `scripts/run_eye_in_hand_calibration_right.py` / `_left.py` — 第3/4轮驱动脚本（还没开始）
-- `scripts/compose_dual_arm_transform.py` — 组合第1/2轮结果得到左右臂坐标系变换（还没到这一步）
-- `config.yaml` — `calibration.T_base_right_to_camera_head` 是第1轮的真实标定结果，已通过自洽性验证
+- `scripts/run_eye_in_hand_calibration_right.py` / `_left.py` — 第3/4轮驱动脚本（均已完成）
+- `scripts/compose_dual_arm_transform.py` — 从统一配置复算并检查左右臂基座变换闭环
+- `config.yaml` — 四套基础外参和两套左右基座互变矩阵的唯一配置来源
 - `test/test_handeye_math.py` — 单元测试：合成数据验证 `_solve_handeye`/`_is_valid_rigid_transform`，以及ChArUco检测+重投影过滤的基本行为

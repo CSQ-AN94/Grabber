@@ -9,20 +9,18 @@ class Calibration:
     
     职责：像素坐标 → 基座坐标系3D点
     """
-    def __init__(self, camera_matrix, distortion_coeffs):
+    def __init__(self, T_end_to_camera, camera_matrix, distortion_coeffs):
         """
         Args:
+            T_end_to_camera (np.ndarray): 腕部相机到当前手臂末端的4x4外参
             camera_matrix (np.ndarray): 相机内参矩阵 K
             distortion_coeffs (np.ndarray): 相机畸变系数
         """
+        self.T_end_to_camera = np.asarray(T_end_to_camera, dtype=float)
         self.K = camera_matrix
         self.dist = distortion_coeffs
-        self.T_cam_end = np.array([
-            [ 0,  1,  0, -0.08289],
-            [-1,  0,  0,  0.02375],
-            [ 0,  0,  1, -0.12   ],
-            [ 0,  0,  0,  1.     ]
-        ])
+        if self.T_end_to_camera.shape != (4, 4):
+            raise ValueError("T_end_to_camera must be a 4x4 matrix")
     
     def _pixel_to_camera_point(self, u, v, d):
         """像素坐标 + 深度 → 相机坐标系下的3D点变换矩阵（4x4，仅含平移）。"""
@@ -64,7 +62,7 @@ class Calibration:
             return None
 
         # 坐标变换链：base ← end_effector ← cam ← target
-        T_base_target = T_end_base @ self.T_cam_end @ T_cam_target
+        T_base_target = T_end_base @ self.T_end_to_camera @ T_cam_target
         return T_base_target[:3, 3]
 
     def get_point_base_fixed_camera(self, u, v, d, T_base_to_camera):

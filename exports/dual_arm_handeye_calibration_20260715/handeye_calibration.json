@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "calibration_date": "2026-07-15",
+  "convention": {
+    "description": "T_A_to_B transforms a homogeneous point from frame B to frame A",
+    "equation": "p_A = T_A_to_B @ p_B",
+    "translation_unit": "meter",
+    "rotation_representation": "3x3 rotation matrix"
+  },
+  "hardware": {
+    "arms": {
+      "right": {
+        "ip": "169.254.128.19",
+        "port": 8080
+      },
+      "left": {
+        "ip": "169.254.128.18",
+        "port": 8080
+      }
+    },
+    "cameras": {
+      "head": {
+        "model": "Intel RealSense D435",
+        "serial": "153122071777"
+      },
+      "right_wrist": {
+        "model": "Intel RealSense D435",
+        "serial": "405622073249"
+      },
+      "left_wrist": {
+        "model": "Intel RealSense D435",
+        "serial": "335522072194"
+      }
+    },
+    "head_servo_calibration_position": {
+      "angle1": 398,
+      "angle2": 516
+    }
+  },
+  "transforms": {
+    "T_end_right_to_camera_rightwrist": [
+      [0.005539677, 0.999718374, -0.023075644, -0.084423838],
+      [-0.999984392, 0.005554952, 0.000597902, 0.041327457],
+      [0.000725918, 0.023071971, 0.999733543, -0.036106544],
+      [0.0, 0.0, 0.0, 1.0]
+    ],
+    "T_end_left_to_camera_leftwrist": [
+      [-0.023168437, -0.999507359, -0.021172234, 0.085819618],
+      [0.999551582, -0.022757218, -0.019461365, -0.041709882],
+      [0.018969957, -0.021613629, 0.999586410, -0.027796293],
+      [0.0, 0.0, 0.0, 1.0]
+    ],
+    "T_base_right_to_camera_head": [
+      [0.999137569369, 0.003109408458, -0.041405906039, -0.097558797072],
+      [0.038865197566, -0.421034572037, 0.906211556739, 0.108446730435],
+      [-0.014615536049, -0.907039260853, -0.420792306699, 0.199436972206],
+      [0.0, 0.0, 0.0, 1.0]
+    ],
+    "T_base_left_to_camera_head": [
+      [0.998445384468, 0.026810231254, -0.048867430196, 0.017337691270],
+      [0.055623691326, -0.422941658274, 0.904448096167, 0.101502470814],
+      [0.003580390653, -0.905760213962, -0.423775430631, 0.185169411063],
+      [0.0, 0.0, 0.0, 1.0]
+    ],
+    "T_base_right_to_base_left": [
+      [0.999691058769, 0.016811128493, 0.018307730006, -0.119987534677],
+      [-0.016767487109, 0.999856203057, -0.002534676056, 0.007718909353],
+      [-0.018347708175, 0.002226918364, 0.999829186631, 0.014391259738],
+      [0.0, 0.0, 0.0, 1.0]
+    ],
+    "T_base_left_to_base_right": [
+      [0.999691058767, -0.016767487108, -0.018347708176, 0.120343938927],
+      [0.016811128494, 0.999856203058, 0.002226918363, -0.005732721695],
+      [0.018307730006, -0.002534676057, 0.999829186631, -0.012172537194],
+      [0.0, 0.0, 0.0, 1.0]
+    ]
+  },
+  "quality": {
+    "T_base_right_to_camera_head": {
+      "grade": "good",
+      "translation_pairwise_max_mm": 9.3,
+      "translation_pairwise_mean_mm": 4.7,
+      "rotation_pairwise_max_deg": 1.09,
+      "rotation_pairwise_mean_deg": 0.47
+    },
+    "T_base_left_to_camera_head": {
+      "grade": "medium",
+      "translation_pairwise_max_mm": 12.8,
+      "translation_pairwise_mean_mm": 5.7,
+      "rotation_pairwise_max_deg": 1.09,
+      "rotation_pairwise_mean_deg": 0.51
+    },
+    "T_end_right_to_camera_rightwrist": {
+      "grade": "medium",
+      "translation_pairwise_max_mm": 22.8,
+      "translation_pairwise_mean_mm": 11.0,
+      "rotation_pairwise_max_deg": 2.84,
+      "rotation_pairwise_mean_deg": 1.18
+    },
+    "T_end_left_to_camera_leftwrist": {
+      "grade": "medium",
+      "translation_pairwise_max_mm": 19.6,
+      "translation_pairwise_mean_mm": 9.5,
+      "rotation_pairwise_max_deg": 3.44,
+      "rotation_pairwise_mean_deg": 1.25
+    }
+  },
+  "validity": {
+    "same_physical_robot_only": true,
+    "camera_mounts_must_remain_unchanged": true,
+    "arm_bases_must_remain_unchanged": true,
+    "head_transform_requires_servo_position": true,
+    "wrist_results_should_use_rgbd_closed_loop": true
+  }
+}
