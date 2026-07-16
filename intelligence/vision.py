@@ -133,10 +133,10 @@ class VisionAnalyzer:
                     'Nutri_express' : '营养快线',
                     'Ad calcium milk': 'AD钙奶'
                 }
-                if class_name not in product_chinese_name:
-                    continue
                 obj_data = {
-                    "name": product_chinese_name.get(class_name),
+                    # 保留模型原始类别；中文映射只用于已有商品的友好显示，
+                    # 不能因为映射表未收录就把真实检测结果直接丢弃。
+                    "name": product_chinese_name.get(class_name, class_name),
                     "confidence": confidence,
                     "box": [x1, y1, x2, y2]
                 }
@@ -316,4 +316,3 @@ if __name__ == '__main__':
             print("Invalid choice.")
 
     print("--- Vision Module Test Finished ---")
-

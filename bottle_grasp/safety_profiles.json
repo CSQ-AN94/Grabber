@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "units": "metres",
+  "profiles": {
+    "table_demo": {
+      "description": "Current bottle demo. Table surface measured 2026-07-15 via head RGB-D + calibrated extrinsics: z=-0.205 in right_controller_base (median of clean patches -0.2072/-0.2085). Keepout top at -0.20; front edge y=0.36 chosen between the nearest visible table pixel (y=0.49, cut off by image bottom) and the demonstrated collision-free transit corridor (y=0.329, z=-0.49).",
+      "enabled": true,
+      "verified_for_execution": true,
+      "frame": "right_controller_base",
+      "moveit_frame": "platform_base_link",
+      "T_moveit_from_profile": [
+        [1.0, 0.0, 0.0, -0.1],
+        [0.0, 1.0, 0.0, -0.1103],
+        [0.0, 0.0, 1.0, 0.031645],
+        [0.0, 0.0, 0.0, 1.0]
+      ],
+      "clearance_m": 0.025,
+      "use_dynamic_rgbd": true,
+      "guided_path": "guided_paths/table_demo_right.json",
+      "guided_start_tolerance_deg": 3.0,
+      "tcp_workspace": {
+        "id": "right_arm_total_workspace",
+        "min": [-0.65, -0.30, -0.75],
+        "max": [0.75, 1.00, 0.65]
+      },
+      "allowed_tcp_zones": [
+        {
+          "id": "demonstrated_transit_envelope",
+          "min": [-0.60, -0.25, -0.70],
+          "max": [0.70, 0.58, 0.60]
+        },
+        {
+          "id": "front_task_volume_above_table",
+          "min": [-0.52, 0.20, -0.18],
+          "max": [0.50, 0.94, 0.55]
+        }
+      ],
+      "keepout_boxes": [
+        {
+          "id": "table_top",
+          "min": [-1.0, 0.36, -0.75],
+          "max": [1.0, 1.50, -0.20]
+        }
+      ]
+    },
+    "shelf_template": {
+      "description": "Disabled template. Measure shelf panels and picking corridors in right_controller_base, then enable and verify.",
+      "enabled": false,
+      "verified_for_execution": false,
+      "frame": "right_controller_base",
+      "moveit_frame": "platform_base_link",
+      "T_moveit_from_profile": [
+        [1.0, 0.0, 0.0, -0.1],
+        [0.0, 1.0, 0.0, -0.1103],
+        [0.0, 0.0, 1.0, 0.031645],
+        [0.0, 0.0, 0.0, 1.0]
+      ],
+      "clearance_m": 0.03,
+      "use_dynamic_rgbd": true,
+      "tcp_workspace": {
+        "id": "replace_with_measured_workspace",
+        "min": [-0.5, -0.2, -0.5],
+        "max": [0.5, 1.0, 0.6]
+      },
+      "allowed_tcp_zones": [
+        {
+          "id": "replace_with_home_corridor",
+          "min": [-0.4, -0.1, -0.4],
+          "max": [0.4, 0.3, 0.5]
+        },
+        {
+          "id": "replace_with_shelf_bin_corridor",
+          "min": [-0.3, 0.25, -0.1],
+          "max": [0.3, 0.9, 0.4]
+        }
+      ],
+      "keepout_boxes": [
+        {
+          "id": "replace_with_shelf_bottom",
+          "min": [-0.5, 0.3, -0.2],
+          "max": [0.5, 1.0, -0.15]
+        },
+        {
+          "id": "replace_with_shelf_left_panel",
+          "min": [-0.5, 0.3, -0.2],
+          "max": [-0.45, 1.0, 0.6]
+        },
+        {
+          "id": "replace_with_shelf_right_panel",
+          "min": [0.45, 0.3, -0.2],
+          "max": [0.5, 1.0, 0.6]
+        },
+        {
+          "id": "replace_with_shelf_back",
+          "min": [-0.5, 0.95, -0.2],
+          "max": [0.5, 1.0, 0.6]
+        }
+      ]
+    }
+  }
+}
