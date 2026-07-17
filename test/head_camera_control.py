@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import errno
-import glob
 import json
 import os
 import select
@@ -48,15 +47,84 @@ ACTIONS = {
 CENTER_ANGLE = 500
 CENTER_TOLERANCE = 25
 
+CAMERA_SPECS = [
+    {
+        "id": "head",
+        "label": "头部相机",
+        "env": "HEAD_CAMERA",
+        "aliases": ["/dev/video4"],
+        "candidates": [
+            "/dev/video4",
+            "/dev/v4l/by-path/platform-3610000.usb-usb-0:2:1.3-video-index0",
+        ],
+    },
+    {
+        "id": "wrist_a",
+        "label": "腕部相机 A",
+        "env": "WRIST_CAMERA_A",
+        "aliases": ["/dev/video14"],
+        "candidates": [
+            "/dev/video14",
+            "/dev/v4l/by-path/platform-3610000.usb-usb-0:3.2.4.4:1.3-video-index0",
+        ],
+    },
+    {
+        "id": "wrist_b",
+        "label": "腕部相机 B",
+        "env": "WRIST_CAMERA_B",
+        "aliases": ["/dev/video20"],
+        "candidates": [
+            "/dev/video20",
+            "/dev/v4l/by-path/platform-3610000.usb-usb-0:3.2.4.3:1.3-video-index0",
+        ],
+    },
+]
+
 
 def json_bytes(data: Any) -> bytes:
     return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
 
-def list_camera_sources() -> list[str]:
-    sources = sorted(glob.glob("/dev/video*"), key=lambda p: int(p.replace("/dev/video", "") or 0))
-    by_id = sorted(glob.glob("/dev/v4l/by-id/*"))
-    return sources + by_id
+def _first_existing(candidates: list[str]) -> str:
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return candidates[0]
+
+
+def list_camera_options() -> list[dict[str, Any]]:
+    options = []
+    for spec in CAMERA_SPECS:
+        env_source = os.environ.get(spec["env"], "").strip()
+        candidates = [env_source] if env_source else spec["candidates"]
+        source = _first_existing(candidates)
+        options.append({
+            "id": spec["id"],
+            "label": spec["label"],
+            "source": source,
+            "available": os.path.exists(source),
+        })
+    return options
+
+
+def choose_camera_source(camera_arg: str, options: list[dict[str, Any]]) -> str:
+    for option, spec in zip(options, CAMERA_SPECS):
+        names = {option["id"], option["label"], option["source"], *spec["aliases"]}
+        if camera_arg in names:
+            return option["source"]
+
+    for option in options:
+        if option["available"]:
+            return option["source"]
+
+    return options[0]["source"]
+
+
+def camera_label_for_source(source: str, options: list[dict[str, Any]]) -> str:
+    for option in options:
+        if option["source"] == source:
+            return option["label"]
+    return "自定义相机"
 
 
 class AngleReceiver:
@@ -332,7 +400,7 @@ HTML = r"""<!doctype html>
       <div class="section">
         <div class="row"><span class="label">Switch</span><select id="cameraSelect"></select></div>
         <button class="wide" onclick="setCamera()">Apply Camera</button>
-        <p class="small">Default head camera is /dev/video4. Switch here if the camera order changes after reboot.</p>
+        <p class="small">Only the head camera and two wrist cameras are shown here. Device paths are hidden from the menu to avoid picking the wrong /dev/video node.</p>
       </div>
     </aside>
   </main>
@@ -342,17 +410,23 @@ HTML = r"""<!doctype html>
       const data = await res.json();
       document.getElementById('status').textContent = data.ok ? 'online' : 'offline';
       document.getElementById('cameraStatus').textContent = data.camera.status;
-      document.getElementById('cameraSource').textContent = data.camera.source;
+      const sourceEl = document.getElementById('cameraSource');
+      sourceEl.textContent = data.camera.label || data.camera.source;
+      sourceEl.title = data.camera.source;
       document.getElementById('frameCount').textContent = data.camera.frame_count;
       document.getElementById('frameAge').textContent = data.camera.frame_age_s + ' s';
       document.getElementById('angle1').textContent = data.angle ? data.angle.angle1 : '-';
       document.getElementById('angle2').textContent = data.angle ? data.angle.angle2 : '-';
       const select = document.getElementById('cameraSelect');
       if (select.children.length === 0) {
-        for (const source of data.cameras) {
+        for (const item of data.cameras) {
+          const source = typeof item === 'string' ? item : item.source;
+          const label = typeof item === 'string' ? item : item.label;
+          const available = typeof item === 'string' ? true : item.available;
           const opt = document.createElement('option');
           opt.value = source;
-          opt.textContent = source;
+          opt.textContent = available ? label : `${label} (missing)`;
+          opt.title = source;
           if (source === data.camera.source) opt.selected = true;
           select.appendChild(opt);
         }
@@ -401,6 +475,8 @@ class AppHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         query = urllib.parse.parse_qs(parsed.query)
+        camera_state = self.server.camera.snapshot()
+        camera_state["label"] = self.server.camera_label(camera_state["source"])
         if parsed.path == "/":
             self._send_html(HTML)
         elif parsed.path == "/stream.mjpg":
@@ -410,9 +486,9 @@ class AppHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/status":
             self._send_json({
                 "ok": True,
-                "camera": self.server.camera.snapshot(),
+                "camera": camera_state,
                 "angle": self.server.angles.snapshot(),
-                "cameras": self.server.cameras,
+                "cameras": self.server.camera_options,
             })
         elif parsed.path == "/api/action":
             self._handle_action(query)
@@ -497,6 +573,9 @@ class AppHandler(BaseHTTPRequestHandler):
         if not source:
             self._send_json({"ok": False, "error": "missing source"}, HTTPStatus.BAD_REQUEST)
             return
+        if source not in self.server.allowed_camera_sources:
+            self._send_json({"ok": False, "error": f"camera not allowed: {source}"}, HTTPStatus.BAD_REQUEST)
+            return
         self.server.camera.set_source(source)
         self._send_json({"ok": True, "source": source})
 
@@ -504,19 +583,23 @@ class AppHandler(BaseHTTPRequestHandler):
 class HeadCameraServer(ThreadingHTTPServer):
     def __init__(self, addr: tuple[str, int], handler: type[BaseHTTPRequestHandler],
                  camera: CameraStream, angles: AngleReceiver, head: HeadUdpController,
-                 cameras: list[str]):
+                 camera_options: list[dict[str, Any]]):
         super().__init__(addr, handler)
         self.camera = camera
         self.angles = angles
         self.head = head
-        self.cameras = cameras
+        self.camera_options = camera_options
+        self.allowed_camera_sources = {item["source"] for item in camera_options}
+
+    def camera_label(self, source: str) -> str:
+        return camera_label_for_source(source, self.camera_options)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--camera", default="/dev/video4")
+    parser.add_argument("--camera", default="head", help="head, wrist_a, wrist_b, or one of their configured device paths")
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--fps", type=int, default=15)
@@ -528,20 +611,19 @@ def main() -> None:
     args = parse_args()
     angles = AngleReceiver()
     head = HeadUdpController(angles)
-    camera = CameraStream(args.camera, args.width, args.height, args.fps, args.quality)
-    cameras = list_camera_sources()
-    if args.camera not in cameras:
-        cameras.insert(0, args.camera)
+    camera_options = list_camera_options()
+    camera_source = choose_camera_source(args.camera, camera_options)
+    camera = CameraStream(camera_source, args.width, args.height, args.fps, args.quality)
 
     angles.start()
     camera.start()
     try:
-        server = HeadCameraServer((args.host, args.port), AppHandler, camera, angles, head, cameras)
+        server = HeadCameraServer((args.host, args.port), AppHandler, camera, angles, head, camera_options)
     except PermissionError as exc:
         if exc.errno == errno.EACCES and args.port < 1024:
             print(f"ERROR: port {args.port} is a privileged port on Linux.")
             print("Use a port >= 1024, for example:")
-            print(f"  python3 head_camera_control.py --camera {args.camera} --host {args.host} --port 8765")
+            print(f"  python3 head_camera_control.py --camera head --host {args.host} --port 8765")
             return
         raise
     except OSError as exc:
@@ -553,7 +635,7 @@ def main() -> None:
             return
         raise
     print(f"Head camera control: http://{args.host}:{args.port}")
-    print(f"Camera source: {args.camera}")
+    print(f"Camera source: {camera_source}")
     print("Use Ctrl+C to stop.")
     try:
         server.serve_forever()

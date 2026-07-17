@@ -2,7 +2,7 @@
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-CAMERA=${1:-/dev/video4}
+CAMERA=${1:-head}
 HOST=${HOST:-0.0.0.0}
 PORT=${PORT:-8765}
 

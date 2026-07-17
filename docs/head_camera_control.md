@@ -7,7 +7,7 @@
 ## 文件
 
 - `test/head_camera_control.py`：网页服务和实时画面刷新
-- `test/run_head_camera_control.sh`：启动脚本，默认使用头部摄像头 `/dev/video4`
+- `test/run_head_camera_control.sh`：启动脚本，默认使用 `head` 头部相机
 
 ## 运行位置
 
@@ -37,19 +37,26 @@ http://192.168.3.68:8765
 不用启动脚本也可以直接运行：
 
 ```bash
-python3 head_camera_control.py --camera /dev/video4 --host 0.0.0.0 --port 8765
+python3 head_camera_control.py --camera head --host 0.0.0.0 --port 8765
 ```
 
 参数说明：
 
-- `--camera /dev/video4`：头部摄像头。已确认头部是 `/dev/video4`
+- `--camera head`：头部摄像头。也可以用 `wrist_a` 或 `wrist_b`
 - `--host 0.0.0.0`：允许局域网电脑访问
 - `--port 8765`：网页端口。不要用 `87` 这种小于 1024 的端口，否则普通用户会报 `Permission denied`
 
-启动脚本也支持临时换摄像头：
+手动启动头部相机：
 
 ```bash
-./run_head_camera_control.sh /dev/video5
+python3 head_camera_control.py --camera head --host 0.0.0.0 --port 8765
+```
+
+启动脚本也支持临时换到腕部相机：
+
+```bash
+./run_head_camera_control.sh wrist_a
+./run_head_camera_control.sh wrist_b
 ```
 
 ## 使用
@@ -60,7 +67,7 @@ python3 head_camera_control.py --camera /dev/video4 --host 0.0.0.0 --port 8765
 - `↑ / ↓ / ← / →`：调整头部角度
 - `●`：回中
 - `Read Angles`：刷新角度读数
-- `Switch`：切换 `/dev/video*` 摄像头
+- `Switch`：只显示 `头部相机`、`腕部相机 A`、`腕部相机 B`
 
 打开网页本身不会移动头部，只有点击方向按钮或回中按钮才会发控制指令。
 
@@ -74,6 +81,22 @@ python3 head_camera_control.py --camera /dev/video4 --host 0.0.0.0 --port 8765
 - 角度读数一直是 `-`：说明没有收到 `head_servo_ctrl.py` 的角度广播
 - 串口被占用不会由这个网页程序造成，因为网页程序不占串口
 
+## 相机列表
+
+网页里只保留三路相机：
+
+| 名称 | 默认设备 |
+| --- | --- |
+| 头部相机 | `head`，当前机器人优先使用 `/dev/video4` 或对应 by-path |
+| 腕部相机 A | `wrist_a`，当前机器人优先使用 `/dev/video14` |
+| 腕部相机 B | `wrist_b`，当前机器人优先使用 `/dev/video20` |
+
+如果设备顺序变化，可以启动前用环境变量覆盖：
+
+```bash
+HEAD_CAMERA=/dev/video4 WRIST_CAMERA_A=/dev/video14 WRIST_CAMERA_B=/dev/video20 ./run_head_camera_control.sh
+```
+
 ## 常见问题
 
 ### `PermissionError: [Errno 13] Permission denied`
@@ -81,7 +104,7 @@ python3 head_camera_control.py --camera /dev/video4 --host 0.0.0.0 --port 8765
 通常是用了小于 1024 的端口，例如 `--port 87`。改用默认端口：
 
 ```bash
-python3 head_camera_control.py --camera /dev/video4 --host 0.0.0.0 --port 8765
+python3 head_camera_control.py --camera head --host 0.0.0.0 --port 8765
 ```
 
 ### 打开的不是头部摄像头
@@ -92,10 +115,10 @@ python3 head_camera_control.py --camera /dev/video4 --host 0.0.0.0 --port 8765
 /dev/video4
 ```
 
-如果重启后设备顺序变化，可以在网页右侧 `Switch` 下拉框切换，或者启动时指定：
+如果重启后设备顺序变化，可以在网页右侧 `Switch` 下拉框切换三路命名相机。需要改底层设备号时，用环境变量覆盖：
 
 ```bash
-./run_head_camera_control.sh /dev/video4
+HEAD_CAMERA=/dev/video4 ./run_head_camera_control.sh
 ```
 
 ### 画面看起来没有刷新
