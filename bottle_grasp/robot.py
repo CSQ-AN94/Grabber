@@ -12,9 +12,35 @@ from typing import Sequence
 
 import numpy as np
 
-from .core import DemoParams, SafetyAbort, matrix_pose, pose_matrix
+from .core import (
+    DemoParams,
+    SafetyAbort,
+    interpolate_joint_path,
+    matrix_pose,
+    pose_matrix,
+)
 
 LOG = logging.getLogger("bottle_demo")
+
+JOINT_ERROR_NAMES = {
+    0x0001: "FOC错误",
+    0x0002: "过压",
+    0x0004: "欠压",
+    0x0008: "过温",
+    0x0010: "启动失败",
+    0x0020: "编码器错误",
+    0x0040: "过流",
+    0x0080: "软件错误",
+    0x0100: "温度传感器错误",
+    0x0200: "位置超限",
+    0x0400: "关节ID非法",
+    0x0800: "位置跟踪错误",
+    0x1000: "电流检测错误",
+    0x2000: "抱闸打开失败",
+    0x4000: "位置指令阶跃警告",
+    0x8000: "多圈关节丢圈数",
+    0xF000: "通信丢帧",
+}
 
 
 class ArmJointReader:
@@ -195,7 +221,120 @@ class RobotSession:
                 raise SafetyAbort(f"控制器报告 err={nested}")
         return pose_matrix(state["pose"])
 
+    def assert_arm_healthy(self) -> dict:
+        """Fail closed on joint-level faults hidden by the summary state.
+
+        `rm_get_current_arm_state()` can report aggregate err=0 while
+        `rm_get_arm_all_state()` still carries a live per-joint error.  A real
+        J7 0xF000 frame-loss fault produced API2 -6 for every motion command.
+        """
+        rc, state = self.arm.rm_get_arm_all_state()
+        if rc != 0:
+            raise SafetyAbort(f"读取机械臂完整关节状态失败: rc={rc}")
+        enabled = list(state.get("joint_en_flag", []))
+        errors = [int(value) for value in state.get("joint_err_code", [])]
+        if len(enabled) != 7 or len(errors) != 7:
+            raise SafetyAbort(f"机械臂完整关节状态字段不完整: {state}")
+        disabled = [f"J{index}" for index, value in enumerate(enabled, 1) if not value]
+        faults = []
+        for index, code in enumerate(errors, 1):
+            if code:
+                name = JOINT_ERROR_NAMES.get(code, "未知关节错误")
+                faults.append(f"J{index}=0x{code:04X}({name})")
+        if disabled or faults:
+            detail = []
+            if disabled:
+                detail.append("未使能=" + ",".join(disabled))
+            if faults:
+                detail.append("关节错误=" + ",".join(faults))
+            raise SafetyAbort(
+                "机械臂关节级自检失败: " + "; ".join(detail)
+            )
+
+        controller = self.arm.rm_get_controller_state()
+        if controller.get("return_code") != 0:
+            raise SafetyAbort(f"读取控制器状态失败: {controller}")
+        system_error = int(
+            controller.get("system_error", controller.get("sys_err", 0))
+        )
+        if system_error:
+            raise SafetyAbort(
+                f"机械臂控制器系统错误=0x{system_error:04X}: {controller}"
+            )
+        return {"joints": state, "controller": controller}
+
+    def recover_transient_joint_frame_loss(self) -> list[int]:
+        """Clear a stale 0xF000 joint flag once, under narrow safe conditions.
+
+        Holding the end-effector green drag button can leave a joint's
+        communication-frame-loss flag latched after the button is released.
+        The controller otherwise remains healthy and all joints stay enabled.
+        Only that exact state is auto-cleared.  Every other error remains a
+        hard preflight failure, and 0xF000 must stay clear on two subsequent
+        reads before motion is allowed.
+        """
+        rc, state = self.arm.rm_get_arm_all_state()
+        if rc != 0:
+            return []
+        enabled = [int(value) for value in state.get("joint_en_flag", [])]
+        errors = [int(value) for value in state.get("joint_err_code", [])]
+        affected = [
+            index for index, code in enumerate(errors, 1) if code == 0xF000
+        ]
+        nonzero = [code for code in errors if code]
+        if (
+            not affected
+            or len(enabled) != 7
+            or len(errors) != 7
+            or any(value != 1 for value in enabled)
+            or any(code != 0xF000 for code in nonzero)
+        ):
+            return []
+
+        controller = self.arm.rm_get_controller_state()
+        if controller.get("return_code") != 0:
+            return []
+        system_error = int(
+            controller.get("system_error", controller.get("sys_err", 0))
+        )
+        if system_error:
+            return []
+
+        LOG.warning(
+            "检测到仅有的瞬态关节通信丢帧标志 %s；执行一次官方错误清除并复核",
+            affected,
+        )
+        for joint in affected:
+            clear_rc = self.arm.rm_set_joint_clear_err(joint)
+            if clear_rc != 0:
+                raise SafetyAbort(
+                    f"清除 J{joint} 瞬态通信丢帧失败: rc={clear_rc}"
+                )
+
+        for verification in range(1, 3):
+            time.sleep(0.5)
+            verify_rc, verify_state = self.arm.rm_get_arm_all_state()
+            verify_errors = [
+                int(value) for value in verify_state.get("joint_err_code", [])
+            ]
+            if verify_rc != 0 or len(verify_errors) != 7:
+                raise SafetyAbort(
+                    "清除瞬态通信丢帧后无法读取完整关节状态"
+                )
+            if any(verify_errors):
+                raise SafetyAbort(
+                    "关节通信丢帧清除后再次出现，拒绝运动: "
+                    f"第 {verification} 次复核 errors={verify_errors}"
+                )
+        return affected
+
     def current_flange(self) -> np.ndarray:
+        if not self.take_control:
+            # A visual-only resume check must not change the active controller
+            # tool frame merely to read the wrist-camera transform.  Joint FK
+            # gives the flange pose without stopping teleop, changing voltage,
+            # or clearing any controller fault.
+            return self.controller_flange_from_joints(self.joints_deg())
         T_tcp = self.current_tcp()
         T_flange_tcp = np.eye(4)
         T_flange_tcp[2, 3] = self.tcp_z_m
@@ -224,6 +363,7 @@ class RobotSession:
             raise SafetyAbort("无法读取控制器关节限位")
         self.algo.rm_algo_set_joint_min_limit(list(qmin))
         self.algo.rm_algo_set_joint_max_limit(list(qmax))
+        start_in_band = abs(q[3]) < params.j4_singularity_deg
         planned = []
         for idx, pose in enumerate(poses):
             rc, solution = self.algo.rm_algo_inverse_kinematics(
@@ -244,8 +384,13 @@ class RobotSession:
                         f"路径点 {idx + 1} 关节 J{joint} 距限位过近: {angle:.1f}°"
                     )
             if abs(solution[3]) < params.j4_singularity_deg:
+                hint = (
+                    "；起点姿态本身已在奇异带内，需先做关节空间弯肘逃逸"
+                    if start_in_band
+                    else "；目标可能接近手臂最大伸展，需调整目标或移动底盘"
+                )
                 raise SafetyAbort(
-                    f"路径点 {idx + 1} J4={solution[3]:.1f}°，进入奇异区"
+                    f"路径点 {idx + 1} J4={solution[3]:.1f}°，进入奇异区{hint}"
                 )
             if (
                 not (allow_first_jump and idx == 0)
@@ -255,6 +400,63 @@ class RobotSession:
             planned.append(solution)
             q = solution
         return planned
+
+    def escape_j4_singularity(self, params, safety_profile) -> list[float] | None:
+        """若当前姿态在 J4≈0 奇异带内，用关节空间弯肘运动先离开该带。
+
+        肘角大小由肩-腕距离唯一决定，任何保持 TCP 位姿不变的重试（包括
+        绕工具 z 轴 roll）都改不了 |J4|。而对控制器来说，纯关节运动不经过
+        病态雅可比，穿越/离开奇异带是安全的——危险的只是在带内做笛卡尔
+        直线。因此这里只动 J4，逃逸路径逐点做 FK+电子围栏校验后用 movej
+        执行。返回逃逸后的目标关节角；不在带内则返回 None。
+        """
+        q = self.joints_deg()
+        if abs(q[3]) >= params.j4_singularity_deg:
+            return None
+        if not self.take_control:
+            raise SafetyAbort(
+                f"当前 J4={q[3]:.1f}° 在奇异带内，只规划会话无法执行弯肘逃逸"
+            )
+        rc_min, qmin = self.arm.rm_get_joint_min_pos()
+        rc_max, qmax = self.arm.rm_get_joint_max_pos()
+        if rc_min != 0 or rc_max != 0:
+            raise SafetyAbort("无法读取控制器关节限位")
+        preferred = 1.0 if q[3] >= 0 else -1.0
+        rejections = []
+        for sign in (preferred, -preferred):
+            target = list(q)
+            target[3] = sign * params.j4_escape_deg
+            lo = qmin[3] + params.joint_limit_margin_deg
+            hi = qmax[3] - params.joint_limit_margin_deg
+            if not (lo <= target[3] <= hi):
+                rejections.append(f"J4={target[3]:.1f}° 距限位过近")
+                continue
+            dense = interpolate_joint_path(
+                q, [target], params.planned_joint_step_deg
+            )
+            try:
+                for index, joints in enumerate(dense, 1):
+                    tcp = self.tcp_from_joints(joints)
+                    safety_profile.assert_tcp_point(
+                        tcp[:3, 3], label=f"J4 逃逸路径点 {index}"
+                    )
+            except SafetyAbort as exc:
+                rejections.append(str(exc))
+                continue
+            LOG.info(
+                "J4 奇异带逃逸: %.1f° -> %.1f°，%d 个围栏校验点通过",
+                q[3],
+                target[3],
+                len(dense),
+            )
+            self.execute_planned_joints(
+                [target], params.final_speed, params.planned_joint_step_deg
+            )
+            return target
+        raise SafetyAbort(
+            f"当前 J4={q[3]:.1f}° 在奇异带内，两个弯肘方向均不可行: "
+            + "；".join(rejections)
+        )
 
     def solve_flange_ik(
         self,
@@ -300,19 +502,9 @@ class RobotSession:
         points_deg: Sequence[Sequence[float]],
         max_step_deg: float,
     ) -> list[list[float]]:
-        current = np.asarray(start_joints_deg, dtype=float)
-        dense: list[list[float]] = []
-        for target_values in points_deg:
-            target = np.asarray(target_values, dtype=float)
-            count = max(
-                1,
-                int(np.ceil(np.max(np.abs(target - current)) / max_step_deg)),
-            )
-            for index in range(1, count + 1):
-                alpha = index / count
-                dense.append(((1 - alpha) * current + alpha * target).tolist())
-            current = target
-        return dense
+        return interpolate_joint_path(
+            start_joints_deg, points_deg, max_step_deg
+        )
 
     def tcp_from_joints(self, joints_deg: Sequence[float]) -> np.ndarray:
         self._set_algo_tool_z(
@@ -349,17 +541,99 @@ class RobotSession:
     def move_linear(self, pose: Sequence[float], speed: int):
         if self.stop_event.is_set():
             raise SafetyAbort("用户停止")
-        rc = self.arm.rm_movel(list(pose), speed, 0, 0, 1)
+        target = list(map(float, pose))
+        LOG.info(
+            "SDK movel 下发: target=%s speed=%d%%",
+            np.round(target, 5).tolist(),
+            speed,
+        )
+        rc = self.arm.rm_movel(target, speed, 0, 0, 1)
         if rc != 0:
-            raise SafetyAbort(f"movel 失败: {rc}")
+            context = self._motion_failure_context(target, speed)
+            if rc == -6:
+                raise SafetyAbort(
+                    "movel 被外部停止指令中止（API2 -6，不是点云障碍或"
+                    f"Python 电子围栏拒绝）: {context}"
+                )
+            raise SafetyAbort(f"movel 失败: rc={rc}; {context}")
+
+    def _motion_failure_context(
+        self, target: Sequence[float], speed: int
+    ) -> str:
+        """Best-effort snapshot before the SDK connection is torn down."""
+
+        def query(name: str):
+            method = getattr(self.arm, name, None)
+            if method is None:
+                return "unsupported"
+            try:
+                return method()
+            except Exception as exc:  # diagnostics must not hide the first fault
+                return f"query_failed:{type(exc).__name__}:{exc}"
+
+        source = getattr(self.stop_event, "source", None)
+        context = {
+            "target": np.round(np.asarray(target, dtype=float), 5).tolist(),
+            "speed": int(speed),
+            "local_stop_event": self.stop_event.is_set(),
+            "local_stop_source": source,
+            "arm_state": query("rm_get_current_arm_state"),
+            "arm_all_state": query("rm_get_arm_all_state"),
+            "controller_state": query("rm_get_controller_state"),
+            "collision_stage": query("rm_get_collision_stage"),
+            "self_collision": query("rm_get_self_collision_enable"),
+            "joints": query("rm_get_joint_degree"),
+            "controller_fence_enable": query(
+                "rm_get_electronic_fence_enable"
+            ),
+            "controller_fence_config": query(
+                "rm_get_electronic_fence_config"
+            ),
+            "controller_virtual_wall_enable": query(
+                "rm_get_virtual_wall_enable"
+            ),
+        }
+        return "; ".join(f"{key}={value}" for key, value in context.items())
+
+    def controller_fence_status(self) -> dict:
+        """Read persistent controller-native fence state without changing it."""
+        method = getattr(self.arm, "rm_get_electronic_fence_enable", None)
+        if method is None:
+            raise SafetyAbort("当前 SDK 不支持查询控制器原生电子围栏状态")
+        try:
+            rc, state = method()
+        except Exception as exc:
+            raise SafetyAbort(f"查询控制器原生电子围栏状态失败: {exc}") from exc
+        if rc != 0:
+            raise SafetyAbort(f"查询控制器原生电子围栏状态失败: rc={rc}")
+
+        current = None
+        current_method = getattr(
+            self.arm, "rm_get_electronic_fence_config", None
+        )
+        if current_method is not None:
+            try:
+                current = current_method()
+            except Exception as exc:
+                current = f"query_failed:{type(exc).__name__}:{exc}"
+
+        saved = None
+        list_method = getattr(
+            self.arm, "rm_get_electronic_fence_list_infos", None
+        )
+        if list_method is not None:
+            try:
+                saved = list_method()
+            except Exception as exc:
+                saved = f"query_failed:{type(exc).__name__}:{exc}"
+        return {"state": state, "current": current, "saved": saved}
 
     def execute_planned_joints(
         self,
         points_deg: Sequence[Sequence[float]],
         speed: int,
         max_step_deg: float,
-        max_dense_points: int | None = None,
-    ) -> bool:
+    ) -> None:
         """Execute a dense, collision-checked MoveIt path through SDK movej.
 
         MoveIt remains planning-only. Dense waypoint interpolation bounds the
@@ -373,19 +647,15 @@ class RobotSession:
             self.joints_deg(), points_deg, max_step_deg
         )
         LOG.info("SDK 执行 MoveIt 轨迹: %d 个密集关节点", len(dense))
-        selected = dense
-        if max_dense_points is not None:
-            selected = dense[:max_dense_points]
-        for index, joints in enumerate(selected, 1):
+        for index, joints in enumerate(dense, 1):
             if self.stop_event.is_set():
                 raise SafetyAbort("用户停止")
             rc = self.arm.rm_movej(joints, speed, 0, 0, 1)
             if rc != 0:
                 raise SafetyAbort(
-                    f"MoveIt 轨迹点 {index}/{len(selected)} 执行失败: {rc}"
+                    f"MoveIt 轨迹点 {index}/{len(dense)} 执行失败: {rc}"
                 )
             self.current_tcp()
-        return len(selected) == len(dense)
 
     def gripper_state(self) -> dict:
         """Read the installed RM Plus end-effector, not the legacy gripper API."""
@@ -421,6 +691,8 @@ class RobotSession:
         deadline = time.monotonic() + timeout_s
         movement_seen = abs(start_pos - target) <= 8
         settled_samples = 0
+        stopped_fault_samples = 0
+        moving_fault_seen = False
         latest = before
         while time.monotonic() < deadline:
             if self.stop_event.is_set():
@@ -432,7 +704,43 @@ class RobotSession:
             if abs(pos - start_pos) >= 8 or state == 0:
                 movement_seen = True
             if state in (5, 6):
-                raise SafetyAbort(f"RM Plus 夹爪保护或故障: {latest}")
+                # RM Plus may publish an internally inconsistent transition
+                # sample while reversing direction: the 2026-07-17 robot run
+                # reported state=6 with sys_state=0, dof_err=0 and speed=74,
+                # then aborted halfway through reopening.  A real protection
+                # stop/fault must remain stopped; do not classify one moving
+                # sample as terminal.  sys_state/dof_err are still rejected
+                # immediately by gripper_state().
+                settled_samples = 0
+                if speed_now == 0:
+                    stopped_fault_samples += 1
+                    if stopped_fault_samples >= 3:
+                        raise SafetyAbort(
+                            "RM Plus 夹爪连续 3 帧处于保护或故障且已停住: "
+                            f"{latest}"
+                        )
+                else:
+                    if not moving_fault_seen:
+                        LOG.warning(
+                            "RM Plus 夹爪运动中出现瞬态 state=%d pos=%d "
+                            "speed=%d（sys_state/dof_err 正常），继续等待终态",
+                            state,
+                            pos,
+                            speed_now,
+                        )
+                    moving_fault_seen = True
+                    stopped_fault_samples = 0
+                time.sleep(0.05)
+                continue
+            stopped_fault_samples = 0
+            if moving_fault_seen:
+                LOG.info(
+                    "RM Plus 夹爪状态恢复: state=%d pos=%d speed=%d",
+                    state,
+                    pos,
+                    speed_now,
+                )
+                moving_fault_seen = False
             if movement_seen and state in (2, 3) and speed_now == 0:
                 settled_samples += 1
                 if settled_samples >= 3:
@@ -445,6 +753,45 @@ class RobotSession:
             f"target={target}, pos={latest.get('pos')}, "
             f"state={latest.get('dof_state')}"
         )
+
+    def calibrate_empty_close(self, params: DemoParams | None = None) -> int:
+        """在自由空间实测今天的空夹闭合位置，作为后续抓取判定的基线。
+
+        写死的空夹常量会随环境/夹爪状态漂移（2026-07-15 实测因此把真实
+        抓取成功误判成空夹）。必须在夹爪前方无物体时调用（例如观察位）。
+        结束时夹爪保持张开。
+        """
+        if not self.take_control:
+            raise SafetyAbort("只规划会话禁止控制夹爪")
+        params = params or DemoParams()
+        opened = self.open_gripper(params)
+        opened_pos = int(opened["pos"][0])
+        state = self._command_gripper_position(
+            params.gripper_close_position,
+            speed=params.gripper_speed,
+            force=params.gripper_force,
+        )
+        baseline = int(state["pos"][0])
+        travel = opened_pos - baseline
+        if travel < params.gripper_calibration_min_travel:
+            self.open_gripper(params)
+            raise SafetyAbort(
+                "空夹基线标定异常，闭合行程不足"
+                "（夹爪前方可能有物体或硬件故障）: "
+                f"张开 pos={opened_pos}, 闭合 pos={baseline}, "
+                f"行程={travel}, 最小要求={params.gripper_calibration_min_travel}"
+            )
+        self.empty_close_pos = baseline
+        LOG.info(
+            "空夹基线实测 pos=%d（张开 pos=%d，闭合行程=%d），"
+            "抓取判定阈值 pos>%d",
+            baseline,
+            opened_pos,
+            travel,
+            baseline + params.gripper_object_margin,
+        )
+        self.open_gripper(params)
+        return baseline
 
     def open_gripper(self, params: DemoParams | None = None) -> dict:
         if not self.take_control:
@@ -476,15 +823,18 @@ class RobotSession:
         dof_state = int(state["dof_state"][0])
         pos = int(state["pos"][0])
         current = int(state["current"][0])
-        minimum_object_pos = (
-            params.gripper_empty_closed_position
-            + params.gripper_object_margin
+        baseline = getattr(
+            self, "empty_close_pos", params.gripper_empty_closed_position
         )
+        minimum_object_pos = baseline + params.gripper_object_margin
         LOG.info(
-            "RM Plus 闭合反馈: state=%d pos=%d current=%d; 抓取阈值 pos>%d",
+            "RM Plus 闭合反馈: state=%d pos=%d current=%d; "
+            "空夹基线=%d(%s) 抓取阈值 pos>%d",
             dof_state,
             pos,
             current,
+            baseline,
+            "本轮实测" if hasattr(self, "empty_close_pos") else "静态回退",
             minimum_object_pos,
         )
         if dof_state != 3:
@@ -495,8 +845,29 @@ class RobotSession:
         if pos <= minimum_object_pos:
             raise SafetyAbort(
                 "夹爪闭合位置等同空夹，判定未抓到水瓶，禁止抬升: "
-                f"pos={pos}, 空夹基线={params.gripper_empty_closed_position}"
+                f"pos={pos}, 空夹基线={baseline}, current={current}。"
+                "若现场确认实际已夹稳，说明该物体比余量还窄，"
+                "记录本行数据后调小 gripper_object_margin"
             )
+        return state
+
+    def close_empty_gripper(self, params: DemoParams | None = None) -> dict:
+        """收拢已释放物体的空夹爪，不执行“是否抓到物体”的判定。
+
+        `close_gripper()` 是抓取动作，空夹闭合会被它有意判成抓取失败；放瓶并
+        退开后的收纳动作语义不同，只需等待 RM Plus 返回稳定终态。
+        """
+        if not self.take_control:
+            raise SafetyAbort("只规划会话禁止控制夹爪")
+        params = params or DemoParams()
+        state = self._command_gripper_position(
+            params.gripper_close_position,
+            speed=params.gripper_speed,
+            force=params.gripper_force,
+        )
+        dof_state = int(state["dof_state"][0])
+        pos = int(state["pos"][0])
+        LOG.info("RM Plus 空载收拢完成: state=%d pos=%d", dof_state, pos)
         return state
 
     def hold(self):

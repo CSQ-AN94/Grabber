@@ -50,6 +50,31 @@ def _base_points(
     return (T_base_camera @ camera_points.T).T[:, :3], u, v
 
 
+def head_scene_points(
+    depth: np.ndarray,
+    K: np.ndarray,
+    T_base_camera: np.ndarray,
+    params: DemoParams,
+    *,
+    min_depth_m: float | None = None,
+    max_depth_m: float | None = None,
+    bottom_crop: int | None = None,
+) -> np.ndarray:
+    """Return the raw head point cloud in the right-arm base frame."""
+    if depth is None or K is None:
+        raise SafetyAbort("头部点云缺少深度或内参")
+    points, _, _ = _base_points(
+        depth,
+        K,
+        T_base_camera,
+        params,
+        min_depth_m=min_depth_m,
+        max_depth_m=max_depth_m,
+        bottom_crop=bottom_crop,
+    )
+    return points
+
+
 def build_scene_voxels(
     depth: np.ndarray,
     K: np.ndarray,

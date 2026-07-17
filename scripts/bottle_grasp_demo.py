@@ -55,35 +55,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="抓取抬升后把瓶子放回桌面并退开（不加则保持抓着不动）",
     )
     parser.add_argument(
-        "--autonomous-observation",
+        "--return-home",
         action="store_true",
         help=(
-            "头部定位后强制用 MoveIt 自主规划移动到右腕观察位，"
-            "忽略 profile 里配置的示教走廊（测试简单几何场景，如瓶子放桌角）"
+            "放回后额外用 MoveIt 规划返回 profile 里的 home_joints_deg"
+            "（跟去程一样只受电子围栏保护，需要该 profile 配置了 home_joints_deg）"
         ),
-    )
-    parser.add_argument(
-        "--full-cycle",
-        action="store_true",
-        help=(
-            "完整一轮：垂下→观察位→抓取→抬升→放回→垂回。"
-            "转移段走示教走廊（--guided-path 或 profile 的 guided_path）"
-        ),
-    )
-    parser.add_argument(
-        "--guided-path",
-        default=None,
-        help="覆盖示教转移走廊 JSON（grabber_guided_path_v1，首点=垂下姿态）",
     )
     parser.add_argument(
         "--restore-teleop",
         action="store_true",
-        help="完整循环结束后自动运行官方 upstart_all.sh 恢复遥操",
+        help="demo 结束（STOP/Ctrl+C 退出保持）后自动运行官方 upstart_all.sh 恢复遥操",
     )
     parser.add_argument(
         "--resume-at-wrist",
         action="store_true",
         help="keep the current right-arm pose and resume wrist visual grasping",
+    )
+    parser.add_argument(
+        "--finish-from-current",
+        action="store_true",
+        help=(
+            "跳过定位与抓取，假设夹爪已经抓着水瓶（上一轮运行遗留在原地），"
+            "从当前姿态直接按 --place-back/--return-home 收尾"
+        ),
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8876)

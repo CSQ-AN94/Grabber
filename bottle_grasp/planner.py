@@ -24,8 +24,6 @@ class MoveItPlanner:
         self.run_dir = Path(run_dir)
         self.process = None
         self.log_handle = None
-        self.last_obstacle_count = 0
-        self.last_box_ids: set[str] = set()
 
     @property
     def ros_prefix(self) -> str:
@@ -66,6 +64,48 @@ class MoveItPlanner:
             time.sleep(1)
         raise SafetyAbort("等待 MoveIt2 规划服务超时")
 
+    def _run_json_helper(
+        self,
+        *,
+        operation: str,
+        helper: Path,
+        request_path: Path,
+        output_path: Path,
+        timeout_s: float,
+    ) -> dict:
+        """Run one ROS helper and turn transport/file failures into SafetyAbort."""
+        try:
+            output_path.unlink(missing_ok=True)
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-lc",
+                    self.ros_prefix
+                    + f"python3 '{helper}' '{request_path}' '{output_path}'",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise SafetyAbort(
+                f"{operation} 超时（上限 {timeout_s:.0f}s）"
+            ) from exc
+        except OSError as exc:
+            raise SafetyAbort(f"{operation} 无法启动: {exc}") from exc
+
+        if not output_path.exists():
+            stderr = (result.stderr or "").strip()[-800:]
+            stdout = (result.stdout or "").strip()[-800:]
+            raise SafetyAbort(
+                f"{operation} 没有返回结果文件: rc={result.returncode}; "
+                f"stdout={stdout!r}; stderr={stderr!r}"
+            )
+        try:
+            return json.loads(output_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise SafetyAbort(f"{operation} 结果无法解析: {exc}") from exc
+
     def plan(
         self,
         *,
@@ -83,12 +123,6 @@ class MoveItPlanner:
     ) -> dict:
         request_path = self.run_dir / f"{name}_request.json"
         output_path = self.run_dir / f"{name}_plan.json"
-        current_box_ids = {str(item["id"]) for item in boxes}
-        clear_ids = [
-            f"rgbd_{index}"
-            for index in range(len(obstacles), self.last_obstacle_count)
-        ]
-        clear_ids.extend(sorted(self.last_box_ids - current_box_ids))
         request_path.write_text(
             json.dumps(
                 {
@@ -105,31 +139,20 @@ class MoveItPlanner:
                     "workspace": workspace,
                     "planning_frame": planning_frame,
                     "tool_guard": tool_guard,
-                    "clear_ids": clear_ids,
                     "voxel_size": float(voxel_size),
                 },
                 indent=2,
             ),
             encoding="utf-8",
         )
-        self.last_obstacle_count = len(obstacles)
-        self.last_box_ids = current_box_ids
         helper = self.project_root / "bottle_grasp" / "moveit_plan_once.py"
-        result = subprocess.run(
-            [
-                "bash",
-                "-lc",
-                self.ros_prefix
-                + f"python3 '{helper}' '{request_path}' '{output_path}'",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=40,
+        plan = self._run_json_helper(
+            operation=f"MoveIt2 规划 {name}",
+            helper=helper,
+            request_path=request_path,
+            output_path=output_path,
+            timeout_s=40,
         )
-        if not output_path.exists():
-            LOG.error("MoveIt helper stdout=%s stderr=%s", result.stdout, result.stderr)
-            raise SafetyAbort("MoveIt2 没有返回规划结果")
-        plan = json.loads(output_path.read_text(encoding="utf-8"))
         if not plan.get("success"):
             raise SafetyAbort(f"MoveIt2 规划失败: error={plan.get('error_code')}")
         LOG.info(
@@ -176,32 +199,20 @@ class MoveItPlanner:
             encoding="utf-8",
         )
         helper = self.project_root / "bottle_grasp" / "moveit_validate_path.py"
-        result = subprocess.run(
-            [
-                "bash",
-                "-lc",
-                self.ros_prefix
-                + f"python3 '{helper}' '{request_path}' '{output_path}'",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=90,
+        validation = self._run_json_helper(
+            operation=f"MoveIt2 轨迹复核 {name}",
+            helper=helper,
+            request_path=request_path,
+            output_path=output_path,
+            timeout_s=90,
         )
-        if not output_path.exists():
-            LOG.error(
-                "MoveIt path validator stdout=%s stderr=%s",
-                result.stdout,
-                result.stderr,
-            )
-            raise SafetyAbort("MoveIt2 没有返回示教路径检查结果")
-        validation = json.loads(output_path.read_text(encoding="utf-8"))
         if not validation.get("success"):
             raise SafetyAbort(
-                "示教路径碰撞检查失败: "
+                "轨迹碰撞检查失败: "
                 f"{validation.get('invalid', [])[:1]}"
             )
         LOG.info(
-            "示教路径 MoveIt 检查通过: %d 个状态",
+            "轨迹 MoveIt 碰撞复核通过: %d 个状态",
             validation["checked_states"],
         )
         return validation

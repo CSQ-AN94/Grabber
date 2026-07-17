@@ -14,6 +14,14 @@ class SafetyAbort(RuntimeError):
     """A fail-closed condition; no automatic retreat is allowed."""
 
 
+class CameraFrameUnavailable(SafetyAbort):
+    """The RGB-D stream is stale or missing; motion must stop."""
+
+
+class BottleDetectionLost(SafetyAbort):
+    """A live frame no longer contains a detector-approved bottle."""
+
+
 @dataclass
 class DemoParams:
     samples: int = 7
@@ -37,11 +45,13 @@ class DemoParams:
     travel_speed: int = 3
     final_speed: int = 3
     j4_singularity_deg: float = 8.0
+    # 起点已在 J4≈0 奇异带内时，先用关节空间 movej 把肘弯到这个角度再做
+    # 笛卡尔规划。比奇异带宽出 6°，避免逃逸后又贴着带边被下一次检查拒绝。
+    j4_escape_deg: float = 14.0
     joint_limit_margin_deg: float = 3.0
     corridor_radius_m: float = 0.045
     obstacle_min_points: int = 18
     frame_timeout_s: float = 1.0
-    observation_standoff_m: float = 0.32
     head_min_depth_m: float = 0.25
     head_max_depth_m: float = 2.2
     scene_voxel_m: float = 0.065
@@ -49,23 +59,49 @@ class DemoParams:
     scene_target_clearance_m: float = 0.14
     scene_image_bottom_crop: int = 405
     planned_joint_step_deg: float = 1.5
+    # 每轮从头部点云拟合真实桌面并在容差内自适应 table_top 围栏。
+    # 容差是"底盘每轮停靠位置的正常波动"量级；超出说明物理布置真的变了，
+    # 必须重新走 runbook 测量流程而不是让软件猜。
+    table_fit_min_below_m: float = 0.03
+    table_fit_max_below_m: float = 0.40
+    table_fit_horizontal_radius_m: float = 0.70
+    table_fit_min_inliers: int = 60
+    table_fit_height_tolerance_m: float = 0.12
+    table_fit_edge_margin_m: float = 0.08
+    table_fit_zone_attach_band_m: float = 0.06
+    # Global MoveIt transfer: try several endpoint candidates and feed an
+    # independently detected fence violation back as a temporary collision
+    # box. The bounds keep failure deterministic instead of retrying forever.
+    global_plan_max_candidates: int = 8
+    global_plan_attempts_per_candidate: int = 2
+    replan_exclusion_size_m: float = 0.10
     head_width: int = 848
     head_height: int = 480
-    wrist_scene_max_voxels: int = 240
-    merged_scene_max_voxels: int = 650
     wrist_relocalization_samples: int = 3
-    pregrasp_replan_cycles: int = 12
-    replan_dense_points: int = 6
+    # When wrist detection genuinely disappears during the observation-to-
+    # pregrasp transit, the fixed head camera independently confirms that the
+    # bottle is still close to the locked base-frame point.  It never silently
+    # rewrites the target; a larger shift stops the motion.
+    head_confirmation_tolerance_m: float = 0.05
+    # 抓取点高度：检测框顶部向下的比例（0=瓶盖, 1=瓶底）。取偏低的固定
+    # 比例而不是深度像素中位数——中位数随每帧有效深度像素分布漂移，导致
+    # 每轮抓取高度不一致；太高时腕部相机在近距会丢失目标。
+    grasp_height_fraction: float = 0.66
     # RM Plus two-finger gripper.  The legacy rm_set_gripper_* API does not
-    # control the installed ZX gripper.  Real-robot empty-close calibration on
-    # 2026-07-16 stopped at pos~=394, so a bottle grasp must stop wider than
-    # that baseline before lifting.
+    # control the installed ZX gripper.
     gripper_open_position: int = 900
     gripper_close_position: int = 0
     gripper_speed: int = 100
     gripper_force: int = 30
+    # 空夹动态标定只做与本轮实测张开位的粗行程检查，不再拿历史闭合位置
+    # 当裁判。小于该行程说明夹爪几乎没闭合，前方可能有物体或硬件异常。
+    gripper_calibration_min_travel: int = 100
+    # 空夹基线的静态回退值（2026-07-16 实测 pos~=394）。每次运行会在自由
+    # 空间重新实测基线（RobotSession.calibrate_empty_close），静态值只在
+    # 没标定成功时兜底。余量取 6：2026-07-15 实测抓稳的窄金属瓶只比空夹
+    # 基线高 8，旧余量 35 把真实成功误判成空夹。
     gripper_empty_closed_position: int = 394
-    gripper_object_margin: int = 35
+    gripper_object_margin: int = 6
 
 
 @dataclass
@@ -121,6 +157,33 @@ def interpolate_poses(
         ).as_matrix()
         result.append(matrix_pose(T))
     return result
+
+
+def interpolate_joint_path(
+    start_joints_deg: Sequence[float],
+    points_deg: Sequence[Sequence[float]],
+    max_step_deg: float,
+) -> list[list[float]]:
+    """Densify a joint path with a hard per-joint angular step bound."""
+    if not math.isfinite(max_step_deg) or max_step_deg <= 0:
+        raise SafetyAbort(f"关节插值步长无效: {max_step_deg}")
+    current = np.asarray(start_joints_deg, dtype=float)
+    if current.ndim != 1 or not np.all(np.isfinite(current)):
+        raise SafetyAbort("关节插值起点无效")
+    dense: list[list[float]] = []
+    for index, target_values in enumerate(points_deg, 1):
+        target = np.asarray(target_values, dtype=float)
+        if target.shape != current.shape or not np.all(np.isfinite(target)):
+            raise SafetyAbort(f"关节轨迹点 {index} 维度或数值无效")
+        count = max(
+            1,
+            int(np.ceil(np.max(np.abs(target - current)) / max_step_deg)),
+        )
+        for step in range(1, count + 1):
+            alpha = step / count
+            dense.append(((1 - alpha) * current + alpha * target).tolist())
+        current = target
+    return dense
 
 
 def look_at_camera_pose(

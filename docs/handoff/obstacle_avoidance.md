@@ -54,7 +54,7 @@
 工业界的标准做法是**纵深防御（defense in depth）**：规划器/碰撞检测这套链路
 环节很多（URDF加载→碰撞几何解析→规划场景同步→采样规划→碰撞检测插件），
 任何一环出问题都可能让"避障"变成"以为在避障、其实完全没避"——而且很可能是
-**静默失效**（不报错，只是永远说"没有碰撞"），本项目现在遇到的正是这种情况。
+**静默失效**（不报错，只是永远说"没有碰撞"），所以本项目保留独立围栏复核。
 
 所以正确做法是加一层**跟规划器逻辑完全独立、简单到不太可能出错**的硬限制：
 通常是笛卡尔空间里的长方体禁区（业内叫 geofence / 电子围栏），执行前逐点做
@@ -67,90 +67,146 @@
 | 层 | 作用 | 代码位置 | 现状 |
 |---|---|---|---|
 | 感知→障碍物 | RGB-D点云体素化 | `bottle_grasp/scene.py` | 正常工作 |
-| ROS2/MoveIt2桥接 | 起规划服务、发规划请求 | `bottle_grasp/planner.py`、`moveit_headless.py`、`moveit_plan_once.py`、`moveit_validate_path.py` | 服务能起来、能返回"规划成功"，但碰撞检测本身失效（见下） |
-| 采样规划算法 | OMPL在7维构型空间搜路径 | 机器人上的ROS包，本仓库不管理 | 未知（依赖碰撞检测，检测坏了规划质量无法评估） |
-| **电子围栏（真正在工作的防线）** | 执行前笛卡尔空间硬校验 | `bottle_grasp/safety.py` + `safety_profiles.json` | **正常工作，2026-07-16晚两次正确拦截了违规路径** |
+| ROS2/MoveIt2 adapter | 起规划服务、发规划和后验校验请求 | `bottle_grasp/planner.py`、`moveit_headless.py`、`moveit_plan_once.py`、`moveit_validate_path.py` | 正常；超时/坏JSON/无输出统一转为安全错误 |
+| 安全规划 module | 候选排序、有限换路、重复去重、围栏反馈 | `bottle_grasp/safe_planner.py` | 正常；最多8候选×2路线 |
+| 采样规划算法 | OMPL在7维构型空间搜路径 | 机器人上的ROS包 | 世界碰撞 selftest 已通过 |
+| **电子围栏（独立防线）** | 执行前笛卡尔空间硬校验 | `bottle_grasp/safety.py` + `safety_profiles.json` | 正常；违规点会反馈给下一轮规划 |
 | 执行时关节安全 | 关节限位余量、J4奇异区、单步跳变 | `bottle_grasp/robot.py` 的 `plan_ik` | 正常工作 |
 
-**关键认知**：MoveIt负责"聪明地绕障碍"，电子围栏负责"绝不越线"。当前MoveIt
-这层的碰撞检测坏了，但因为电子围栏这层独立存在，系统整体还是fail-closed的
-（规划器出的坏路径会被拦下、安全中止，而不是被执行）——只是牺牲了"自主绕开
-复杂障碍"的能力，退化成"人工划好安全区域、规划器只能在区域内活动"。
+**关键认知**：MoveIt负责全臂几何碰撞和搜索，MoveIt 后验校验负责复查最终轨迹，
+电子围栏负责独立的 TCP 硬边界。任一层拒绝都不会执行；安全规划 module 会先
+自动换路线或观察端点，有限次数全部失败才返回汇总错误。
 
-## 三、当前诊断：MoveIt碰撞检测失效（未完全查明根因）
+## 三、2026-07-17 诊断结论：旧 selftest 误诊，碰撞链正常
 
-### 3.1 已确认的现象
+### 3.1 旧诊断为什么错
 
-2026-07-16凌晨，用真实机械臂位姿做了几组独立验证：
+旧脚本把 `[0,90,0,90,0,0,0]` 当成“普通、无碰撞”的右臂基线姿态，但实测
+`/check_state_validity` contacts 是：
 
-1. 构造一个关节配置，使TCP笛卡尔位置落在已配置的桌面禁入盒**内部约3cm**处，
-   直接调用ROS2服务 `/check_state_validity` 查询——返回 `valid=True, contacts=[]`
-2. 把同一个方向再往深处推到**内部约10cm**（IK仍有解、机械臂姿态合理）——
-   仍然 `valid=True`
-3. 反过来验证：调用 `/get_planning_scene` 确认碰撞物确实在场景里
-   （`fence_table_top` 长方体存在、尺寸合理）、末端工具防撞体
-   （`bottle_tool_guard`）已正确附着在 `r_link7` 上、ACM里有34个连杆条目
-   （看起来是正常的自碰撞豁免表）——**场景数据本身看起来是对的**，但
-   `check_state_validity` 就是不认它
+- `r_hand` ↔ `base_link_underpan`
+- `r_link7` ↔ `base_link_underpan`
+- `r_hand/r_link6/r_link7` ↔ `body_base_link`
 
-4. 独立用MoveIt的规划服务 `/plan_kinematic_path` 请求一条"终点在桌子内部
-   15cm"的轨迹——**规划直接成功**，返回轨迹，说明规划采样阶段全程没有触发
-   任何碰撞拒绝
+因此无盒子基线本来就是 `valid=False`。旧脚本看到三次都是 False，却打印
+“巨型盒子仍报无碰撞”，把“基线姿态自身碰撞”误诊成“碰撞几何没加载”。
 
-这四点合起来结论很明确：**MoveIt的碰撞检测这一步，无论是单点查询
-（check_state_validity）还是规划过程中的内部调用，都没有真正生效**。
+### 3.2 修正后的真机证据
 
-### 3.2 已经排除/修过但不是根因的
+探针改用 `table_demo.home_joints_deg` 中已真机示教的安全垂下姿态，并先清理
+可能残留的 selftest 盒。2026-07-17 实测：
 
-- `RobotState.is_diff` 没设为 `True`：这是个真实的bug（非diff状态会把附着的
-  工具防撞体从场景里替换掉），已在 `moveit_plan_once.py` 和
-  `moveit_validate_path.py` 里修了，但修完之后碰撞检测**依然**对上面的测试
-  配置返回 `valid=True`——说明这不是（唯一）根因
+1. 无盒子：`valid=True, contacts=[]`
+2. 4m×4m×4m 巨型盒子罩住整臂：`valid=False`，contacts 明确包含
+   `r_link1…r_link7/r_hand ↔ collision_selftest_box`
+3. 撤盒：恢复 `valid=True, contacts=[]`
 
-### 3.3 尚未查明、留下的可疑线索
+结论：URDF collision 几何、世界碰撞物注册、状态有效性服务和场景增删都工作。
+`RobotState.is_diff=True` 的修复仍然必要，因为它保证请求不会覆盖已附着的工具
+防撞体，但不再把它描述成“修了仍无效”。
 
-`bottle_grasp/moveit_headless.py` 启动 `move_group` 时的日志里有这一行没深挖：
+### 3.3 电子围栏拒绝后现在怎么处理
 
-```
-[moveit_ros.planning_scene_monitor.planning_scene_monitor]: Failed to fetch current robot state.
-```
+旧 `_plan_flange()` 是一次性流程：MoveIt 规划一次，电子围栏复核一次，拒绝后
+直接把异常抛到顶层。现在 `SafeMotionPlanner` 把这段复杂度收进一个 interface：
 
-这条警告值得怀疑，原因：`moveit_headless.py` 里故意把
-`joint_state_topic` 配成了 `"/unused_joint_states"`（因为这套架构不用TF/实时
-关节状态驱动规划场景，而是每次请求里显式带 `start_state`）——但如果
-planning_scene_monitor **从来没拿到过一次初始机器人状态**，它内部维护的
-"当前监控场景"里的机器人状态可能是某种未初始化/默认值。当请求带
-`is_diff=True` 的部分RobotState进来做合并时，合并逻辑如果依赖这个从未正确
-初始化的基准状态，行为可能不可预测——这跟"碰撞检测对任何输入都说没碰撞"这个
-现象方向上是吻合的，但**没有实证，只是最可疑的一条线索**，需要下次实际验证。
+- 观察位端点先做围栏、IK、限位和奇异检查，再按关节变化代价排序；
+- 最多尝试前 8 个端点，每个最多 2 条 MoveIt 路线；
+- 电子围栏返回结构化 `FenceViolation`（类型、障碍物、违规点）；
+- 违规点转换成 10cm 临时碰撞盒反馈给 MoveIt，强制下一次换路；
+- 被拒绝的重复轨迹去重，不浪费剩余次数；
+- 每个候选结果先做 1.5° 密集 TCP 围栏检查，再做 MoveIt 密集状态全臂复核；
+- 所有尝试失败才中止，并汇总候选数、尝试数和最近四条拒绝原因。
 
-### 3.4 还没跑完的实验
+### 3.4 已完成的集成验证
 
-- **自碰撞探针**：构造两个"肘部严重折叠、大概率自己撞自己"的关节配置
-  （`[0,100,0,150,0,0,0]` 和 `[0,0,0,170,0,0,0]`），准备验证自碰撞检测是否
-  也失效（跟世界碰撞失效是不是同一个根因）——**命令已经写好但机器人在这一步
-  掉线了，没有跑出结果**
-- **巨型盒子世界碰撞探针**（`bottle_grasp/moveit_collision_selftest.py`）：
-  往场景里放一个4m³的巨型盒子把整台机器人罩住，任何可达姿态理论上都必然相交，
-  如果还报`valid=True`几乎能实锤"机器人自身碰撞几何没加载"这个方向。**这个
-  脚本写完后同样因为机器人掉线，从没有实际跑过一次**，下次开机的第一件事
-  应该是跑它（`scripts/run_bottle_full_cycle.sh selftest`）
+2026-07-17 在真机载板运行两次 `plan-only`（没有运动）：
 
-### 3.5 建议的排查方向（按怀疑程度排序）
+- 第一次：7 个端点候选，候选45，39点轨迹，71个密集 TCP 点通过；
+- 加入后验复核后第二次：8 个端点候选，候选39，32点轨迹；32个密集 TCP 点
+  通过电子围栏，同一批32个状态通过 MoveIt 全臂碰撞复核。
 
-1. **先跑 `moveit_collision_selftest.py`**：如果巨型盒子都测不出碰撞，几乎
-   可以确定是"机器人自身碰撞几何没被加载进regulatory scene"这个方向，重点
-   查 `dual_rm_75b_moveit_config` 包里的URDF `<collision>` 标签/网格路径是否
-   正确、`robot_state_publisher` 是否真的把完整模型发布出去了
-2. **追查"Failed to fetch current robot state"**：看这条警告具体在
-   `planning_scene_monitor` 源码的哪个分支触发，以及它是否真的导致内部碰撞
-   世界跟"机器人当前状态"没有正确关联
-3. **跑自碰撞探针**：如果自碰撞也失效但世界碰撞（盒子测试）正常，说明问题
-   窄化在"世界障碍物没被真正注册进碰撞矩阵"这一侧，而不是机器人自身几何
-4. 对照一份**已知能正常工作的MoveIt2最小示例**（比如MoveIt2官方教程里的
-   panda机械臂demo）逐项diff配置差异，缩小范围
+自动重规划分支使用 2026-07-15 真实 `table_top` 拒绝坐标回放测试覆盖；不会为了
+制造失败而在真机上故意请求危险轨迹。
 
-## 四、参考资料
+## 四、2026-07-18 避障加固（代码已改，待真机复测）
+
+调研结论先说：**没有换框架的理由**。MoveIt2+OMPL 就是这个领域的成熟开源
+方案；cuRobo（NVIDIA GPU 加速规划）在杂物场景成功率更高，但要求 NVIDIA
+GPU + Isaac 工具链做碰撞模型、许可证限非商用，跟本机器人的部署环境不符。
+本轮是在现有链路上修三个具体缺陷：
+
+### 4.1 OMPL 碰撞检测离散化盲区——治本
+
+三.3 里"MoveIt 说没碰、独立围栏说已深入 1.7cm"的根因是 OMPL 没有连续
+碰撞检测，只按 `longest_valid_segment_fraction`（默认 0.01，即构型空间
+总尺度的 1%）在路径边上离散采点检测。对 7 自由度 RM75，相邻两次检测之
+间 TCP 可以平移近 10cm——薄的禁区面自然会被"跳过去"。
+
+修法（`bottle_grasp/ompl_config.py`，由 `moveit_headless.py` 加载时对每
+个规划组生效）：`longest_valid_segment_fraction=0.0025`，把规划期检测密
+度压到与离线复核 `planned_joint_step_deg=1.5°` 同量级。采样间隔缩小到
+1/4，预期把旧实测的 1~1.7cm 偏差压到约 0.25~0.4cm。
+代价是规划期碰撞检测变慢，8s 规划预算内需真机确认成功率没有下降。
+
+`safety.py` 里的 padding 已跟着回调：`clearance_m+5cm` → `clearance_m+2cm`
+（2026-07-18）。总余量 4.5cm 对旧实测最大偏差（1.7cm）仍有 2.6 倍安全
+系数，对采样密度修复后的理论预期偏差（~0.4cm）有约 10 倍系数——但这是
+推算，**这个具体数值组合（更密的 lvsf + 更小的 padding）还没有真机验证
+过**，是这轮改动里风险最高的一项，见下面复测清单第 2 条。
+
+### 4.2 场景同步无状态化——消灭"残留体素"类怪问题
+
+旧设计里 `planner.py` 在 Python 侧记账"上次发了多少个体素、哪些盒子"，
+下次请求带 `clear_ids` 去删。任何一次 helper 崩溃/超时都会让记账和真实
+场景脱节，留下幽灵障碍物（旧 selftest 残留盒就是同类事故）。现在每个
+helper（`moveit_plan_once.py` / `moveit_validate_path.py`）先调
+`/get_planning_scene` 查当前世界里所有物体，把属于本 demo 的前缀
+（`rgbd*`/`replan_*`/`fence_*`/`collision_selftest*`，见
+`bottle_grasp/scene_ids.py`）全部 REMOVE 再重建。不依赖任何跨调用状态，
+崩溃后自愈。
+
+### 4.3 体素合并成单个 CollisionObject
+
+550 个体素从"550 个独立碰撞物体"改为"1 个 `rgbd_voxels` 物体带 550 个
+box primitive"（`bottle_grasp/moveit_scene_helpers.py`），场景应用和清
+理都是 O(1) 个物体操作。两个 helper 的场景构建代码同时合并进该共享模块，
+消除了此前 plan/validate 两份手写场景代码不一致的风险。
+
+### 4.4 桌面围栏每轮自适应（2026-07-18 追加）
+
+静态 `table_top` 盒子是对"桌子在哪"的一次性测量；底盘每轮停靠位置不同
+时，桌子比配置低/远会让旧盒子挡住真实桌面上方明明可用的空间（虚假拒
+绝），比配置高/近则围栏漏保护。`bottle_grasp/table_model.py` 现在每轮
+从头部点云拟合真实桌面（目标点下方 3~40cm 带内找主导水平面，直方图取
+众数+中位数精化，抗瓶身/地面/飞点干扰），在 ±12cm 容差内自适应围栏：
+
+- 禁区顶面双向跟随实测高度（更高→更保护；更低→不再挡真实桌面上方）；
+- 水平范围只增不减（相机看不到画面底部裁剪线以下的真实前缘，"没看到
+  点"不能当"没有桌子"）；
+- 贴桌允许区的底面保持"作者化余量相对实测桌面"不变；
+- 实测高度超出容差、或找不到平面 → fail-closed 拒跑并提示重新测量。
+
+MoveIt 层不需要这套：动态 RGB-D 体素本来就每轮反映真实桌面。这层解决
+的是独立围栏的过期问题。
+
+### 4.5 真机复测清单（跑过才算完成）
+
+1. `run_bottle_grasp_autonomous.sh selftest` — 确认碰撞链仍健康；
+2. `plan` 模式两轮 — 对比 `moveit.log` 规划耗时（lvsf 变密后应仍在
+   8s 预算内）、确认不再出现三.3 的 narrow-band 围栏拒绝循环。**这一项
+   同时是 padding 从 +5cm 回调到 +2cm 后的验证**：如果又开始在贴桌路径
+   上零星拒绝，先把 `safety.py` 的 padding 临时改回 `+0.05` 定位是余量
+   不够还是别的原因，别直接怀疑 lvsf 数值；
+3. 人为中断一次规划（Ctrl-C helper），再跑 `plan` — 确认无残留障碍物
+   （日志里 stale REMOVE 数量）；
+4. `observe` 真机移动一轮，确认路径与旧版一致或更贴近直达；
+5. 桌面自适应：`plan` 一轮看 `head_scene.json` 的 `table_fit`（实测高度
+   应与 2026-07-15 测量值 -0.205 接近）；再把底盘挪远/近 5cm 左右重跑，
+   确认禁区顶面数字跟着变、超过 12cm 时明确拒跑；
+6. 从垂下姿态跑一次 `finish` — 验证 J4 弯肘逃逸（上次在这里安全中止）。
+
+## 五、参考资料
 
 - **MoveIt2官方教程**（moveit.picknik.ai）——直接搜 "MoveIt2 Planning Scene
   tutorial"、"MoveIt2 collision objects"，这两个概念直接对应本项目现在的坑

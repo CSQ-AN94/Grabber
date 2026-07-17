@@ -8,37 +8,10 @@ import math
 import sys
 
 import rclpy
-from geometry_msgs.msg import Pose
-from moveit_msgs.msg import (
-    AttachedCollisionObject,
-    CollisionObject,
-    PlanningScene,
-    RobotState,
-)
+from moveit_msgs.msg import PlanningScene, RobotState
 from moveit_msgs.srv import ApplyPlanningScene, GetStateValidity
+from moveit_scene_helpers import build_request_scene, wait
 from sensor_msgs.msg import JointState
-from shape_msgs.msg import SolidPrimitive
-
-
-def wait(client, timeout=20.0):
-    if not client.wait_for_service(timeout_sec=timeout):
-        raise RuntimeError(f"service unavailable: {client.srv_name}")
-
-
-def add_box(scene, frame_id, object_id, center, size):
-    collision = CollisionObject()
-    collision.header.frame_id = frame_id
-    collision.id = object_id
-    primitive = SolidPrimitive()
-    primitive.type = SolidPrimitive.BOX
-    primitive.dimensions = list(map(float, size))
-    pose = Pose()
-    pose.position.x, pose.position.y, pose.position.z = map(float, center)
-    pose.orientation.w = 1.0
-    collision.primitives = [primitive]
-    collision.primitive_poses = [pose]
-    collision.operation = CollisionObject.ADD
-    scene.world.collision_objects.append(collision)
 
 
 def main():
@@ -58,45 +31,7 @@ def main():
         wait(validity_client)
         frame_id = data["planning_frame"]
         scene = PlanningScene()
-        scene.is_diff = True
-        for index, center in enumerate(data.get("obstacles", [])):
-            add_box(
-                scene,
-                frame_id,
-                f"rgbd_{index}",
-                center,
-                [data["voxel_size"]] * 3,
-            )
-        for item in data.get("boxes", []):
-            add_box(
-                scene,
-                frame_id,
-                str(item["id"]),
-                item["center"],
-                item["size"],
-            )
-        guard = data.get("tool_guard")
-        if guard:
-            attached = AttachedCollisionObject()
-            attached.link_name = "r_link7"
-            attached.touch_links = ["r_link6", "r_link7", "r_hand"]
-            attached.object.header.frame_id = "r_link7"
-            attached.object.id = "bottle_tool_guard"
-            primitive = SolidPrimitive()
-            primitive.type = SolidPrimitive.BOX
-            primitive.dimensions = [
-                float(guard["xy"]),
-                float(guard["xy"]),
-                float(guard["length"]),
-            ]
-            pose = Pose()
-            pose.position.z = float(guard["center_z"])
-            pose.orientation.w = 1.0
-            attached.object.primitives = [primitive]
-            attached.object.primitive_poses = [pose]
-            attached.object.operation = CollisionObject.ADD
-            scene.robot_state.is_diff = True
-            scene.robot_state.attached_collision_objects = [attached]
+        build_request_scene(scene, node, frame_id, data)
         apply_request = ApplyPlanningScene.Request()
         apply_request.scene = scene
         future = apply_client.call_async(apply_request)

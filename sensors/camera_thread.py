@@ -59,6 +59,7 @@ class CameraThread(threading.Thread):
         self._display_thread: Optional[threading.Thread] = None
         self._display_mode = DisplayMode.NONE
         self._vision_analyzer = None
+        self.initialization_error: Optional[str] = None
 
         self.initialization_successful = self._initialize_camera()
         if not self.initialization_successful:
@@ -74,11 +75,15 @@ class CameraThread(threading.Thread):
             devices = ctx.query_devices()
             serials = [d.get_info(rs.camera_info.serial_number) for d in devices]
             if not serials:
+                self.initialization_error = "未检测到任何 RealSense 设备"
                 print("[CameraThread] CRITICAL: 未检测到任何 RealSense 设备")
                 return False
 
             if self._serial not in serials:
                 if self._strict_serial:
+                    self.initialization_error = (
+                        f"指定序列号 {self._serial} 未找到；可用设备: {serials}"
+                    )
                     print(
                         f"[CameraThread] CRITICAL: 指定序列号 {self._serial} 未找到，"
                         f"可用设备: {serials}。严格模式下拒绝切换到其他相机。"
@@ -115,7 +120,13 @@ class CameraThread(threading.Thread):
             return True
 
         except Exception as e:
+            self.initialization_error = str(e)
             print(f"[CameraThread] 初始化失败: {e}")
+            if self._pipeline is not None:
+                try:
+                    self._pipeline.stop()
+                except Exception:
+                    pass
             import traceback
             traceback.print_exc()
             return False

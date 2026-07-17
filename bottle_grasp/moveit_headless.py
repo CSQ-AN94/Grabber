@@ -9,6 +9,7 @@ import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch_ros.actions import Node
+from ompl_config import apply_collision_check_resolution
 
 
 def load_yaml(package_name, relative_path):
@@ -32,7 +33,9 @@ def description():
     semantic = load_text(package, "config/dual_rm_75b_description.srdf")
     kinematics = load_yaml(package, "config/kinematics.yaml")
     joint_limits = load_yaml(package, "config/joint_limits.yaml")
-    ompl = load_yaml(package, "config/ompl_planning.yaml")
+    ompl = apply_collision_check_resolution(
+        load_yaml(package, "config/ompl_planning.yaml")
+    )
     controllers = load_yaml(package, "config/moveit_controllers.yaml")
     pipeline = {
         "move_group": {

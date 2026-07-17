@@ -19,8 +19,12 @@
 # 机器人上
 python scripts/wrist_camera_server.py --host 0.0.0.0 --port 8875
 # Mac 浏览器打开 http://192.168.3.68:8875
-# 用完必须停掉（占用相机）：pkill -f 'wrist_camera_serve[r]'   # 注意[r]防自杀
 ```
+
+启动抓取脚本时会按相机序列号检查真实 `/dev/video*` 持有者，并自动向
+`wrist_camera_server.py` / `head_camera_control.py` 这两个已知预览程序发送
+`SIGTERM`。不再要求人工 `pkill`；未知进程占用时只报告 PID、命令和设备节点，
+不会乱杀进程。
 
 画面标准：瓶子完整可见（上下都不切边）、宽度约占画面 1/5～1/4。
 
@@ -37,18 +41,23 @@ scripts/run_bottle_grasp_resume.sh cycle   # 或者：抓取+抬升+放回+退�
 `check` 通过标准：日志出现 `共识帧 7/7`、散布 <5mm。没过就调整姿态/瓶子重来，
 **不要跳过 check 直接 grasp**。
 
+`check` 是严格只读路径：不带 `--execute`，不校正头部、不停遥操、不切工具坐标、
+不初始化夹爪、不启动 MoveIt，也不发送机械臂运动命令。它只读取当前关节角，用
+SDK 正解得到腕部相机外参后完成 7 帧定位。`grasp`/`cycle` 才执行运动级自检。
+
 执行阶段的日志节奏（正常一次 grasp 约 1.5~2 分钟）：
 
 ```
+[头部基准位确认/校正]              # 仅自主头部定位流程；续抓模式不使用头部相机
 [右腕续抓定位] → 共识帧 7/7        # 完整视野下锁定抓取点（此后不再被覆盖）
+[夹爪空夹标定] → 空夹基线实测 pos=N # 自由空间闭合一次，实测今天的空夹基线
 [打开夹爪]
-[右腕局部建图] → N 体素            # 腕部RGB-D障碍
-[电子围栏离线复核] moveit_pregrasp_01 通过
-[预抓取分段 1..3]                  # 每段4.5cm，段间3帧视觉复检
+[右腕点云通道检查] 通过             # 前进通道无点云障碍
+[直线接近预抓取位]                  # 一次规划；打印TCP距锁定目标，腕部关联失败时头部补充确认
 [预抓取复检] → "保持初始锁定目标"    # 近距漂移是伪影，忽略是正确行为
 [右腕点云通道检查] 通过
 [低速最后接近]                     # 检测丢失警告=夹爪遮挡，预期现象
-[夹紧水瓶] → RM Plus 闭合反馈       # pos>429 才算抓到实物
+[夹紧水瓶] → RM Plus 闭合反馈       # pos>实测基线+6 才算抓到实物
 [抬升 5 cm]
 [放回桌面] → [松开夹爪] → [退开]    # 仅 cycle 模式
 ```
@@ -57,14 +66,23 @@ scripts/run_bottle_grasp_resume.sh cycle   # 或者：抓取+抬升+放回+退�
 
 | 日志报错 | 根因 | 处理 |
 |---|---|---|
-| `轨迹 TCP 点 N 进入禁入区 table_top` | 规划路径离桌面 <2.5cm | 正常拦截。检查起始姿态是否过低/过怪 |
+| `相机被未知进程占用` | 非抓取预览程序持有目标相机的某个 `/dev/video*` 节点 | 按日志给出的 PID/完整命令确认用途后人工停止；程序有意不自动终止未知进程 |
+| `xioctl(VIDIOC_S_FMT)...errno=16`（历史） | 预览网页切到腕部相机后一直占着 V4L2 节点；进程命令甚至可能仍显示 `--camera head` | 已修：按真实 fd 所持节点判断，不按命令参数猜；启动时自动清理已知预览。2026-07-17 真机确认 PID 14976 的 `head_camera_control.py` 持有右腕 `video20` |
+| `pipeline 已启动但 5 秒内没有画面` | RealSense USB/固件假在线，能枚举和 start 但不出帧 | 已修：先完整释放并重建 pipeline 一次；连续两次无帧才对目标序列号做一次 `hardware_reset()`，重新枚举后最后重试；仍失败即停在相机/USB层，不无限重试 |
+| `J7=0xF000(通信丢帧)` | 长按末端绿色拖动按钮后可能留下控制器关节通信丢帧标志，也可能是真实链路故障 | 运动前仅在“全部关节使能、系统错误为0、所有非零错误都恰为0xF000”时调用官方清错一次，并连续复读两次；复发立即中止。其他错误从不自动清除。`check` 是只读视觉路径，不受运动故障门禁误挡 |
+| `头部无法回到标定基准角度` | `head_servo_ctrl.py` 没在跑，或 UDP 广播收不到 | 检查该进程是否存活（`ensure_head_fixed`/upstart 相关流程）；跟头部相机自身的检测无关，是舵机控制层的问题 |
+| `路径点 N J4=X°，进入奇异区` | 当前姿态本身贴近 J4≈0° 奇异带 | 2026-07-17 已改：放回/抬升/退开都会自动尝试绕接近轴转 8°/15°/25° 避开，日志出现"绕接近轴避奇异"是正常触发；所有角度都不行才是真中止 |
+| `轨迹 TCP 点 N 进入禁入区 table_top` | 某次候选路线离桌面小于围栏余量 | 现在会把违规点反馈成临时 MoveIt 碰撞盒并自动重规划，再失败就换观察端点；最多尝试 8 个端点×2 条路线。只有全部失败才安全中止并汇总最近原因。桌子盒四个侧面和顶面均额外外扩 `clearance_m+1cm`。 |
 | `关节 J2 距限位过近: 129.5°` | 起始姿态肘部过度折叠，直线接近无解 | 把手臂拖回标准观察位再跑 |
 | `检测/深度稳定帧不足: 0/N` | 瓶子不在腕部视野/被切边/形状过滤拒绝 | 起直播看画面，重新对准 |
+| 第一段 `movel` 后 `移动过程中符合形状的 bottle 检测丢失`（历史） | 瓶子仍可能在画面里；旧运动守卫错误复用了初始化的长宽比/面积门禁，框稍被截断就把“形状不合格”当成“瓶子不存在” | 2026-07-17 已修：运动中把锁定的3D点投影回当前腕部画面，用投影与**原始 bottle 框**关联，不再套形状门禁。腕部确实关联不到时暂停在段间，固定头部相机独立采3帧确认；相对锁定点偏移>5cm就令路径作废，否则恢复右腕继续。RGB-D断流仍立即中止，到达预抓取位后仍必须重新检测到瓶子 |
 | `续抓目标相对保存位置跳变 >200mm` | 瓶子被大幅挪动过 | 确认瓶子位置后直接重跑（会用新定位） |
 | `分段移动后目标跳变`（历史） | 近距视野截断使定位点向瓶盖漂移 | 已修：目标锁定后不再被覆盖，只警告 |
 | `夹爪闭合失败`（历史，legacy API） | 位置闭合被瓶子挡住到不了目标位置 | 已修：改用 RM Plus 原生协议+抓空判定 |
-| `夹爪闭合位置等同空夹` | **不一定是真的抓空**——2026-07-15晚实测：抓一个较窄/较硬的金属瓶状物体时，人工现场确认已经抓稳，但闭合位置`pos=402`只比空夹基线394高8，远低于判定阈值429，被误判成空夹。写死的`gripper_empty_closed_position=394`/`gripper_object_margin=35`对这类物体不适用 | 现场确认实物状态再判断；别不假思索当成真失败重跑。长期要改成动态标定空夹基线或用力反馈（`current_force`），见`docs/handoff/bottle_grasp_status.md`已知问题#1 |
-| 蠕动式走走停停 | 密集点逐条 movej + 段间规划复检开销 | 已知现状，安全优先；后续可改轨迹透传 |
+| `夹爪闭合位置等同空夹` | 真的抓空，**或**物体比 6 的余量还窄 | 2026-07-17 已改：每轮抓取前在自由空间实测空夹基线（不再用写死的394），余量从35降到6（2026-07-15误判的窄金属瓶只比基线高8，现在会判成功）。仍报空夹时先现场确认实物；确认误判就记录日志里的 pos/current 再调小 `gripper_object_margin` |
+| `空夹基线标定异常，闭合行程不足` | 本轮实测闭合位没有比本轮张开位小至少100；夹爪前方可能有物体，或夹爪硬件异常 | 确认观察位夹爪前方 30cm 无物体后重跑；动态基线不再和历史静态值394比较，真机空夹闭到 `pos=0` 是正常结果 |
+| `RM Plus 夹爪连续 3 帧处于保护或故障且已停住` | `dof_state=5/6` 持续存在并且速度归零，是真正的保护停止/故障 | 检查同一日志里的 `sys_state`、`dof_err` 和现场夹爪。2026-07-17 已修复旧误判：`state=6` 但 `sys_state=0`、`dof_err=0` 且夹爪仍在运动时不再因单帧立即中止 |
+| 蠕动式走走停停（历史） | 每段都向 MoveIt 重规划+movej 逐点执行 | 2026-07-17 已改：接近段一次规划直线 movel 分段执行（防线=围栏逐点校验+plan_ik+点云通道+锁定目标投影关联/头部补充确认+预抓取位复检）；MoveIt 只用于观察位大范围转移。日志同时打印 TCP 距锁定目标的起止距离；路径若变远或终点不在8.5cm悬停位会在运动前拒绝 |
 
 ## 四、桌子挪动后：重标桌面禁入区
 
@@ -76,88 +94,60 @@ scripts/run_bottle_grasp_resume.sh cycle   # 或者：抓取+抬升+放回+退�
    `max[2]` = 实测桌面 z + 0.005；前沿 `min[1]` 按桌边实际位置留 2~3cm 余量
 3. 跑单测确认围栏行为：`python -m pytest test/bottle_grasp/test_algorithms.py`
 
-## 4.5、完整循环：垂下 → 观察 → 抓取 → 放回 → 垂回
+## 4.5、全自主观察位规划（默认且唯一的完整流程）
 
-一条命令跑完整一轮。转移段（垂下↔观察位）走**你录制的一条示教走廊**——人工
-示教的安全路线，离线电子围栏逐点复核，环境未变时全臂安全。抓取段是自主视觉闭环。
-这是当前 MoveIt 碰撞检查失效（见第五节 #1）下唯一可信的大范围转移方式。
-
-**明天上机最短路径（脚本 `scripts/run_bottle_full_cycle.sh`）：**
-
-```bash
-# 1) 一次性录制『垂下→观察位』走廊（拖动示教，约5分钟，之后可反复复用）
-scripts/run_bottle_full_cycle.sh record
-#   先把右臂拖到你要的“垂下起始”姿态；再按住绿色按钮，从垂下缓慢、走安全路线
-#   （远离桌面）拖到右腕观察位（相机距瓶~30cm、瓶子完整居中）；Ctrl+C 停录。
-
-# 2) 纯离线复核：不动机器人，验证走廊+头部检测都不报错
-scripts/run_bottle_full_cycle.sh plan
-
-# 3) 真机跑完整一轮（有人守急停）
-scripts/run_bottle_full_cycle.sh cycle
-```
-
-**关键约束**：
-- 每轮开始时右臂必须在走廊起点（垂下姿态）**3° 容差内**，否则直接中止并提示
-  “请先把右臂拖到走廊起点附近”。一轮结束会自动回到这个姿态，所以连续跑无需重摆。
-- 走廊起点=你录制时的第一帧。想要“真正垂下”的循环，录制时就从垂下姿态开始。
-- 结束自动放回并退开；加 `--restore-teleop` 可在结束后自动恢复遥操
-  （否则照旧手动 `upstart_all.sh`）。
-- `plan` 模式会连真机只读校验当前姿态，所以它也能提前告诉你“手臂没在起点”。
-
-**全自主转移（不用示教走廊）**：需要先修好 MoveIt 碰撞检查。先跑
-`scripts/run_bottle_full_cycle.sh selftest` 判定（内部用一个罩住整臂的巨型盒子
-探针）。返回“正常”后才谈得上放行 `--autonomous-transit`（该开关目前预留、未接线，
-接线前务必先过 selftest）。返回“失效”就继续用示教走廊，安全且已验证。
-
-## 4.6、全自主观察位规划（瓶子放桌角，测试免示教）
-
-`table_demo` profile 默认配了一条示教走廊（`guided_paths/table_demo_right.json`），
-所以默认跑法（不加 `--full-cycle`）实际会用示教走廊而不是自主规划，即使代码里
-自主规划那条支路（`_select_observation_flange`+`_plan_flange`）一直都在。
-
-**`--autonomous-observation` 强制忽略示教走廊，走真正的 MoveIt 自主规划**：
-头部定位水瓶 → MoveIt 规划一条到右腕观察位的路 → 腕部精定位 → 抓取。
-适合"瓶子放桌角、周围空旷，避障几何简单"的场景验证。
+**示教走廊已于 2026-07-17 移除**（`--full-cycle`/`--guided-path`/
+`--autonomous-observation` 标志、录制脚本、走廊 JSON 一并删除）。从头部定位
+开始的流程只有一条：头部定位水瓶 → MoveIt 规划一条到右腕观察位的路 →
+腕部精定位 → 空夹基线标定 → 直线接近 → 抓取。
+适合"瓶子放桌角、周围空旷，避障几何简单"的场景。
 
 ```bash
 scripts/run_bottle_grasp_autonomous.sh plan     # 纯离线：头部定位+MoveIt规划，不动机器人
 scripts/run_bottle_grasp_autonomous.sh observe  # 真机移动到观察位+腕部定位，不抓取
 scripts/run_bottle_grasp_autonomous.sh grasp    # 真机抓取+抬升，保持
-scripts/run_bottle_grasp_autonomous.sh cycle    # 真机抓取+抬升+放回+退开
+scripts/run_bottle_grasp_autonomous.sh cycle    # 真机抓取+抬升+放回+退开+返回初始姿态
+scripts/run_bottle_grasp_autonomous.sh finish   # 夹爪已抓着水瓶（上一轮遗留）：跳过定位/抓取，直接放回+返回初始姿态
+scripts/run_bottle_grasp_autonomous.sh selftest # MoveIt 碰撞检查自检
 ```
+
+**2026-07-17 新增"返回初始姿态"**（`--return-home`，`cycle`/`finish` 默认带上）：
+放回后再用 MoveIt 规划一段回到 profile 里 `home_joints_deg` 配置的关节角。跟
+去程（转移到观察位）用的是完全相同的 `SafeMotionPlanner`：MoveIt 规划、MoveIt
+密集关节状态后验碰撞复核、独立电子围栏密集 TCP 复核，以及失败后的有限自动
+换路。风险等级跟去程一致，不是新增的薄弱环节。`table_demo`
+的 `home_joints_deg` 是从 2026-07-15 录制的示教走廊第一帧（垂下起始姿态）恢复
+的历史值，**如果桌子/机械臂摆位变过，先确认这个关节角现在还安全**，不确定就
+先跑 `plan` 只看 MoveIt 规划输出、不要直接 `--execute`。
+
+**`finish` 命令用于"进程退出后夹爪仍抓着水瓶"的场景**：跳过头部/腕部定位和
+抓取（假设物体已经在手上，比如上一轮跑完 `grasp`（不带 `--place-back`）后保持
+在原地），从当前实际姿态直接放回+返回初始姿态。
 
 建议顺序：`plan` 看MoveIt规划路径点数/耗时正常 → `observe` 看真机移动到观察位后
 瓶子能不能被腕部相机稳定检测到 → 确认无误再 `grasp`/`cycle`。
 
-**安全边界要说清楚**：MoveIt自己的碰撞检查是坏的（见第五节#1），这条自主规划
-路径真正的安全网是电子围栏离线复核——MoveIt规划完的每条轨迹，执行前都会被独立
-的密集插值FK逐点校验，一旦违规直接安全中止、不执行。但这层复核**只挡得住"越过
-配置好的桌面禁入区/工作空间"**，挡不住撞到没建模的东西（显示器/其他物体）。
+**安全边界要说清楚**：2026-07-17 巨型盒子自检已实测 MoveIt 世界碰撞正常；
+每条结果轨迹还会再次走 MoveIt 密集状态复核和独立电子围栏密集 TCP 复核。
+围栏拒绝不会直接执行，也不会立刻结束，而是自动换路线/端点。三层检查仍然
+挡不住没建模的东西（显示器/其他物体）。
 瓶子放桌角、周围清空能明显降低风险，但不是零风险——`observe` 这一步就是低速
 先验证一次真机移动是否符合预期，再决定要不要抓。
 
-**这不是货架部署的答案**：货架场景更复杂、周围不空旷，靠"简化几何绕开碰撞检测
-坏掉的问题"这条路走不远。长期看，货架自主避障还是要先把 MoveIt 碰撞检查修好
-（见第五节#1的selftest），不能一直靠人工示教（人工示教本身也要求现场有人，
-跟"以后没有遥操/无人值守"的部署目标冲突）。
+**货架部署仍需单独建模和验证**：碰撞链工作正常不代表未知货架尺寸自动出现。
+需要测量货架板件、填写并现场验证 `shelf_template`，再用 plan/observe 分级验证；
+不能把当前桌面 profile 直接用于货架。
 
 ## 五、已知遗留问题（影响范围与状态）
 
-1. **MoveIt 碰撞检查完全失效**（2026-07-16 确诊）：场景里有障碍盒、防撞体已附着、
-   ACM 正常，但"目标在桌子内部10cm"的规划照样瞬间成功；所有状态 validity 恒为
-   valid。`is_diff` 修复（moveit_plan_once.py / moveit_validate_path.py）已提交但
-   **不是根因**——嫌疑在碰撞几何/URDF/碰撞环境层面。**下机第一件事**：跑
-   `scripts/run_bottle_full_cycle.sh selftest`（`bottle_grasp/moveit_collision_selftest.py`，
-   用巨型盒子罩住整臂的世界碰撞探针）几秒内定论；若判失效，重点查 URDF 的
-   collision 标签/网格是否加载。**当前真正的防线是电子围栏离线复核**（每条轨迹
-   1.5°密集插值逐点FK校验），当晚两次正确拦截擦桌路径。修好前：**禁止 MoveIt 全局
-   自由规划**，大范围转移只用示教走廊（见 4.5 节），局部抓取段用短距离规划（fence
-   兜得住）。离线复核工具：`/tmp/fk_check.py`（验证任意 plan json 是否违规）。
-2. **"垂下→抓取→垂下"完整循环**：已实现（`--full-cycle`，见 4.5 节），转移段用
-   示教走廊。**全自主转移**（省掉示教、自动规划垂下↔观察位）仍被 #1 挡住——
-   修好 MoveIt 碰撞后接线 `--autonomous-transit` 即可（改用 `_plan_flange` 自由规划
-   代替走廊，其余不变）。
+1. **MoveIt 碰撞链已重新验证**（2026-07-17）：旧 selftest 的固定探针姿态会让
+   `r_hand/r_link6/r_link7` 撞到底盘和车身，导致无盒子基线就是 `valid=False`，
+   旧脚本却误报成“碰撞几何没加载”。改用真机示教安全 home 姿态后，实测结果为
+   无盒子 `valid=True` → 4m 巨盒 `valid=False`（r_link1…r_link7 contacts）→
+   撤盒恢复 `valid=True`。当前全局规划还增加了 MoveIt 密集状态后验复核。
+2. **自动重规划已接通**（2026-07-17）：`SafeMotionPlanner` 最多尝试 8 个按 IK
+   代价排序的观察端点，每个端点最多 2 条路线；电子围栏违规点会转为临时碰撞盒，
+   重复轨迹会被去重。全部失败才中止，错误包含候选数、尝试次数和最近拒绝原因。
 3. **透明瓶深度双峰**：前壁/后壁差一个瓶径（~4.5cm）。带标签的不透明瓶无此问题。
    当晚最终 demo 用的是不透明瓶。
 4. **遥操未恢复**：demo 会杀 atom/zhixing_ctrl。需要遥操时在机器人上跑官方
@@ -168,13 +158,14 @@ scripts/run_bottle_grasp_autonomous.sh cycle    # 真机抓取+抬升+放回+退
 ## 六、相关文件
 
 - `bottle_grasp/` — demo 状态机、感知、规划、围栏（核心）
-- `scripts/bottle_grasp_demo.py` — 入口；`--resume-at-wrist` `--place-back` `--full-cycle` `--guided-path` `--restore-teleop` `--autonomous-observation`
+- `scripts/bottle_grasp_demo.py` — 入口；`--resume-at-wrist` `--place-back` `--return-home` `--finish-from-current` `--restore-teleop`
 - `scripts/run_bottle_grasp_resume.sh` — 第二节（续抓）一键脚本
-- `scripts/run_bottle_full_cycle.sh` — 4.5节（完整循环，示教走廊）一键脚本：`record`/`plan`/`cycle`/`selftest`
-- `scripts/run_bottle_grasp_autonomous.sh` — 4.6节（全自主观察位规划）一键脚本：`plan`/`observe`/`grasp`/`cycle`
+- `scripts/run_bottle_grasp_autonomous.sh` — 4.5节（全自主流程）一键脚本：`plan`/`observe`/`grasp`/`cycle`/`finish`/`selftest`
+- `bottle_grasp/head_lock.py` — 头部舵机基准角度强制校正（每次运行最先执行）；
+  `scripts/head_position_lock.py` 是复用它的人工诊断命令行封装
 - `bottle_grasp/moveit_collision_selftest.py` — MoveIt 碰撞检查自检探针
 - `scripts/start_bottle_demo.sh` — 完整流程（头部定位起步）的一键脚本，含 dashboard
 - `scripts/wrist_camera_server.py` — 腕部相机直播
 - `bottle_grasp/safety_profiles.json` — 电子围栏（桌面禁入区在这里）
-- `test/bottle_grasp/test_algorithms.py` — 围栏/感知算法单测（8个）
+- `test/bottle_grasp/` — 围栏/感知/夹爪/安全规划/adapter/编排单测（49个，无需真机）
 - `outputs/bottle_grasp/<时间戳>/` — 机器人上每次运行的完整档案（图像/深度/规划/日志）

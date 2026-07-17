@@ -9,6 +9,28 @@ import numpy as np
 from .core import DemoParams, Localization, SafetyAbort
 
 
+def classify_moveit_collision_probe(
+    *, baseline_valid: bool, boxed_valid: bool, cleared_valid: bool
+) -> tuple[str, str]:
+    """Classify the three-state MoveIt world-collision probe accurately."""
+    if not baseline_valid:
+        return (
+            "baseline_invalid",
+            "无障碍基线姿态已经碰撞，探针姿态或残留场景无效",
+        )
+    if boxed_valid:
+        return (
+            "collision_missed",
+            "巨型障碍盒中的姿态仍被判有效，世界碰撞检测未生效",
+        )
+    if not cleared_valid:
+        return (
+            "cleanup_failed",
+            "撤除巨型障碍盒后没有恢复，规划场景清理或同步失败",
+        )
+    return "healthy", "基线、碰撞拒绝和场景恢复均符合预期"
+
+
 def check_approach_corridor(
     *,
     camera: Any,

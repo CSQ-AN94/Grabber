@@ -16,8 +16,15 @@ import cv2
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from .camera_access import (
+    CameraAccessError,
+    hardware_reset_camera,
+    prepare_camera_access,
+)
 from .collision import check_approach_corridor
 from .core import (
+    BottleDetectionLost,
+    CameraFrameUnavailable,
     DemoParams,
     Localization,
     SafetyAbort,
@@ -27,15 +34,19 @@ from .core import (
     pose_matrix,
 )
 from .dashboard import Dashboard, PreviewWorker, SharedState
+from . import head_lock
 from .perception import BottleDetector, depth_point_for_detection
 from .planner import MoveItPlanner
 from .robot import ArmJointReader, RobotSession
-from .safety import (
-    SafetyProfile,
-    load_guided_joint_path,
-    load_safety_profile,
+from .safe_planner import PlanTarget, SafeMotionPlanner, VerifiedPlan
+from .safety import SafetyProfile, load_safety_profile
+from .scene import build_scene_voxels, head_scene_points
+from .table_model import (
+    TABLE_KEEPOUT_ID,
+    adapt_profile_to_table,
+    fit_table_top,
 )
-from .scene import build_scene_voxels
+from .target_guard import LockedTargetGuard, ProjectedTargetAssociation
 
 LOG = logging.getLogger("bottle_demo")
 
@@ -65,7 +76,6 @@ class BottleDemo:
         self.dashboard: Optional[Dashboard] = None
         self.preview: Optional[PreviewWorker] = None
         self.safety: Optional[SafetyProfile] = None
-        self.guided_path: Optional[dict] = None
         self.head_scene_voxels: list[list[float]] = []
         self.scene_voxels: list[list[float]] = []
         self.scene_boxes: list[dict] = []
@@ -88,6 +98,12 @@ class BottleDemo:
         transform = np.eye(4)
         transform[2, 3] = self.params.tcp_z_m
         return transform
+
+    def _is_read_only_vision_check(self) -> bool:
+        return bool(
+            getattr(self.args, "resume_at_wrist", False)
+            and getattr(self.args, "stop_after_observation", False)
+        )
 
     def stage(self, name: str, message: str = ""):
         LOG.info("[%s] %s", name, message)
@@ -125,21 +141,60 @@ class BottleDemo:
             width, height = self.params.head_width, self.params.head_height
         else:
             width, height = self.cfg.camera.width, self.cfg.camera.height
-        self.camera = CameraThread(
-            serial=serial,
-            width=width,
-            height=height,
-            fps=self.cfg.camera.fps,
-            strict_serial=True,
-        )
-        if not self.camera.initialization_successful:
-            raise SafetyAbort(f"{camera_name} 相机初始化失败")
-        self.camera.start()
-        deadline = time.time() + 5
-        while self.camera.get_latest_frames()[0] is None and time.time() < deadline:
-            time.sleep(0.1)
-        if self.camera.get_latest_frames()[0] is None:
-            raise SafetyAbort(f"{camera_name} 相机无画面")
+        last_failure = "未知错误"
+        for attempt in range(1, 4):
+            try:
+                prepare_camera_access(serial)
+            except CameraAccessError as exc:
+                raise SafetyAbort(f"{camera_name} 相机不可用: {exc}") from exc
+            self.camera = CameraThread(
+                serial=serial,
+                width=width,
+                height=height,
+                fps=self.cfg.camera.fps,
+                strict_serial=True,
+            )
+            if self.camera.initialization_successful:
+                self.camera.start()
+                deadline = time.time() + 5
+                while (
+                    self.camera.get_latest_frames()[0] is None
+                    and time.time() < deadline
+                ):
+                    time.sleep(0.1)
+                if self.camera.get_latest_frames()[0] is not None:
+                    break
+                last_failure = "pipeline 已启动但 5 秒内没有画面"
+                self.camera.stop()
+                if self.camera.is_alive():
+                    self.camera.join(timeout=3)
+            else:
+                detail = getattr(self.camera, "initialization_error", None)
+                last_failure = detail or "pipeline 初始化失败"
+                self.camera.stop()
+            self.camera = None
+            if attempt == 1:
+                LOG.warning(
+                    "%s 相机第一次打开失败（%s）；释放后重建 pipeline 一次",
+                    camera_name,
+                    last_failure,
+                )
+                time.sleep(1.0)
+            elif attempt == 2:
+                LOG.warning(
+                    "%s 相机两次打开都无帧；执行一次相机硬件重启后最后重试",
+                    camera_name,
+                )
+                try:
+                    hardware_reset_camera(serial)
+                except CameraAccessError as exc:
+                    raise SafetyAbort(
+                        f"{camera_name} 相机硬件恢复失败: {exc}"
+                    ) from exc
+        else:
+            raise SafetyAbort(
+                f"{camera_name} 相机重建及硬件重启后仍无画面: {last_failure}"
+            )
         self.camera_name = camera_name
         if camera_name == "right_wrist" and self.wrist_detector is None:
             fallback = (
@@ -153,22 +208,52 @@ class BottleDemo:
         self.preview.start()
         self.state.update(detection=None, depth_m=None)
 
+    def _ensure_head_reference(self):
+        """在一切开始前，强制把头部舵机拉回标定基准角度（俯仰最低、左右居中）。
+
+        `T_base_right_to_camera_head` 只在头部处于这个角度时有效——头部可能
+        被人手动摆过（现场调试 head_camera_control.py），或者被 SDK 初始化
+        的未知副作用带偏（旧 ArmController 有过这个实测坑，RobotSession 是
+        否也有暂未排除，见项目记忆）。不管原因是什么，每次运行都强制校正
+        一遍，不假设"应该还在原位"。
+        """
+        if getattr(self.args, "finish_from_current", False) or self._is_read_only_vision_check():
+            # Finish does not use vision.  `resume check` promises not to move
+            # hardware, so it cannot correct the head servos.  Motion-capable
+            # resume does use the fixed head camera as an independent fallback.
+            return
+        current = head_lock.read_current_angle()
+        if head_lock.is_at_reference(current):
+            self.stage("头部基准位确认", f"未漂移: {current}")
+            return
+        self.stage(
+            "头部基准位校正",
+            f"当前 {current}，目标 {head_lock.HEAD_REFERENCE}",
+        )
+        if not self.args.execute:
+            LOG.warning(
+                "头部偏离标定基准角度，但当前非 --execute 不实际驱动舵机；"
+                "真机执行前必须先解决，否则头部相机定位不可信"
+            )
+            return
+        result = head_lock.restore_reference()
+        if not result["ok"]:
+            raise SafetyAbort(
+                f"头部无法回到标定基准角度: {result.get('reason')}"
+            )
+        self.stage(
+            "头部基准位已校正",
+            f"{result['angle']}，用了 {result['steps']} 步",
+        )
+
     def initialize(self):
+        self._ensure_head_reference()
         self.safety = load_safety_profile(
             self.args.safety_config,
             self.args.safety_profile,
             require_verified=self.args.execute,
         )
         self.scene_boxes = self.safety.moveit_collision_boxes()
-        # --guided-path 覆盖 profile 里配置的走廊：方便现场刚录完一条
-        # 『垂下→观察位』走廊直接用，不必改 profile。
-        guided_override = getattr(self.args, "guided_path", None)
-        if guided_override:
-            self.guided_path = load_guided_joint_path(Path(guided_override))
-        elif self.safety.guided_path:
-            self.guided_path = load_guided_joint_path(
-                self.safety.guided_path
-            )
         self.stage(
             "初始化",
             (
@@ -176,7 +261,15 @@ class BottleDemo:
                 "固定头部 RGB-D 搜索水瓶"
             ),
         )
-        if not self.args.resume_at_wrist:
+        skip_head = self.args.resume_at_wrist or getattr(
+            self.args, "finish_from_current", False
+        )
+        needs_head_fallback = bool(
+            self.args.resume_at_wrist
+            and self.args.execute
+            and not self._is_read_only_vision_check()
+        )
+        if not skip_head or needs_head_fallback:
             self.detector = BottleDetector(
                 self.cfg.vision.model_path,
                 self.params.confidence,
@@ -187,19 +280,25 @@ class BottleDemo:
             )
         self.dashboard = Dashboard(self.state, self.args.host, self.args.port)
         self.dashboard.start()
-        self._start_camera(
-            "right_wrist" if self.args.resume_at_wrist else "head"
-        )
+        self._start_camera("right_wrist" if skip_head else "head")
 
-        if self.args.plan_only or self.args.execute:
+        read_only_vision_check = self._is_read_only_vision_check()
+        needs_robot = (
+            self.args.plan_only or self.args.execute or read_only_vision_check
+        )
+        if needs_robot:
             self.robot = RobotSession(
                 self.cfg.connections.right_arm_ip,
                 self.cfg.connections.arm_port,
                 self.stop_event,
                 self.params.tcp_z_m,
                 self.params.moveit_link7_to_controller_flange_m,
-                take_control=self.args.execute,
+                take_control=self.args.execute and not read_only_vision_check,
             )
+        needs_planner = self.args.plan_only or (
+            self.args.execute and not read_only_vision_check
+        )
+        if needs_planner:
             self.left_robot = ArmJointReader(
                 self.cfg.connections.left_arm_ip,
                 self.cfg.connections.arm_port,
@@ -237,108 +336,6 @@ class BottleDemo:
             )
             return localization
         raise SafetyAbort("续抓模式找不到上一轮腕部稳定定位记录")
-
-    def _guided_observation_plan(self) -> dict:
-        points = self.guided_path["points_deg"]
-        start = np.asarray(points[0], dtype=float)
-        current = np.asarray(self.robot.joints_deg(), dtype=float)
-        start_error = float(np.max(np.abs(current - start)))
-        goal_error = float(
-            np.max(np.abs(current - np.asarray(points[-1], dtype=float)))
-        )
-        entry_points = []
-        if goal_error <= self.safety.guided_start_tolerance_deg:
-            self.stage(
-                "已在示教观察位",
-                f"当前距记录终点最大 {goal_error:.3f}°，跳过全局移动",
-            )
-            return {
-                "success": True,
-                "planning_time": 0.0,
-                "joint_names": [f"r_joint{i}" for i in range(1, 8)],
-                "points_deg": [],
-                "source": "guided_path_at_goal",
-            }
-        if start_error > self.safety.guided_start_tolerance_deg:
-            T_start_controller_flange = (
-                self.robot.controller_flange_from_joints(start.tolist())
-            )
-            entry = self.planner.plan(
-                name="guided_entry",
-                start_joints_deg=current.tolist(),
-                start_left_joints_deg=self.left_robot.joints_deg(),
-                goal_joints_deg=start.tolist(),
-                target_flange=self.safety.pose_to_moveit(
-                    T_start_controller_flange
-                ),
-                obstacles=self.safety.points_to_moveit(self.scene_voxels),
-                boxes=self.scene_boxes,
-                workspace=self.safety.moveit_workspace(),
-                planning_frame=self.safety.moveit_frame,
-                tool_guard={
-                    "xy": self.params.tool_guard_xy_m,
-                    "length": self.params.tool_guard_length_m,
-                    "center_z": self.params.tool_guard_center_z_m,
-                },
-                voxel_size=self.params.scene_voxel_m,
-            )
-            entry_checked = self.robot.validate_planned_joints(
-                entry["points_deg"],
-                self.params.planned_joint_step_deg,
-                self.safety,
-            )
-            entry_points = entry["points_deg"]
-            self.stage(
-                "示教起点接入规划",
-                (
-                    f"当前距起点 {start_error:.1f}°；"
-                    f"MoveIt {len(entry_points)} 点，"
-                    f"电子围栏 {entry_checked} 点通过"
-                ),
-            )
-        dense = [
-            points[0],
-            *self.robot._dense_joint_path(
-                points[0],
-                points[1:],
-                self.params.planned_joint_step_deg,
-            ),
-        ]
-        checked = self.robot.validate_planned_joints(
-            points,
-            self.params.planned_joint_step_deg,
-            self.safety,
-            start_joints_deg=points[0],
-        )
-        validation = self.planner.validate_exact_path(
-            name="guided_observation",
-            start_left_joints_deg=self.left_robot.joints_deg(),
-            points_deg=dense,
-            obstacles=self.safety.points_to_moveit(self.scene_voxels),
-            boxes=self.scene_boxes,
-            planning_frame=self.safety.moveit_frame,
-            tool_guard={
-                "xy": self.params.tool_guard_xy_m,
-                "length": self.params.tool_guard_length_m,
-                "center_z": self.params.tool_guard_center_z_m,
-            },
-            voxel_size=self.params.scene_voxel_m,
-        )
-        self.stage(
-            "示教通道检查通过",
-            (
-                f"记录 {len(points)} 点，密集检查 {checked} 点，"
-                f"MoveIt {validation['checked_states']} 状态；"
-                f"当前距起点 {start_error:.1f}°，距终点 {goal_error:.1f}°"
-            ),
-        )
-        return {
-            "success": True,
-            "planning_time": 0.0,
-            "joint_names": [f"r_joint{i}" for i in range(1, 8)],
-            "points_deg": [*entry_points, *points],
-            "source": "guided_path",
-        }
 
     def localize(
         self,
@@ -407,7 +404,7 @@ class BottleDemo:
                     continue
                 x1, y1, x2, y2 = detection.box
                 u = 0.5 * (x1 + x2)
-                v = y1 + 0.48 * (y2 - y1)
+                v = y1 + depth_params.grasp_height_fraction * (y2 - y1)
                 point_camera = np.array(
                     [
                         (u - K[0, 2]) * z / K[0, 0],
@@ -538,9 +535,9 @@ class BottleDemo:
                     )
         return candidates
 
-    def _select_observation_flange(
+    def _observation_plan_targets(
         self, target_base: np.ndarray
-    ) -> tuple[np.ndarray, list[float]]:
+    ) -> list[PlanTarget]:
         current = np.asarray(self.robot.joints_deg(), dtype=float)
         accepted = []
         for index, flange in enumerate(
@@ -558,17 +555,34 @@ class BottleDemo:
                         np.asarray(joints, dtype=float) - current
                     )
                 )
-                accepted.append((score, flange, joints, index))
+                accepted.append(
+                    PlanTarget(
+                        label=f"右腕观察位候选 {index}",
+                        flange=flange,
+                        goal_joints=tuple(joints),
+                        score=score,
+                    )
+                )
             except SafetyAbort as exc:
                 LOG.debug("观察位候选 %d 被拒绝: %s", index, exc)
         if not accepted:
             raise SafetyAbort("所有右腕观察位候选均越界、近限位或逆解失败")
-        score, flange, joints, index = min(accepted, key=lambda item: item[0])
+        accepted.sort(key=lambda target: target.score)
         self.stage(
-            "选择右腕观察位",
-            f"候选 {index}，关节变化评分 {score:.1f}",
+            "生成右腕观察位候选",
+            (
+                f"端点通过 {len(accepted)} 个；"
+                f"最多尝试前 {self.params.global_plan_max_candidates} 个"
+            ),
         )
-        return flange, joints
+        return accepted
+
+    def _select_observation_flange(
+        self, target_base: np.ndarray
+    ) -> tuple[np.ndarray, list[float]]:
+        """Compatibility helper returning the best endpoint, without planning."""
+        target = self._observation_plan_targets(target_base)[0]
+        return target.flange, list(target.goal_joints)
 
     def _build_head_scene(self, localization: Localization):
         if not self.safety.use_dynamic_rgbd:
@@ -592,12 +606,16 @@ class BottleDemo:
             bottom_crop=self.params.scene_image_bottom_crop,
         )
         self.scene_voxels = list(self.head_scene_voxels)
+        table_fit = self._adapt_fence_to_measured_table(depth, K, localization)
         (self.run_dir / "head_scene.json").write_text(
             json.dumps(
                 {
                     "safety_profile": self.safety.name,
                     "voxel_count": len(self.scene_voxels),
                     "collision_boxes": self.scene_boxes,
+                    "table_fit": (
+                        None if table_fit is None else asdict(table_fit)
+                    ),
                 },
                 indent=2,
                 ensure_ascii=False,
@@ -612,47 +630,73 @@ class BottleDemo:
             ),
         )
 
-    def _refresh_wrist_scene(self, localization: Localization):
-        if not self.safety.use_dynamic_rgbd:
-            self.scene_voxels = []
-            return
-        _, depth = self.camera.get_latest_frames()
-        K, _ = self.camera.get_camera_intrinsics()
-        T_base_camera = self.robot.current_flange() @ self.T_flange_wrist_camera
-        wrist_voxels = build_scene_voxels(
-            depth,
-            K,
-            T_base_camera,
-            localization,
-            self.params,
-            min_depth_m=self.params.min_depth_m,
-            max_depth_m=self.params.max_depth_m,
-            bottom_crop=depth.shape[0],
-            max_voxels=self.params.wrist_scene_max_voxels,
-        )
-        voxel = self.params.scene_voxel_m
-        all_points = np.asarray(
-            [*self.head_scene_voxels, *wrist_voxels], dtype=float
-        )
-        if all_points.size == 0:
-            self.scene_voxels = []
-            return
-        keys = np.floor(all_points / voxel).astype(np.int32)
-        _, indices = np.unique(keys, axis=0, return_index=True)
-        merged = all_points[np.sort(indices)]
-        if len(merged) > self.params.merged_scene_max_voxels:
-            target = np.asarray(localization.point_base, dtype=float)
-            distance = np.linalg.norm(merged - target, axis=1)
-            merged = merged[
-                np.argsort(distance)[: self.params.merged_scene_max_voxels]
-            ]
-        self.scene_voxels = merged.tolist()
-        self.stage(
-            "右腕局部建图",
-            (
-                f"头部 {len(self.head_scene_voxels)} + "
-                f"右腕 {len(wrist_voxels)}，融合后 {len(self.scene_voxels)} 体素"
+    def _adapt_fence_to_measured_table(
+        self, depth, K, localization: Localization
+    ):
+        """每轮实测桌面，让电子围栏跟着真实桌子走（容差外拒跑）。
+
+        MoveIt 的动态体素本来就每轮反映真实桌面；会过期的是静态配置的
+        table_top 禁区和贴着旧桌面高度画的允许区下沿。桌子比配置低/远时，
+        旧盒子会挡住真实桌面上方明明可用的空间（虚假拒绝）；比配置高/近时
+        围栏漏保护。这里在 table_fit_height_tolerance_m 的信封内自适应，
+        超出信封说明布置真的变了，fail-closed 拒跑并提示重新测量。
+        """
+        table_fit = fit_table_top(
+            head_scene_points(
+                depth,
+                K,
+                self.T_base_head_camera,
+                self.params,
+                min_depth_m=self.params.head_min_depth_m,
+                max_depth_m=self.params.head_max_depth_m,
+                bottom_crop=self.params.scene_image_bottom_crop,
             ),
+            np.asarray(localization.point_base, dtype=float),
+            self.params,
+        )
+        adapted = adapt_profile_to_table(self.safety, table_fit, self.params)
+        if adapted is self.safety:
+            return table_fit
+        old_top = next(
+            box
+            for box in self.safety.keepout_boxes
+            if box.id == TABLE_KEEPOUT_ID
+        ).maximum[2]
+        self.safety = adapted
+        self.scene_boxes = self.safety.moveit_collision_boxes()
+        new_top = next(
+            box
+            for box in self.safety.keepout_boxes
+            if box.id == TABLE_KEEPOUT_ID
+        ).maximum[2]
+        self.stage(
+            "桌面围栏自适应",
+            (
+                f"实测桌面 z={table_fit.height_m:.3f}"
+                f"（{table_fit.inliers} 内点），禁区顶面 "
+                f"{old_top:.3f} -> {new_top:.3f}"
+            ),
+        )
+        return table_fit
+
+    def _verified_plan_targets(
+        self,
+        name: str,
+        targets: list[PlanTarget],
+    ) -> VerifiedPlan:
+        safe_planner = SafeMotionPlanner(
+            moveit=self.planner,
+            robot=self.robot,
+            left_robot=self.left_robot,
+            safety=self.safety,
+            params=self.params,
+            report=self.stage,
+        )
+        return safe_planner.plan(
+            name=name,
+            targets=targets,
+            obstacle_points=self.scene_voxels,
+            collision_boxes=self.scene_boxes,
         )
 
     def _plan_flange(
@@ -661,120 +705,122 @@ class BottleDemo:
         target_flange: np.ndarray,
         goal_joints: Optional[list[float]] = None,
     ) -> dict:
-        T_link7_controller_flange = np.eye(4)
-        T_link7_controller_flange[2, 3] = (
-            self.params.moveit_link7_to_controller_flange_m
-        )
-        target_link7 = target_flange @ np.linalg.inv(
-            T_link7_controller_flange
-        )
-        target_moveit = self.safety.pose_to_moveit(target_link7)
         if goal_joints is None:
             goal_joints = self.robot.solve_flange_ik(
                 target_flange, self.params
             )
-        plan = self.planner.plan(
-            name=name,
-            start_joints_deg=self.robot.joints_deg(),
-            start_left_joints_deg=self.left_robot.joints_deg(),
-            goal_joints_deg=goal_joints,
-            target_flange=target_moveit,
-            obstacles=self.safety.points_to_moveit(self.scene_voxels),
-            boxes=self.scene_boxes,
-            workspace=self.safety.moveit_workspace(),
-            planning_frame=self.safety.moveit_frame,
-            tool_guard={
-                "xy": self.params.tool_guard_xy_m,
-                "length": self.params.tool_guard_length_m,
-                "center_z": self.params.tool_guard_center_z_m,
-            },
-            voxel_size=self.params.scene_voxel_m,
+        verified = self._verified_plan_targets(
+            name,
+            [
+                PlanTarget(
+                    label="固定目标",
+                    flange=target_flange,
+                    goal_joints=tuple(goal_joints),
+                )
+            ],
         )
-        checked = self.robot.validate_planned_joints(
-            plan["points_deg"],
-            self.params.planned_joint_step_deg,
-            self.safety,
-        )
-        self.stage("电子围栏离线复核", f"{name}: {checked} 个密集 TCP 点通过")
-        return plan
+        return verified.trajectory
 
-    def _execute_plan(
-        self,
-        name: str,
-        plan: dict,
-        max_dense_points: int | None = None,
-    ) -> bool:
+    def _plan_observation(self, target_base: np.ndarray) -> dict:
+        verified = self._verified_plan_targets(
+            "moveit_observation",
+            self._observation_plan_targets(target_base),
+        )
+        self.stage(
+            "选择右腕观察位",
+            (
+                f"{verified.target.label}，关节变化评分 "
+                f"{verified.target.score:.1f}；规划尝试 {verified.attempts} 次"
+            ),
+        )
+        return verified.trajectory
+
+    def _execute_plan(self, name: str, plan: dict) -> None:
         self.stage(
             name,
             f"{len(plan['points_deg'])} 个 MoveIt 轨迹点，SDK {self.params.travel_speed}%",
         )
-        return self.robot.execute_planned_joints(
+        self.robot.execute_planned_joints(
             plan["points_deg"],
             self.params.travel_speed,
             self.params.planned_joint_step_deg,
-            max_dense_points=max_dense_points,
         )
 
-    def _move_to_pregrasp_with_active_replanning(
-        self, initial: Localization
-    ) -> Localization:
-        current = initial
-        relocalization_params = replace(
-            self.params,
-            samples=self.params.wrist_relocalization_samples,
-            max_position_spread_m=0.035,
+    def _approach_pregrasp(self, wrist_target: Localization):
+        """一次规划、直线分段接近到预抓取位。
+
+        原先每前进一段就向 MoveIt 重新规划一次（蠕动式走走停停）；全局转移
+        已由 SafeMotionPlanner 统一做 MoveIt 碰撞规划、后验碰撞复核和电子围栏
+        复核。近距离接近仍用更可预测的直线分段，并由候选姿态围栏校验 + plan_ik
+        连续性/限位/奇异检查 + 腕部点云通道检查 + 每段 RGB-D 存活检查保护。
+        目标已由 7 帧锁定；横移时暂时离开 YOLO 视野只警告，到达预抓取位后
+        的复检仍必须重新检测到瓶子，才会进入最后接近。
+        """
+        target_base = np.asarray(wrist_target.point_base)
+        pregrasp_pose, _, transit_path = self.candidate_path(target_base)
+        start_distance = float(
+            np.linalg.norm(self.robot.current_tcp()[:3, 3] - target_base)
         )
-        for cycle in range(1, self.params.pregrasp_replan_cycles + 1):
-            self._refresh_wrist_scene(current)
-            pregrasp_pose, _, _ = self.candidate_path(
-                np.asarray(current.point_base)
+        distances = [
+            float(np.linalg.norm(np.asarray(pose[:3]) - target_base))
+            for pose in transit_path
+        ]
+        if not distances:
+            raise SafetyAbort("预抓取转移路径为空")
+        if any(
+            distance > start_distance + 0.005 for distance in distances
+        ):
+            raise SafetyAbort(
+                "预抓取路径没有朝锁定目标收敛: "
+                f"start={start_distance:.3f}m path={np.round(distances, 3).tolist()}"
             )
-            subgoals = interpolate_poses(
-                matrix_pose(self.robot.current_tcp()),
-                pregrasp_pose,
-                self.params.segment_m,
+        if abs(distances[-1] - self.params.pregrasp_standoff_m) > 0.012:
+            raise SafetyAbort(
+                "预抓取终点距锁定目标不等于预定悬停距离: "
+                f"actual={distances[-1]:.3f}m "
+                f"expected={self.params.pregrasp_standoff_m:.3f}m"
             )
-            subgoal_pose = subgoals[0]
-            target_flange = (
-                pose_matrix(subgoal_pose) @ np.linalg.inv(self.T_flange_tcp)
+        # candidate_path 已校验预抓取点与最终接近段；这里补上转移段逐点围栏。
+        for index, pose in enumerate(transit_path, 1):
+            self.safety.assert_tcp_point(
+                pose[:3], label=f"预抓取转移路径点 {index}"
             )
-            plan = self._plan_flange(
-                f"moveit_pregrasp_{cycle:02d}", target_flange
-            )
-            self.stage(
-                f"预抓取子目标 {cycle}",
-                (
-                    f"剩余 {len(subgoals)} 段；"
-                    f"本段 TCP 终点 {np.round(subgoal_pose[:3], 4).tolist()}"
-                ),
-            )
-            self._execute_plan(f"预抓取分段 {cycle}", plan)
-            if len(subgoals) == 1:
-                return current
-            # 分段复检只做"瓶子还在且没被大幅挪动"的确认，不覆盖初始锁定：
-            # 相机逼近时瓶子下半截逐渐出画，截断视野下的定位点会沿瓶身向
-            # 瓶盖方向系统性漂移（实测每段爬升1-2cm），拿它更新目标会把
-            # 抓取点引到瓶盖上。初始完整视野的定位才是抓取点的权威来源。
-            refined = self.localize(
-                f"右腕分段复检_{cycle:02d}",
-                lambda: self.robot.current_flange()
-                @ self.T_flange_wrist_camera,
-                relocalization_params,
-                depth_prior_base=np.asarray(current.point_base),
-            )
-            jump = float(
-                np.linalg.norm(
-                    np.asarray(refined.point_base)
-                    - np.asarray(current.point_base)
-                )
-            )
-            if jump > self.params.max_relocalization_jump_m:
+        self.robot.plan_ik(transit_path, self.params, allow_first_jump=True)
+        self.collision_gate(wrist_target, target_base)
+        self.stage(
+            "直线接近预抓取位",
+            (
+                f"{len(transit_path)} 段，速度 {self.params.travel_speed}%；"
+                f"距锁定目标 {start_distance * 100:.1f}→"
+                f"{distances[-1] * 100:.1f} cm"
+            ),
+        )
+        guard = LockedTargetGuard(
+            wrist_check=lambda point: self.ensure_bottle_visible(
+                target_base=point
+            ),
+            head_confirm=self._confirm_locked_target_from_head,
+        )
+        for index, (pose, distance) in enumerate(
+            zip(transit_path, distances), 1
+        ):
+            guard_result = guard.verify(target_base)
+            if guard_result.source == "head":
                 LOG.warning(
-                    "分段复检目标偏移 %.1f mm（近距视野截断伪影），"
-                    "保持初始锁定目标继续",
-                    jump * 1000,
+                    "腕部检测丢失；固定头部相机已确认锁定目标，继续预抓取转移"
                 )
-        raise SafetyAbort("预抓取分段重规划次数用尽，未到达目标")
+            elif guard_result.source == "head_cached":
+                LOG.warning(
+                    "腕部检测再次丢失；本段沿用本次转移内刚完成的头部确认"
+                )
+            LOG.info(
+                "锁定目标接近 %d/%d：TCP 距目标 %.1f cm，视觉来源=%s",
+                index,
+                len(transit_path),
+                distance * 100,
+                guard_result.source,
+            )
+            self.robot.move_linear(pose, self.params.travel_speed)
 
     def collision_gate(self, localization: Localization, target_base: np.ndarray):
         count = check_approach_corridor(
@@ -786,6 +832,78 @@ class BottleDemo:
             params=self.params,
         )
         self.stage("右腕点云通道检查", f"通过，疑似障碍点 {count}")
+
+    def _plan_local_leg(
+        self,
+        name: str,
+        build_path: Callable[[], list[list[float]]],
+        params: DemoParams,
+        *,
+        allow_first_jump: bool = False,
+    ) -> list[list[float]]:
+        """本地笛卡尔小段（抬升/下降/退开）的统一规划入口。
+
+        先处理"起点已在 J4 奇异带内"：绕接近轴 roll 改不了 |J4|（肘角
+        大小由肩-腕距离唯一决定，绕工具 z 轴不移动腕心），2026-07-17 真机
+        finish 就是这样把所有 roll 重试耗尽的。唯一干净的出路是关节空间
+        弯肘逃逸（robot.escape_j4_singularity，逐点围栏校验后 movej），
+        逃逸会移动 TCP，所以路径必须在逃逸之后再从新姿态构建——这就是
+        这里收一个 build_path 回调而不是现成路径的原因。
+        """
+        escaped = self.robot.escape_j4_singularity(params, self.safety)
+        if escaped is not None:
+            self.stage(
+                "J4 奇异带弯肘逃逸",
+                f"{name}: 起点在奇异带内，已弯肘至 J4={escaped[3]:.1f}° 后重建路径",
+            )
+        return self._plan_ik_avoiding_singularity(
+            build_path(), params, allow_first_jump=allow_first_jump
+        )
+
+    def _plan_ik_avoiding_singularity(
+        self,
+        poses: list[list[float]],
+        params: DemoParams,
+        *,
+        allow_first_jump: bool = False,
+    ) -> list[list[float]]:
+        """如 plan_ik，被拒绝时尝试绕接近轴（工具 z 轴）小角度重试。
+
+        roll 重试能解决的是逆解分支/限位/关节跳变类拒绝；它改不了 |J4|
+        （肘角大小由肩-腕距离唯一决定，绕工具 z 轴不移动腕心）。"起点已在
+        J4 奇异带内"的场景由 _plan_local_leg 的关节空间弯肘逃逸处理，
+        不要指望这里的 roll。返回值替换调用方原来的 poses 列表，因为真正
+        被执行的姿态必须和通过逆解检查的姿态一致。
+        """
+        for roll_deg in (0, 8, -8, 15, -15, 25, -25):
+            if roll_deg:
+                roll = Rotation.from_euler(
+                    "z", roll_deg, degrees=True
+                ).as_matrix()
+                rotated = []
+                for pose in poses:
+                    T = pose_matrix(pose).copy()
+                    T[:3, :3] = T[:3, :3] @ roll
+                    rotated.append(matrix_pose(T))
+            else:
+                rotated = list(poses)
+            try:
+                self.robot.plan_ik(
+                    rotated, params, allow_first_jump=allow_first_jump
+                )
+                if roll_deg:
+                    self.stage(
+                        "绕接近轴避奇异",
+                        f"当前姿态贴近 J4 奇异区，旋转 {roll_deg:+d}° 后逆解通过",
+                    )
+                return rotated
+            except SafetyAbort as exc:
+                LOG.warning("绕轴 %+.0f° 仍未通过逆解: %s", roll_deg, exc)
+        raise SafetyAbort(
+            "多个旋转角度均未能避开 J4 奇异区，放弃移动——若拒绝原因是"
+            "路径中途进入奇异带，说明目标接近手臂最大伸展，roll 无法解决，"
+            "需要调整目标高度/距离或移动底盘"
+        )
 
     def candidate_path(
         self, target: np.ndarray
@@ -832,27 +950,108 @@ class BottleDemo:
                 LOG.warning("候选抓取角 %+.0f° 被拒绝: %s", roll_deg, exc)
         raise SafetyAbort("所有候选抓取角均未通过逆解/限位/奇异检查")
 
-    def ensure_bottle_visible(self):
+    def ensure_bottle_visible(self, target_base: Optional[np.ndarray] = None):
         if self.camera.get_frame_timestamp() < time.time() - self.params.frame_timeout_s:
-            raise SafetyAbort("RGB-D 画面中断")
+            raise CameraFrameUnavailable("RGB-D 画面中断")
         color, _ = self.camera.get_latest_frames()
+        if color is None:
+            raise CameraFrameUnavailable("RGB-D 彩色画面缺失")
         detector = (
             self.wrist_detector
             if self.camera_name == "right_wrist"
             else self.detector
         )
         predicate = None
-        if self.camera_name == "right_wrist" and color is not None:
-            shape = color.shape
-            predicate = lambda det: self._plausible_close_bottle(det, shape)
-        detection = None if color is None else detector.detect(color, predicate)
+        association = None
+        if self.camera_name == "right_wrist":
+            if target_base is None:
+                shape = color.shape
+                predicate = lambda det: self._plausible_close_bottle(det, shape)
+            else:
+                K, _ = self.camera.get_camera_intrinsics()
+                if K is None:
+                    raise CameraFrameUnavailable("RGB-D 相机内参缺失")
+                association = ProjectedTargetAssociation.from_view(
+                    target_base=np.asarray(target_base, dtype=float),
+                    T_base_camera=(
+                        self.robot.current_flange()
+                        @ self.T_flange_wrist_camera
+                    ),
+                    intrinsics=K,
+                    image_shape=color.shape,
+                )
+                predicate = association.accepts
+        detection = detector.detect(color, predicate)
         if detection is None:
-            raise SafetyAbort("移动过程中符合形状的 bottle 检测丢失")
+            detail = ""
+            if association is not None:
+                detail = (
+                    f"；锁定目标投影={np.round(association.pixel, 1).tolist()}"
+                    f" in_image={association.in_image}"
+                )
+            raise BottleDetectionLost(
+                "移动过程中与锁定目标关联的 bottle 检测丢失" + detail
+            )
+
+    def _confirm_locked_target_from_head(self, target_base: np.ndarray) -> None:
+        """Pause between segments and independently confirm via the head camera.
+
+        The head result never overwrites the 7-frame wrist lock.  A meaningful
+        shift means the bottle may have moved, so the current path is no longer
+        valid and must stop instead of being patched in flight.
+        """
+        if self.detector is None:
+            raise BottleDetectionLost("腕部检测丢失且头部检测器未初始化")
+        target = np.asarray(target_base, dtype=float)
+        head_target = None
+        original_error = None
+        try:
+            self._start_camera("head")
+            head_params = replace(
+                self.params,
+                samples=self.params.wrist_relocalization_samples,
+                min_depth_m=self.params.head_min_depth_m,
+                max_depth_m=self.params.head_max_depth_m,
+                max_position_spread_m=0.06,
+            )
+            head_target = self.localize(
+                "头部补充确认",
+                lambda: self.T_base_head_camera,
+                head_params,
+                depth_prior_base=target,
+            )
+        except SafetyAbort as exc:
+            original_error = exc
+        finally:
+            try:
+                self._start_camera("right_wrist")
+            except SafetyAbort as restore_exc:
+                raise SafetyAbort(
+                    f"头部补充确认后无法恢复右腕相机: {restore_exc}"
+                ) from restore_exc
+        if original_error is not None:
+            raise BottleDetectionLost(
+                f"腕部检测丢失，头部相机也未能确认锁定目标: {original_error}"
+            ) from original_error
+        shift = float(
+            np.linalg.norm(np.asarray(head_target.point_base) - target)
+        )
+        if shift > self.params.head_confirmation_tolerance_m:
+            raise SafetyAbort(
+                "头部相机确认瓶子已偏离锁定目标，当前路径作废: "
+                f"shift={shift * 1000:.1f}mm "
+                f"limit={self.params.head_confirmation_tolerance_m * 1000:.0f}mm"
+            )
+        self.stage(
+            "头部补充确认通过",
+            f"目标相对腕部锁定点偏移 {shift * 1000:.1f} mm",
+        )
 
     def run(self):
-        if getattr(self.args, "full_cycle", False):
-            return self.run_full_cycle()
         self.initialize()
+        self._preflight()
+        if getattr(self.args, "finish_from_current", False):
+            return self._finish_from_current()
         if self.args.resume_at_wrist:
             prior = self._load_resume_localization()
             self.safety.assert_tcp_point(
@@ -890,8 +1089,6 @@ class BottleDemo:
                 self.stage("续抓视觉确认完成", "本轮不发送运动命令")
                 time.sleep(self.args.observe_seconds)
                 return
-            self.stage("打开夹爪")
-            self.robot.open_gripper()
             return self._finish_grasp_from_wrist(wrist_target)
 
         head_params = replace(
@@ -913,24 +1110,9 @@ class BottleDemo:
             return
 
         self._build_head_scene(head_target)
-        # --autonomous-observation 强制走 MoveIt 自主规划，即使 profile 配了
-        # 示教走廊也不用它——用于验证"目标几何简单（如桌角）时能否不靠示教"。
-        use_guided = self.guided_path and not getattr(
-            self.args, "autonomous_observation", False
+        observation_plan = self._plan_observation(
+            np.asarray(head_target.point_base)
         )
-        if use_guided:
-            observation_plan = self._guided_observation_plan()
-        else:
-            observation_flange, observation_goal_joints = (
-                self._select_observation_flange(
-                    np.asarray(head_target.point_base)
-                )
-            )
-            observation_plan = self._plan_flange(
-                "moveit_observation",
-                observation_flange,
-                observation_goal_joints,
-            )
         if self.args.plan_only:
             self.stage(
                 "自主规划完成",
@@ -939,10 +1121,7 @@ class BottleDemo:
             time.sleep(self.args.observe_seconds)
             return
 
-        if observation_plan["points_deg"]:
-            self._execute_plan("避障移动到右腕观察位", observation_plan)
-        else:
-            self.stage("保持右腕观察位", "已在示教终点，不发送运动命令")
+        self._execute_plan("避障移动到右腕观察位", observation_plan)
         self._start_camera("right_wrist")
         wrist_target = self.localize(
             "右腕精定位",
@@ -960,42 +1139,71 @@ class BottleDemo:
             )
             time.sleep(self.args.observe_seconds)
             return
-        self.stage("打开夹爪")
-        self.robot.open_gripper(self.params)
         self._finish_grasp_from_wrist(wrist_target)
 
     def _finish_grasp_from_wrist(self, wrist_target: Localization):
-        """续抓/普通模式收尾：抓取抬升后按 --place-back 决定放回或保持。"""
+        """续抓/普通模式收尾：抓取抬升后按 --place-back/--return-home 决定后续动作。"""
         self._grasp_and_lift(wrist_target)
         if getattr(self.args, "place_back", False):
             self._place_back()
-            self.stage("完成并保持", "已放回；STOP/Ctrl+C 结束")
+            if getattr(self.args, "return_home", False):
+                self._return_home()
+                self.stage("完成并保持", "已放回并返回初始姿态；STOP/Ctrl+C 结束")
+            else:
+                self.stage("完成并保持", "已放回；STOP/Ctrl+C 结束")
         else:
             self.stage("完成并保持", "不搬运、不放置；STOP/Ctrl+C 只保持")
         while not self.stop_event.wait(0.5):
             pass
+        if getattr(self.args, "restore_teleop", False):
+            self._restore_teleop()
+
+    def _finish_from_current(self):
+        """从当前姿态直接收尾：假设夹爪已抓着水瓶（上一轮运行遗留、保持在原地），
+        跳过头部/腕部定位与抓取，只做放回（可选）+返回初始姿态（可选）。
+        """
+        self.stage(
+            "从当前姿态收尾",
+            "假设夹爪已抓稳水瓶，跳过定位/抓取，直接进入放回/返回流程",
+        )
+        if getattr(self.args, "place_back", False):
+            self._place_back()
+        if getattr(self.args, "return_home", False):
+            self._return_home()
+        self.stage("完成", "STOP/Ctrl+C 结束")
+        while not self.stop_event.wait(0.5):
+            pass
+        if getattr(self.args, "restore_teleop", False):
+            self._restore_teleop()
 
     def _grasp_and_lift(self, wrist_target: Localization) -> Localization:
-        """从当前腕部姿态完成：分段接近 → 最后接近 → 力控夹取 → 抬升 5cm。
+        """从当前腕部姿态完成：直线接近 → 最后接近 → 力控夹取 → 抬升 5cm。
 
-        返回锁定用的 refined 定位；不做放回、不阻塞——后续由调用方决定
-        （run() 保持/放回，run_full_cycle() 放回并返回垂下姿态）。
+        返回锁定用的 refined 定位；不做放回、不阻塞——后续由调用方按
+        --place-back 决定放回或保持。
         """
         self.stage(
             "从当前腕部姿态续抓",
-            "视觉闭环、局部 MoveIt 规划和分段接近",
+            "视觉闭环、电子围栏校验和直线分段接近",
         )
+        # 观察位夹爪前方是自由空间：先实测今天的空夹闭合基线，抓取判定
+        # 不再依赖写死常量（2026-07-15 常量阈值把真实成功误判成空夹）。
+        self.stage("夹爪空夹标定", "自由空间闭合一次，实测空夹基线")
+        baseline = self.robot.calibrate_empty_close(self.params)
+        self.stage("打开夹爪", f"空夹基线实测 pos={baseline}")
 
-        wrist_target = self._move_to_pregrasp_with_active_replanning(
-            wrist_target
-        )
+        self._approach_pregrasp(wrist_target)
 
         # 预抓取复检同样只做存在性确认：近距截断视野下的定位会向瓶盖漂移，
         # 最终抓取点仍以初始完整视野的锁定为准。
+        recheck_params = replace(
+            self.params,
+            samples=self.params.wrist_relocalization_samples,
+        )
         refined = self.localize(
             "预抓取复检",
             lambda: self.robot.current_flange() @ self.T_flange_wrist_camera,
-            self.params,
+            recheck_params,
             depth_prior_base=np.asarray(wrist_target.point_base),
         )
         jump = float(
@@ -1024,23 +1232,26 @@ class BottleDemo:
             # 最后10cm夹爪手指必然逐渐挡住瓶子，检测丢失是预期现象：
             # 画面中断仍然致命，检测丢失降级为警告（目标已锁定+人守急停）。
             try:
-                self.ensure_bottle_visible()
-            except SafetyAbort as exc:
-                if "画面中断" in str(exc):
-                    raise
+                self.ensure_bottle_visible(
+                    target_base=np.asarray(wrist_target.point_base)
+                )
+            except BottleDetectionLost as exc:
                 LOG.warning("最后接近中检测丢失（预期为夹爪遮挡）: %s", exc)
             self.robot.move_linear(pose, self.params.final_speed)
 
         self.stage("夹紧水瓶")
         gripper = self.robot.close_gripper(self.params)
-        lift = self.robot.current_tcp()
-        lift[2, 3] += self.params.lift_m
-        lift_path = interpolate_poses(
-            matrix_pose(self.robot.current_tcp()),
-            matrix_pose(lift),
-            self.params.segment_m,
-        )
-        self.robot.plan_ik(lift_path, self.params)
+
+        def build_lift_path() -> list[list[float]]:
+            lift = self.robot.current_tcp()
+            lift[2, 3] += self.params.lift_m
+            return interpolate_poses(
+                matrix_pose(self.robot.current_tcp()),
+                matrix_pose(lift),
+                self.params.segment_m,
+            )
+
+        lift_path = self._plan_local_leg("抬升", build_lift_path, self.params)
         self.stage("抬升 5 cm", "抓取后保持")
         for pose in lift_path:
             self.robot.move_linear(pose, self.params.final_speed)
@@ -1057,15 +1268,17 @@ class BottleDemo:
         return refined
 
     def _place_back(self):
-        """把瓶子放回桌面原位：放低→张开→沿接近轴反向退开（2026-07-16真机验证过的顺序）。"""
-        lower = self.robot.current_tcp()
-        lower[2, 3] -= self.params.lift_m
-        lower_path = interpolate_poses(
-            matrix_pose(self.robot.current_tcp()),
-            matrix_pose(lower),
-            self.params.segment_m,
-        )
-        self.robot.plan_ik(lower_path, self.params)
+        """把瓶子放回原位：放低→张开→退开→空载收拢夹爪。"""
+        def build_lower_path() -> list[list[float]]:
+            lower = self.robot.current_tcp()
+            lower[2, 3] -= self.params.lift_m
+            return interpolate_poses(
+                matrix_pose(self.robot.current_tcp()),
+                matrix_pose(lower),
+                self.params.segment_m,
+            )
+
+        lower_path = self._plan_local_leg("放低", build_lower_path, self.params)
         self.stage("放回桌面", f"下降 {self.params.lift_m * 100:.0f} cm")
         for pose in lower_path:
             self.robot.move_linear(pose, self.params.final_speed)
@@ -1074,84 +1287,86 @@ class BottleDemo:
         self.robot.open_gripper(self.params)
 
         # 沿抓取接近轴反向退开一个预抓取距离，避免手指刮倒瓶子
-        tcp = self.robot.current_tcp()
-        axis = tcp[:3, 2]
-        retreat = tcp.copy()
-        retreat[:3, 3] -= axis * self.params.pregrasp_standoff_m
-        self.safety.assert_tcp_point(retreat[:3, 3], label="放回后退开点")
-        retreat_path = interpolate_poses(
-            matrix_pose(tcp),
-            matrix_pose(retreat),
-            self.params.segment_m,
+        def build_retreat_path() -> list[list[float]]:
+            tcp = self.robot.current_tcp()
+            axis = tcp[:3, 2]
+            retreat = tcp.copy()
+            retreat[:3, 3] -= axis * self.params.pregrasp_standoff_m
+            self.safety.assert_tcp_point(retreat[:3, 3], label="放回后退开点")
+            return interpolate_poses(
+                matrix_pose(tcp),
+                matrix_pose(retreat),
+                self.params.segment_m,
+            )
+
+        retreat_path = self._plan_local_leg(
+            "退开", build_retreat_path, self.params
         )
-        self.robot.plan_ik(retreat_path, self.params)
         self.stage("退开", f"沿接近轴反向 {self.params.pregrasp_standoff_m * 100:.0f} cm")
         for pose in retreat_path:
             self.robot.move_linear(pose, self.params.final_speed)
-        self.stage("放回完成", "瓶子已放回，手臂已退开")
+        self.stage("收拢夹爪", "手臂已退开，空载闭合夹爪")
+        self.robot.close_empty_gripper(self.params)
+        self.stage("放回完成", "瓶子已放回，手臂已退开，夹爪已收拢")
 
-    # ---------------- 完整循环：垂下 → 观察 → 抓取 → 放回 → 垂回 ----------------
+    def _return_home(self):
+        """MoveIt 规划返回 profile 里配置的初始/垂下姿态（关节空间目标）。
 
-    def _corridor_points(self) -> list[list[float]]:
-        """返回示教转移走廊的关节路点（首点=垂下起始姿态，末点=观察位）。"""
-        if not self.guided_path:
+        用的是跟"移动到观察位"完全相同的 SafeMotionPlanner：MoveIt 规划、
+        MoveIt 密集状态后验碰撞复核、电子围栏密集 TCP 复核，以及失败后的
+        有限自动换路。风险等级跟去程一致，不是另一套旁路实现。
+        """
+        home = self.safety.home_joints_deg
+        if not home:
             raise SafetyAbort(
-                "完整循环需要一条示教转移走廊，但当前没有加载到。"
-                "先用 scripts/record_right_arm_guided_path.py 录一条"
-                "『垂下起始 → 右腕观察位』的安全路线，再用 --guided-path 指定，"
-                "或把它填进 safety profile 的 guided_path。"
+                f"profile {self.safety.name} 未配置 home_joints_deg，无法自动返回初始姿态"
             )
-        return [list(map(float, p)) for p in self.guided_path["points_deg"]]
-
-    def _assert_at_pose(self, joints_target, label: str):
-        """确认右臂当前关节角在目标姿态容差内，否则中止（避免从错误起点乱走）。"""
+        target_flange = self.robot.controller_flange_from_joints(list(home))
+        plan = self._plan_flange(
+            "moveit_return_home", target_flange, goal_joints=list(home)
+        )
+        self._execute_plan("返回初始姿态", plan)
         current = np.asarray(self.robot.joints_deg(), dtype=float)
-        target = np.asarray(joints_target, dtype=float)
-        error = float(np.max(np.abs(current - target)))
-        if error > self.safety.guided_start_tolerance_deg:
-            raise SafetyAbort(
-                f"{label}：当前关节距目标最大 {error:.1f}° > 容差 "
-                f"{self.safety.guided_start_tolerance_deg}°。"
-                "请先把右臂拖到走廊起点（垂下姿态）附近再运行。"
-            )
-        self.stage(label, f"当前距目标 {error:.2f}°，在容差内")
+        error = float(np.max(np.abs(current - np.asarray(home, dtype=float))))
+        self.stage("已返回初始姿态", f"距目标关节角最大偏差 {error:.2f}°")
 
     def _preflight(self):
         """真机运动前只读自检：机械臂在线、无错误码、夹爪使能。plan-only 跳过。"""
-        if not self.args.execute:
+        if not self.args.execute or self._is_read_only_vision_check():
             return
+        recover = getattr(self.robot, "recover_transient_joint_frame_loss", None)
+        recovered = recover() if callable(recover) else []
+        if recovered:
+            self.stage(
+                "瞬态关节错误已恢复",
+                f"已清除并连续复核通过: {','.join(f'J{joint}' for joint in recovered)}",
+            )
+        health = self.robot.assert_arm_healthy()
         self.robot.current_tcp()  # 内部校验 arm_err/sys_err，异常即抛
+        controller_fence = self.robot.controller_fence_status()
+        fence_state = controller_fence["state"]
+        enabled = bool(fence_state.get("enable_state", False))
+        self.stage(
+            "控制器原生围栏检查",
+            (
+                f"enable={enabled}；current={controller_fence['current']}；"
+                f"saved={controller_fence['saved']}"
+            ),
+        )
+        if enabled:
+            raise SafetyAbort(
+                "控制器原生电子围栏仍处于启用状态；本程序不会擅自删除或"
+                "关闭硬件安全配置。先核对/停用旧围栏后再运动: "
+                f"{controller_fence}"
+            )
         state = self.robot.gripper_state()
         self.stage(
             "运动前自检",
-            f"机械臂在线无错误码；夹爪 enable={state.get('enable_state')}",
-        )
-
-    def _execute_joint_waypoints(
-        self,
-        name: str,
-        points_deg: list[list[float]],
-        start_joints: list[float] | None = None,
-    ):
-        """离线电子围栏逐点复核 + SDK 执行一串关节路点（转移段专用）。
-
-        走廊是人工示教录制的，全臂几何天然无碰撞；离线复核用密集插值 FK 逐点
-        校验 TCP 是否越过桌面禁入区/工作空间，兜住"桌子挪了/走廊选错"这类粗错。
-        """
-        checked = self.robot.validate_planned_joints(
-            points_deg,
-            self.params.planned_joint_step_deg,
-            self.safety,
-            start_joints_deg=start_joints,
-        )
-        self.stage("转移离线复核", f"{name}：{checked} 个密集 TCP 点通过电子围栏")
-        if not self.args.execute:
-            self.stage(name, f"plan-only：{len(points_deg)} 个路点未执行")
-            return
-        self.robot.execute_planned_joints(
-            points_deg,
-            self.params.travel_speed,
-            self.params.planned_joint_step_deg,
+            (
+                "控制器及 7 个关节无错误码且已使能；"
+                f"夹爪 enable={state.get('enable_state')}；"
+                f"controller={health['controller']}"
+            ),
         )
 
     def _restore_teleop(self):
@@ -1171,85 +1386,6 @@ class BottleDemo:
             f"bash '{script}' > /home/rm/upstart_all_from_demo.log 2>&1 &",
             shell=True,
         )
-
-    def run_full_cycle(self):
-        """完整一轮：垂下 → 观察位 → 抓取 → 抬升 → 放回 → 垂回垂下姿态。
-
-        转移段（垂下↔观察位）默认用示教走廊：人工录制的安全路线，离线电子围栏
-        逐点复核，环境未变时全臂安全——这是当前 MoveIt 碰撞检查失效情况下唯一
-        可信的大范围转移方式。抓取段是自主视觉闭环。修好 MoveIt 碰撞后可用
-        --autonomous-transit 换成全自主规划（见 docs 手册）。
-        """
-        self.initialize()
-        self._preflight()
-
-        corridor = self._corridor_points()
-        hang_pose = corridor[0]
-        observation_pose = corridor[-1]
-        self.stage(
-            "完整循环",
-            f"走廊 {len(corridor)} 点；起始垂下姿态 J={np.round(hang_pose, 1).tolist()}",
-        )
-
-        # 1. 必须从走廊起点（垂下姿态）附近开始
-        self._assert_at_pose(hang_pose, "确认起始垂下姿态")
-
-        # 2. 头部粗定位水瓶（固定头部相机）
-        head_params = replace(
-            self.params,
-            min_depth_m=self.params.head_min_depth_m,
-            max_depth_m=self.params.head_max_depth_m,
-            max_position_spread_m=0.045,
-        )
-        head_target = self.localize(
-            "头部粗定位", lambda: self.T_base_head_camera, head_params
-        )
-        self.safety.assert_tcp_point(
-            head_target.point_base, label="头部定位的水瓶抓取点"
-        )
-        self._build_head_scene(head_target)
-
-        # 3. 转移：垂下 → 观察位（示教走廊正向）
-        self._execute_joint_waypoints(
-            "前往观察位（示教走廊）", corridor, start_joints=hang_pose
-        )
-        if not self.args.execute:
-            self.stage(
-                "plan-only 完成",
-                "已离线复核走廊+头部定位；抓取与返回段需真机 --execute 现场验证",
-            )
-            time.sleep(self.args.observe_seconds)
-            return
-
-        # 4. 腕部完整视野锁定抓取点
-        self._start_camera("right_wrist")
-        wrist_target = self.localize(
-            "右腕精定位",
-            lambda: self.robot.current_flange() @ self.T_flange_wrist_camera,
-            self.params,
-            depth_prior_base=np.asarray(head_target.point_base),
-        )
-
-        # 5. 抓取 + 抬升
-        self.stage("打开夹爪")
-        self.robot.open_gripper(self.params)
-        self._grasp_and_lift(wrist_target)
-
-        # 6. 放回桌面 + 退开
-        self._place_back()
-
-        # 7. 返回：先回到走廊终点（观察位），再反向走廊回垂下姿态
-        self._execute_joint_waypoints("回到走廊终点（观察位）", [observation_pose])
-        self._execute_joint_waypoints(
-            "返回垂下姿态（示教走廊反向）",
-            corridor[::-1],
-            start_joints=observation_pose,
-        )
-        self._assert_at_pose(hang_pose, "确认已回到垂下姿态")
-
-        self.stage("完整循环完成", "已回到垂下姿态，夹爪张开；一轮结束")
-        if getattr(self.args, "restore_teleop", False):
-            self._restore_teleop()
 
     def close(self):
         self.stop_event.set()

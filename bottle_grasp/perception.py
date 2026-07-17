@@ -104,10 +104,15 @@ def depth_point_for_detection(
     near = samples[np.abs(samples[:, 2] - z) <= max(0.015, 3.5 * mad)]
     if near.shape[0] < 8:
         raise SafetyAbort("目标深度附近的像素太少")
-    u, v = np.median(near[:, :2], axis=0)
+    # 横向取深度支持像素的中位数（对松框鲁棒）；纵向不用中位数——它随
+    # 每帧有效深度像素分布漂移，抓取高度每轮不一致。改用检测框固定比例，
+    # 偏低的抓取点在近距接近时也不会移出腕部相机视野。
+    u = float(np.median(near[:, 0]))
+    x1, y1, x2, y2 = det.box
+    v = float(y1 + params.grasp_height_fraction * (y2 - y1))
     fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
     point = np.array([(u - cx) * z / fx, (v - cy) * z / fy, z], dtype=float)
-    return point, z, mad, (float(u), float(v))
+    return point, z, mad, (u, v)
 
 
 class BottleDetector:

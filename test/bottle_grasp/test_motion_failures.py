@@ -1,0 +1,186 @@
+import threading
+
+import numpy as np
+import pytest
+
+from bottle_grasp.core import SafetyAbort
+from bottle_grasp.demo import BottleDemo
+from bottle_grasp.robot import RobotSession
+
+
+class _StoppedMoveArm:
+    def rm_movel(self, pose, speed, radius, connect, block):
+        return -6
+
+    def rm_get_current_arm_state(self):
+        return 0, {
+            "pose": [0.01, 0.50, -0.10, 0.0, 0.0, 0.0],
+            "arm_err": 0,
+            "sys_err": 0,
+        }
+
+    def rm_get_joint_degree(self):
+        return 0, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]
+
+    def rm_get_electronic_fence_enable(self):
+        return 0, {"enable_state": True, "in_out_side": 0, "effective_region": 0}
+
+    def rm_get_electronic_fence_config(self):
+        return 0, {"form": 1, "name": "stale_table_fence"}
+
+    def rm_get_electronic_fence_list_infos(self):
+        return {
+            "return_code": 0,
+            "len": 1,
+            "electronic_fence_list": ["stale_table_fence"],
+        }
+
+
+class _HiddenJ7FaultArm:
+    def rm_get_arm_all_state(self):
+        return 0, {
+            "joint_en_flag": [1, 1, 1, 1, 1, 1, 1],
+            "joint_err_code": [0, 0, 0, 0, 0, 0, 0xF000],
+            "err": {"err_len": 1, "err": ["0"]},
+        }
+
+    def rm_get_controller_state(self):
+        return {"return_code": 0, "system_error": 0}
+
+
+class _RecoverableJ7FaultArm:
+    def __init__(self):
+        self.reads = 0
+        self.cleared = []
+
+    def rm_get_arm_all_state(self):
+        self.reads += 1
+        errors = [0, 0, 0, 0, 0, 0, 0xF000] if self.reads == 1 else [0] * 7
+        return 0, {
+            "joint_en_flag": [1] * 7,
+            "joint_err_code": errors,
+        }
+
+    def rm_get_controller_state(self):
+        return {"return_code": 0, "system_error": 0}
+
+    def rm_set_joint_clear_err(self, joint):
+        self.cleared.append(joint)
+        return 0
+
+
+def test_movel_minus_6_reports_external_stop_context():
+    session = RobotSession.__new__(RobotSession)
+    session.arm = _StoppedMoveArm()
+    session.stop_event = threading.Event()
+    target = [0.08, 0.51, -0.11, 0.0, 0.0, 0.0]
+
+    with pytest.raises(SafetyAbort) as caught:
+        session.move_linear(target, 3)
+
+    message = str(caught.value)
+    assert "外部停止" in message
+    assert "target=[0.08, 0.51, -0.11" in message
+    assert "stale_table_fence" in message
+
+
+def test_preflight_rejects_enabled_controller_native_fence():
+    class FakeRobot:
+        def assert_arm_healthy(self):
+            return {
+                "joints": {},
+                "controller": {"return_code": 0, "system_error": 0},
+            }
+
+        def current_tcp(self):
+            return None
+
+        def controller_fence_status(self):
+            return {
+                "state": {"enable_state": True},
+                "current": (0, {"name": "stale_table_fence"}),
+                "saved": {"len": 1},
+            }
+
+        def gripper_state(self):
+            raise AssertionError("must abort before commanding or reading gripper")
+
+    demo = BottleDemo.__new__(BottleDemo)
+    demo.args = type("Args", (), {"execute": True})()
+    demo.robot = FakeRobot()
+    demo.stage = lambda *args: None
+
+    with pytest.raises(SafetyAbort, match="原生电子围栏仍处于启用状态"):
+        demo._preflight()
+
+
+def test_arm_health_rejects_joint_fault_hidden_by_summary_error():
+    session = RobotSession.__new__(RobotSession)
+    session.arm = _HiddenJ7FaultArm()
+
+    with pytest.raises(
+        SafetyAbort, match=r"J7=0xF000\(通信丢帧\)"
+    ):
+        session.assert_arm_healthy()
+
+
+def test_read_only_session_computes_flange_from_joints_without_active_tcp():
+    session = RobotSession.__new__(RobotSession)
+    session.take_control = False
+    session.joints_deg = lambda: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]
+    expected = np.eye(4)
+    expected[:3, 3] = [0.1, 0.2, 0.3]
+    session.controller_flange_from_joints = lambda joints: expected.copy()
+
+    actual = session.current_flange()
+
+    np.testing.assert_allclose(actual, expected)
+
+
+def test_read_only_resume_check_skips_motion_preflight_even_with_execute_flag():
+    class MustNotTouchRobot:
+        def assert_arm_healthy(self):
+            raise AssertionError("read-only visual check must not run motion preflight")
+
+    demo = BottleDemo.__new__(BottleDemo)
+    demo.args = type(
+        "Args",
+        (),
+        {
+            "execute": True,
+            "resume_at_wrist": True,
+            "stop_after_observation": True,
+        },
+    )()
+    demo.robot = MustNotTouchRobot()
+
+    demo._preflight()
+
+
+def test_motion_preflight_clears_only_recoverable_frame_loss(monkeypatch):
+    session = RobotSession.__new__(RobotSession)
+    session.arm = _RecoverableJ7FaultArm()
+    monkeypatch.setattr("bottle_grasp.robot.time.sleep", lambda _: None)
+
+    recovered = session.recover_transient_joint_frame_loss()
+
+    assert recovered == [7]
+    assert session.arm.cleared == [7]
+    assert session.arm.reads == 3
+
+
+def test_motion_preflight_never_clears_other_joint_faults(monkeypatch):
+    arm = _RecoverableJ7FaultArm()
+    arm.rm_get_arm_all_state = lambda: (
+        0,
+        {
+            "joint_en_flag": [1] * 7,
+            "joint_err_code": [0, 0, 0, 0, 0, 0, 0x0020],
+        },
+    )
+    session = RobotSession.__new__(RobotSession)
+    session.arm = arm
+    monkeypatch.setattr("bottle_grasp.robot.time.sleep", lambda _: None)
+
+    assert session.recover_transient_joint_frame_loss() == []
+    assert arm.cleared == []

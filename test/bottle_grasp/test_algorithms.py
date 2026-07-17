@@ -9,8 +9,9 @@ from bottle_grasp.core import (
     SafetyAbort,
     interpolate_poses,
 )
+from bottle_grasp.collision import classify_moveit_collision_probe
 from bottle_grasp.perception import depth_point_for_detection, robust_near_cluster
-from bottle_grasp.safety import load_guided_joint_path, load_safety_profile
+from bottle_grasp.safety import load_safety_profile
 from bottle_grasp.scene import build_scene_voxels
 
 
@@ -47,6 +48,22 @@ def test_depth_point_rejects_background_and_deprojects():
     assert abs(z - 0.30) < 0.015
     assert abs(point[2] - 0.30) < 1e-6
     assert abs(pixel[0] - 50) < 5
+
+
+def test_grasp_pixel_height_is_deterministic_and_low():
+    # 纵向抓取点必须是检测框固定比例（偏低），不随有效深度像素分布漂移；
+    # 太高的抓取点在近距接近时会移出腕部相机视野。
+    params = DemoParams()
+    K = np.array([[100, 0, 50], [0, 100, 50], [0, 0, 1]], float)
+    detection = Detection((35, 10, 65, 90), 0.9, "bottle")
+    rng = np.random.default_rng(11)
+    for seed in range(3):
+        depth = np.full((100, 100), 0.55, np.float32)
+        depth[22:78, 44:57] = 0.30 + rng.normal(0, 0.001, (56, 13))
+        _, _, _, pixel = depth_point_for_detection(depth, detection, K, params)
+        expected_v = 10 + params.grasp_height_fraction * 80
+        assert pixel[1] == expected_v
+    assert expected_v > 0.5 * (10 + 90)  # 低于框中线
 
 
 def test_scene_builds_generic_rgbd_voxels():
@@ -102,9 +119,41 @@ def test_electronic_fence_profile_accepts_task_and_home_zones():
     assert [box["id"] for box in profile.moveit_collision_boxes()] == [
         "fence_table_top"
     ]
-    guided = load_guided_joint_path(profile.guided_path)
-    assert guided["raw_point_count"] == 226
-    assert 2 < len(guided["points_deg"]) < guided["raw_point_count"]
+
+
+def test_moveit_keepout_padding_covers_top_and_all_four_sides():
+    profile = load_safety_profile(
+        Path(__file__).parents[2] / "bottle_grasp" / "safety_profiles.json",
+        "table_demo",
+        require_verified=False,
+    )
+    item = profile.moveit_collision_boxes()[0]
+    center_profile = np.asarray(item["center"]) - profile.T_moveit_from_profile[
+        :3, 3
+    ]
+    half_size = np.asarray(item["size"]) / 2
+
+    # The offline fence expands the physical table by clearance_m. MoveIt gets
+    # extra padding on top of that so it plans with margin instead of skimming
+    # the reject boundary. Horizontal padding applies to both faces of x and y;
+    # vertical padding applies only above the tabletop (the bottom is
+    # irrelevant). 2026-07-17 real-hardware `observe`: clearance_m+1cm wasn't
+    # enough headroom for MoveIt's own path-sampling resolution — accepted
+    # plans skimmed 1-1.7cm past that padded boundary and got rejected by the
+    # finer offline fence recheck. Bumped to clearance_m+5cm, then the actual
+    # sampling resolution (longest_valid_segment_fraction) was tightened 4x at
+    # the source; 2026-07-18 padding was dialed back down to clearance_m+2cm
+    # accordingly (still ~10x the resolution-fix's expected residual skim).
+    # This exact combination has not been re-measured on hardware yet.
+    padding = profile.clearance_m + 0.02
+    assert np.allclose(
+        center_profile - half_size,
+        [-1 - padding, 0.36 - padding, -0.75],
+    )
+    assert np.allclose(
+        center_profile + half_size,
+        [1 + padding, 1.5 + padding, -0.2 + padding],
+    )
 
 
 def test_electronic_fence_rejects_outside_allowed_zone():
@@ -132,3 +181,21 @@ def test_overlapping_allowed_zones_have_no_clearance_seam():
     # Inside the authored transit zone but close to its y edge. This must not
     # be rejected merely because per-zone clearance creates a fake seam.
     profile.assert_tcp_point([0.1815, 0.3291, -0.4886], label="transit seam")
+
+
+@pytest.mark.parametrize(
+    ("states", "expected"),
+    [
+        ((False, False, False), "baseline_invalid"),
+        ((True, True, True), "collision_missed"),
+        ((True, False, False), "cleanup_failed"),
+        ((True, False, True), "healthy"),
+    ],
+)
+def test_moveit_collision_probe_classifies_each_failure_mode(states, expected):
+    status, _ = classify_moveit_collision_probe(
+        baseline_valid=states[0],
+        boxed_valid=states[1],
+        cleared_valid=states[2],
+    )
+    assert status == expected

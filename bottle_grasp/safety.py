@@ -12,6 +12,25 @@ import numpy as np
 from .core import SafetyAbort
 
 
+class FenceViolation(SafetyAbort):
+    """Structured electronic-fence rejection suitable for replanning."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: str,
+        label: str,
+        point: Sequence[float],
+        object_id: str | None = None,
+    ):
+        super().__init__(message)
+        self.kind = kind
+        self.label = label
+        self.point = tuple(map(float, point))
+        self.object_id = object_id
+
+
 @dataclass(frozen=True)
 class FenceBox:
     id: str
@@ -72,8 +91,7 @@ class SafetyProfile:
     allowed_tcp_zones: tuple[FenceBox, ...]
     keepout_boxes: tuple[FenceBox, ...]
     use_dynamic_rgbd: bool
-    guided_path: Path | None
-    guided_start_tolerance_deg: float
+    home_joints_deg: tuple[float, ...] | None
 
     def assert_tcp_point(
         self,
@@ -87,22 +105,33 @@ class SafetyProfile:
         if point.shape != (3,) or not np.all(np.isfinite(point)):
             raise SafetyAbort(f"{label} 的 TCP 坐标无效: {point.tolist()}")
         if not self.tcp_workspace.contains(point, margin):
-            raise SafetyAbort(
-                f"{label} 越出总工作空间: {np.round(point, 4).tolist()}"
+            raise FenceViolation(
+                f"{label} 越出总工作空间: {np.round(point, 4).tolist()}",
+                kind="workspace",
+                label=label,
+                point=point,
+                object_id=self.tcp_workspace.id,
             )
         for obstacle in self.keepout_boxes:
             if obstacle.contains_expanded(point, margin):
-                raise SafetyAbort(
+                raise FenceViolation(
                     f"{label} 进入禁入区 {obstacle.id}: "
-                    f"{np.round(point, 4).tolist()}"
+                    f"{np.round(point, 4).tolist()}",
+                    kind="keepout",
+                    label=label,
+                    point=point,
+                    object_id=obstacle.id,
                 )
         # Allowed zones are authored as already-safe corridors. Do not shrink
         # each box independently: doing so creates artificial gaps where two
         # valid transit volumes overlap. Clearance is still enforced against
         # the outer workspace and every expanded keepout object above.
         if not any(zone.contains(point, 0.0) for zone in self.allowed_tcp_zones):
-            raise SafetyAbort(
-                f"{label} 不在任何允许区: {np.round(point, 4).tolist()}"
+            raise FenceViolation(
+                f"{label} 不在任何允许区: {np.round(point, 4).tolist()}",
+                kind="allowed_zone",
+                label=label,
+                point=point,
             )
 
     def assert_tcp_path(self, points: Iterable[Sequence[float]]) -> int:
@@ -116,14 +145,31 @@ class SafetyProfile:
     def moveit_collision_boxes(self) -> list[dict]:
         # MoveIt 只做几何碰撞，不知道围栏检查还要求 clearance_m 的 TCP 余量；
         # 如果给它精确盒子，它会规划出"贴着盒面飞"的路径，随后被离线围栏
-        # 复核否决。这里把顶面(+z)垫高 clearance_m+1cm 让规划阶段就绕开；
-        # 侧面保持精确，避免挤掉桌边旁的示教通道。
-        top_padding = self.clearance_m + 0.01
+        # 复核否决。这里把四个水平侧面各向外垫，顶面也垫同样距离，让规划
+        # 阶段就留足余量；底面不影响桌面上方的规划。
+        #
+        # 2026-07-17 真机 observe 实测：clearance_m+1cm 的旧余量不够——MoveIt
+        # 按其内部路径采样分辨率认为"没碰垫大的盒子"，但独立围栏用更密的
+        # 插值复核发现实际路径已经比垫大后的盒子边界还深入 1~1.7cm（8个候选、
+        # 16次尝试全部在这个narrow band里被拒）。根因是 OMPL 边碰撞检测的
+        # 离散化盲区，已在 moveit_headless.py 用
+        # longest_valid_segment_fraction 0.01->0.0025（4倍更密）从源头收紧，
+        # 采样间隔按此比例线性缩小，预期把 1~1.7cm 的偏差压到约 0.25~0.4cm。
+        #
+        # 2026-07-18：把这里的余量从 +5cm 回调到 +2cm——clearance_m(2.5cm)+2cm
+        # =4.5cm 仍比旧实测的最大偏差 1.7cm 宽裕得多，对采样密度修复后的
+        # 预期偏差（~0.4cm）留有约10倍安全系数。但这个具体数值组合
+        # （更密的lvsf + 更小的padding）还没有真机验证过，不能只信这个
+        # 推算——下次连机器人必须先跑 observe/plan 多轮确认没有回到
+        # narrow-band拒绝循环，再信任这个余量。
+        padding = self.clearance_m + 0.02
         result = []
         for box in self.keepout_boxes:
             item = box.moveit_box()
-            item["center"][2] += top_padding / 2
-            item["size"][2] += top_padding
+            item["size"][0] += 2 * padding
+            item["size"][1] += 2 * padding
+            item["center"][2] += padding / 2
+            item["size"][2] += padding
             item["center"] = self.point_to_moveit(item["center"]).tolist()
             result.append(item)
         return result
@@ -146,6 +192,21 @@ class SafetyProfile:
 
     def pose_to_moveit(self, pose: np.ndarray) -> np.ndarray:
         return self.T_moveit_from_profile @ np.asarray(pose, dtype=float)
+
+    def replan_exclusion_box(
+        self,
+        violation: FenceViolation,
+        *,
+        object_id: str,
+        size_m: float,
+    ) -> dict:
+        """Turn an independently rejected TCP point into MoveIt feedback."""
+        center = self.point_to_moveit(violation.point)
+        return {
+            "id": str(object_id),
+            "center": center.tolist(),
+            "size": [float(size_m)] * 3,
+        }
 
 
 def load_safety_profile(
@@ -202,6 +263,15 @@ def load_safety_profile(
         FenceBox.from_dict(item, prefix=f"keepout_{index}")
         for index, item in enumerate(raw.get("keepout_boxes", []))
     )
+    home_raw = raw.get("home_joints_deg")
+    home_joints_deg = None
+    if home_raw is not None:
+        home = np.asarray(home_raw, dtype=float)
+        if home.shape != (7,) or not np.all(np.isfinite(home)):
+            raise SafetyAbort(
+                f"电子围栏 profile {profile_name} 的 home_joints_deg 必须是 7 个有限数"
+            )
+        home_joints_deg = tuple(map(float, home))
     profile = SafetyProfile(
         name=profile_name,
         description=str(raw.get("description", "")),
@@ -214,14 +284,7 @@ def load_safety_profile(
         allowed_tcp_zones=zones,
         keepout_boxes=keepouts,
         use_dynamic_rgbd=bool(raw.get("use_dynamic_rgbd", True)),
-        guided_path=(
-            None
-            if not raw.get("guided_path")
-            else (path.parent / str(raw["guided_path"])).resolve()
-        ),
-        guided_start_tolerance_deg=float(
-            raw.get("guided_start_tolerance_deg", 3.0)
-        ),
+        home_joints_deg=home_joints_deg,
     )
     # Validate that each allowed zone is itself inside the global workspace.
     for zone in profile.allowed_tcp_zones:
@@ -233,39 +296,3 @@ def load_safety_profile(
                 f"允许区 {zone.id} 超出总工作空间 {profile.tcp_workspace.id}"
             )
     return profile
-
-
-def load_guided_joint_path(
-    path: Path, min_joint_change_deg: float = 0.12
-) -> dict:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise SafetyAbort(f"示教路径不存在: {path}") from exc
-    except (OSError, json.JSONDecodeError) as exc:
-        raise SafetyAbort(f"示教路径无法读取: {path}: {exc}") from exc
-    if data.get("format") != "grabber_guided_path_v1":
-        raise SafetyAbort(f"示教路径格式不支持: {path}")
-    samples = data.get("samples", [])
-    if len(samples) < 2:
-        raise SafetyAbort(f"示教路径样本不足: {len(samples)}")
-    joints = np.asarray(
-        [sample.get("joints_deg") for sample in samples], dtype=float
-    )
-    if joints.ndim != 2 or joints.shape[1] != 7:
-        raise SafetyAbort("示教路径必须是 N×7 关节角")
-    if not np.all(np.isfinite(joints)):
-        raise SafetyAbort("示教路径包含非有限关节角")
-    compact = [joints[0]]
-    for values in joints[1:-1]:
-        if np.max(np.abs(values - compact[-1])) >= min_joint_change_deg:
-            compact.append(values)
-    compact.append(joints[-1])
-    joints = np.asarray(compact, dtype=float)
-    return {
-        "path": str(path),
-        "recorded_at": data.get("recorded_at"),
-        "duration_s": float(samples[-1].get("t_s", 0.0)),
-        "raw_point_count": len(samples),
-        "points_deg": joints.tolist(),
-    }
