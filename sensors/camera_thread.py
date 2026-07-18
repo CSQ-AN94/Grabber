@@ -3,6 +3,7 @@ RealSense 相机线程（替换原 Orbbec Gemini 版本）
 依赖 pyrealsense2；对外接口与旧版完全一致，上层代码无需修改。
 """
 
+import json
 import os
 import threading
 import time
@@ -12,6 +13,15 @@ from typing import Any, Dict, Optional, Tuple
 import cv2
 import numpy as np
 import pyrealsense2 as rs
+
+
+DEFAULT_SHARED_DIR = "/tmp/grabber_camera_frames"
+DEFAULT_SHARED_FPS = 10.0
+SERIAL_SHARED_NAMES = {
+    "153122071777": "head",
+    "405622073249": "right_wrist",
+    "335522072194": "left_wrist",
+}
 
 
 class DisplayMode(Enum):
@@ -36,6 +46,9 @@ class CameraThread(threading.Thread):
         height: int = 480,
         fps: int = 30,
         strict_serial: bool = False,
+        shared_name: Optional[str] = None,
+        shared_dir: Optional[str] = None,
+        shared_fps: float = DEFAULT_SHARED_FPS,
     ):
         super().__init__()
         self.daemon = True
@@ -46,6 +59,14 @@ class CameraThread(threading.Thread):
         self._height = height
         self._fps = fps
         self._strict_serial = strict_serial
+        self._shared_name = (
+            shared_name
+            or os.environ.get("CAMERA_SHARED_NAME")
+            or SERIAL_SHARED_NAMES.get(serial)
+        )
+        self._shared_dir = shared_dir or os.environ.get("CAMERA_SHARE_DIR", DEFAULT_SHARED_DIR)
+        self._shared_interval = 1.0 / max(0.1, float(shared_fps))
+        self._last_shared_publish = 0.0
 
         self._pipeline: Optional[rs.pipeline] = None
         self._align: Optional[rs.align] = None
@@ -149,6 +170,7 @@ class CameraThread(threading.Thread):
                     self._latest_color = color_image.copy()
                     self._latest_depth = depth_meters.copy()
                     self._frame_timestamp = time.time()
+                self._publish_shared_frame(color_image)
 
             except Exception as e:
                 print(f"[CameraThread] 主循环错误: {e}")
@@ -181,6 +203,42 @@ class CameraThread(threading.Thread):
         ], dtype=np.float64)
         dist = np.array(intr.coeffs, dtype=np.float64)
         return K, dist
+
+    def _publish_shared_frame(self, color_image: np.ndarray) -> None:
+        if not self._shared_name:
+            return
+        now = time.time()
+        if now - self._last_shared_publish < self._shared_interval:
+            return
+        self._last_shared_publish = now
+        try:
+            os.makedirs(self._shared_dir, exist_ok=True)
+            jpg_path = os.path.join(self._shared_dir, f"{self._shared_name}.jpg")
+            json_path = os.path.join(self._shared_dir, f"{self._shared_name}.json")
+            ok, encoded = cv2.imencode(
+                ".jpg", color_image, [int(cv2.IMWRITE_JPEG_QUALITY), 85]
+            )
+            if not ok:
+                return
+            tmp_jpg = f"{jpg_path}.tmp"
+            with open(tmp_jpg, "wb") as fh:
+                fh.write(encoded.tobytes())
+            os.replace(tmp_jpg, jpg_path)
+
+            meta = {
+                "camera": self._shared_name,
+                "serial": self._serial,
+                "timestamp": now,
+                "width": int(color_image.shape[1]),
+                "height": int(color_image.shape[0]),
+                "fps": self._fps,
+            }
+            tmp_json = f"{json_path}.tmp"
+            with open(tmp_json, "w", encoding="utf-8") as fh:
+                json.dump(meta, fh, ensure_ascii=False)
+            os.replace(tmp_json, json_path)
+        except Exception as exc:
+            print(f"[CameraThread] 发布共享帧失败: {exc}")
 
     def generate_pointcloud(self, max_depth: float = 3.0) -> Optional[np.ndarray]:
         """返回 [N, 6] 点云数组 [x, y, z, r, g, b]。"""

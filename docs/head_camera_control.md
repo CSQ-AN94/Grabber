@@ -1,12 +1,14 @@
 # Head Camera Control 实时调头工具
 
-这个工具用于在浏览器里实时查看头部摄像头画面，并通过网页按钮微调头部上下左右角度。
+这个工具用于在浏览器里实时查看头部/腕部摄像头画面，并通过网页按钮微调头部上下左右角度。
 
 它只控制头部摄像头云台，不控制机械臂，也不控制升降。
 
+默认运行在 `shared` 模式：网页只读取其他机器人程序发布出来的最新 JPEG 帧，不直接打开 `/dev/video*` 或 RealSense pipeline，因此可以和夹水瓶 demo 同时运行。
+
 ## 文件
 
-- `test/head_camera_control.py`：网页服务和实时画面刷新
+- `test/head_camera_control.py`：网页服务和实时画面刷新，默认不占用相机设备
 - `test/run_head_camera_control.sh`：启动脚本，默认使用 `head` 头部相机
 
 ## 运行位置
@@ -42,7 +44,8 @@ python3 head_camera_control.py --camera head --host 0.0.0.0 --port 8765
 
 参数说明：
 
-- `--camera head`：头部摄像头。也可以用 `wrist_a` 或 `wrist_b`
+- `--camera head`：默认勾选头部摄像头。网页里也可以同时勾选右腕/左腕
+- `--frame-source shared`：默认值，只读共享帧，不直接占用相机
 - `--host 0.0.0.0`：允许局域网电脑访问
 - `--port 8765`：网页端口。不要用 `87` 这种小于 1024 的端口，否则普通用户会报 `Permission denied`
 
@@ -52,11 +55,10 @@ python3 head_camera_control.py --camera head --host 0.0.0.0 --port 8765
 python3 head_camera_control.py --camera head --host 0.0.0.0 --port 8765
 ```
 
-启动脚本也支持临时换到腕部相机：
+如果只是独立测试网页、没有其他程序发布共享帧，可以显式开启直连相机模式。注意这个模式会直接打开相机设备，可能和夹水瓶 demo 冲突：
 
 ```bash
-./run_head_camera_control.sh wrist_a
-./run_head_camera_control.sh wrist_b
+FRAME_SOURCE=direct ./run_head_camera_control.sh head
 ```
 
 ## 使用
@@ -67,7 +69,7 @@ python3 head_camera_control.py --camera head --host 0.0.0.0 --port 8765
 - `↑ / ↓ / ← / →`：调整头部角度
 - `●`：回中
 - `Read Angles`：刷新角度读数
-- `Switch`：只显示 `头部相机`、`腕部相机 A`、`腕部相机 B`
+- `View`：可以同时勾选 `头部相机`、`右腕相机`、`左腕相机`
 
 打开网页本身不会移动头部，只有点击方向按钮或回中按钮才会发控制指令。
 
@@ -75,11 +77,22 @@ python3 head_camera_control.py --camera head --host 0.0.0.0 --port 8765
 
 这个网页程序不直接打开 `/dev/rmUSB3` 串口。它通过 UDP 发送和遥控按钮一致的控制帧，由机器人上已经运行的 `head_servo_ctrl.py` 接收并控制舵机。
 
+默认 `shared` 模式也不直接打开任何相机。相机数据来自：
+
+```text
+/tmp/grabber_camera_frames/head.jpg
+/tmp/grabber_camera_frames/right_wrist.jpg
+/tmp/grabber_camera_frames/left_wrist.jpg
+```
+
+这些文件由 `sensors.CameraThread` 在夹水瓶 demo 或其他视觉程序采图时自动更新。
+
 所以：
 
 - 画面能显示，但按钮没反应：优先检查 `head_servo_ctrl.py` 是否在运行
 - 角度读数一直是 `-`：说明没有收到 `head_servo_ctrl.py` 的角度广播
 - 串口被占用不会由这个网页程序造成，因为网页程序不占串口
+- 夹水瓶程序运行时，网页不会额外抢相机；如果画面显示 `waiting`，说明当前还没有程序发布对应相机的共享帧
 
 ## 相机列表
 
@@ -87,14 +100,14 @@ python3 head_camera_control.py --camera head --host 0.0.0.0 --port 8765
 
 | 名称 | 默认设备 |
 | --- | --- |
-| 头部相机 | `head`，当前机器人优先使用 `/dev/video4` 或对应 by-path |
-| 腕部相机 A | `wrist_a`，当前机器人优先使用 `/dev/video14` |
-| 腕部相机 B | `wrist_b`，当前机器人优先使用 `/dev/video20` |
+| 头部相机 | `head`，共享帧 `head.jpg` |
+| 右腕相机 | `right_wrist`，共享帧 `right_wrist.jpg` |
+| 左腕相机 | `left_wrist`，共享帧 `left_wrist.jpg` |
 
-如果设备顺序变化，可以启动前用环境变量覆盖：
+只有在 `FRAME_SOURCE=direct` 直连模式下，才会用到底层设备号。设备顺序变化时可以启动前用环境变量覆盖：
 
 ```bash
-HEAD_CAMERA=/dev/video4 WRIST_CAMERA_A=/dev/video14 WRIST_CAMERA_B=/dev/video20 ./run_head_camera_control.sh
+HEAD_CAMERA=/dev/video4 RIGHT_WRIST_CAMERA=/dev/video20 LEFT_WRIST_CAMERA=/dev/video14 FRAME_SOURCE=direct ./run_head_camera_control.sh
 ```
 
 ## 常见问题
@@ -115,10 +128,10 @@ python3 head_camera_control.py --camera head --host 0.0.0.0 --port 8765
 /dev/video4
 ```
 
-如果重启后设备顺序变化，可以在网页右侧 `Switch` 下拉框切换三路命名相机。需要改底层设备号时，用环境变量覆盖：
+如果网页显示 `waiting`，先确认正在运行的视觉程序已经接入新版 `CameraThread`，并在发布共享帧：
 
 ```bash
-HEAD_CAMERA=/dev/video4 ./run_head_camera_control.sh
+ls -lh /tmp/grabber_camera_frames/
 ```
 
 ### 画面看起来没有刷新

@@ -46,11 +46,14 @@ ACTIONS = {
 
 CENTER_ANGLE = 500
 CENTER_TOLERANCE = 25
+DEFAULT_SHARED_DIR = "/tmp/grabber_camera_frames"
+SHARED_STALE_SECONDS = 3.0
 
 CAMERA_SPECS = [
     {
         "id": "head",
         "label": "头部相机",
+        "shared_name": "head",
         "env": "HEAD_CAMERA",
         "aliases": ["/dev/video4"],
         "candidates": [
@@ -59,23 +62,25 @@ CAMERA_SPECS = [
         ],
     },
     {
-        "id": "wrist_a",
-        "label": "腕部相机 A",
-        "env": "WRIST_CAMERA_A",
-        "aliases": ["/dev/video14"],
-        "candidates": [
-            "/dev/video14",
-            "/dev/v4l/by-path/platform-3610000.usb-usb-0:3.2.4.4:1.3-video-index0",
-        ],
-    },
-    {
-        "id": "wrist_b",
-        "label": "腕部相机 B",
-        "env": "WRIST_CAMERA_B",
-        "aliases": ["/dev/video20"],
+        "id": "right_wrist",
+        "label": "右腕相机",
+        "shared_name": "right_wrist",
+        "env": "RIGHT_WRIST_CAMERA",
+        "aliases": ["wrist_b", "/dev/video20"],
         "candidates": [
             "/dev/video20",
             "/dev/v4l/by-path/platform-3610000.usb-usb-0:3.2.4.3:1.3-video-index0",
+        ],
+    },
+    {
+        "id": "left_wrist",
+        "label": "左腕相机",
+        "shared_name": "left_wrist",
+        "env": "LEFT_WRIST_CAMERA",
+        "aliases": ["wrist_a", "/dev/video14"],
+        "candidates": [
+            "/dev/video14",
+            "/dev/v4l/by-path/platform-3610000.usb-usb-0:3.2.4.4:1.3-video-index0",
         ],
     },
 ]
@@ -92,17 +97,33 @@ def _first_existing(candidates: list[str]) -> str:
     return candidates[0]
 
 
-def list_camera_options() -> list[dict[str, Any]]:
+def _env_camera_source(spec: dict[str, Any]) -> str:
+    names = [spec["env"]]
+    if spec["id"] == "right_wrist":
+        names.append("WRIST_CAMERA_B")
+    elif spec["id"] == "left_wrist":
+        names.append("WRIST_CAMERA_A")
+    for name in names:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def list_camera_options(shared: "SharedFrameStore | None" = None) -> list[dict[str, Any]]:
     options = []
     for spec in CAMERA_SPECS:
-        env_source = os.environ.get(spec["env"], "").strip()
+        env_source = _env_camera_source(spec)
         candidates = [env_source] if env_source else spec["candidates"]
         source = _first_existing(candidates)
+        shared_info = shared.info(spec["id"]) if shared else {}
         options.append({
             "id": spec["id"],
             "label": spec["label"],
+            "shared_name": spec["shared_name"],
             "source": source,
             "available": os.path.exists(source),
+            "shared": shared_info,
         })
     return options
 
@@ -125,6 +146,61 @@ def camera_label_for_source(source: str, options: list[dict[str, Any]]) -> str:
         if option["source"] == source:
             return option["label"]
     return "自定义相机"
+
+
+def camera_id_for_value(value: str, options: list[dict[str, Any]]) -> str:
+    if not value:
+        return "head"
+    for option, spec in zip(options, CAMERA_SPECS):
+        names = {
+            option["id"],
+            option["label"],
+            option["source"],
+            option["shared_name"],
+            *spec["aliases"],
+        }
+        if value in names:
+            return option["id"]
+    return "head"
+
+
+class SharedFrameStore:
+    def __init__(self, directory: str = DEFAULT_SHARED_DIR):
+        self.directory = directory
+
+    def _paths(self, camera_id: str) -> tuple[str, str]:
+        safe_id = camera_id.replace("/", "_")
+        return (
+            os.path.join(self.directory, f"{safe_id}.jpg"),
+            os.path.join(self.directory, f"{safe_id}.json"),
+        )
+
+    def read_jpeg(self, camera_id: str) -> bytes | None:
+        jpg_path, _ = self._paths(camera_id)
+        try:
+            with open(jpg_path, "rb") as fh:
+                return fh.read()
+        except OSError:
+            return None
+
+    def info(self, camera_id: str) -> dict[str, Any]:
+        jpg_path, json_path = self._paths(camera_id)
+        exists = os.path.exists(jpg_path)
+        mtime = os.path.getmtime(jpg_path) if exists else 0.0
+        age = time.time() - mtime if mtime else None
+        meta: dict[str, Any] = {}
+        try:
+            with open(json_path, "r", encoding="utf-8") as fh:
+                meta = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            pass
+        return {
+            "path": jpg_path,
+            "exists": exists,
+            "age_s": None if age is None else round(age, 3),
+            "fresh": bool(exists and age is not None and age <= SHARED_STALE_SECONDS),
+            **meta,
+        }
 
 
 class AngleReceiver:
@@ -348,8 +424,13 @@ HTML = r"""<!doctype html>
     header { height:56px; display:flex; align-items:center; justify-content:space-between; padding:0 18px; border-bottom:1px solid var(--line); background:#151922; }
     h1 { font-size:17px; margin:0; font-weight:650; }
     main { display:grid; grid-template-columns:minmax(320px, 1fr) 340px; min-height:calc(100vh - 56px); }
-    .viewer { display:flex; align-items:center; justify-content:center; padding:14px; background:#07090d; }
-    .viewer img { max-width:100%; max-height:calc(100vh - 86px); object-fit:contain; border:1px solid var(--line); background:#000; }
+    .viewer { display:flex; align-items:stretch; justify-content:center; padding:14px; background:#07090d; }
+    .streams { width:100%; display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:12px; align-content:start; }
+    .tile { min-width:0; border:1px solid var(--line); background:#000; }
+    .tile-head { display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:34px; padding:7px 9px; background:#141922; border-bottom:1px solid var(--line); }
+    .tile-title { font-size:13px; font-weight:650; }
+    .tile-meta { font-size:12px; color:var(--muted); white-space:nowrap; }
+    .tile img { display:block; width:100%; height:auto; max-height:calc(100vh - 138px); object-fit:contain; background:#000; }
     .side { border-left:1px solid var(--line); background:var(--panel); padding:16px; overflow:auto; }
     .row { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
     .label { color:var(--muted); font-size:13px; min-width:72px; }
@@ -361,6 +442,9 @@ HTML = r"""<!doctype html>
     button:active { transform:translateY(1px); }
     .wide { grid-column:1 / span 3; font-size:14px; }
     input, select { width:100%; min-height:36px; color:var(--text); background:#10151d; border:1px solid var(--line); border-radius:6px; padding:0 9px; }
+    .camera-options { display:grid; gap:8px; }
+    .camera-option { display:flex; align-items:center; gap:9px; min-height:34px; padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:#10151d; font-size:13px; }
+    .camera-option input { width:auto; min-height:0; }
     .small { font-size:12px; color:var(--muted); line-height:1.5; }
     .section { border-top:1px solid var(--line); padding-top:14px; margin-top:14px; }
     @media (max-width: 860px) { main { grid-template-columns:1fr; } .side { border-left:0; border-top:1px solid var(--line); } .viewer img { max-height:58vh; } }
@@ -373,7 +457,7 @@ HTML = r"""<!doctype html>
   </header>
   <main>
     <section class="viewer">
-      <img id="stream" src="/snapshot.jpg" alt="camera stream">
+      <div id="streams" class="streams"></div>
     </section>
     <aside class="side">
       <div class="row"><span class="label">Camera</span><span class="value" id="cameraStatus">-</span></div>
@@ -398,39 +482,92 @@ HTML = r"""<!doctype html>
       </div>
 
       <div class="section">
-        <div class="row"><span class="label">Switch</span><select id="cameraSelect"></select></div>
-        <button class="wide" onclick="setCamera()">Apply Camera</button>
-        <p class="small">Only the head camera and two wrist cameras are shown here. Device paths are hidden from the menu to avoid picking the wrong /dev/video node.</p>
+        <div class="row"><span class="label">View</span><span class="value">选择一路或多路画面</span></div>
+        <div id="cameraChecks" class="camera-options"></div>
+        <p class="small">Default mode reads shared frames from /tmp/grabber_camera_frames, so this page does not open camera devices while demos are running.</p>
       </div>
     </aside>
   </main>
   <script>
+    let lastCameraKey = '';
+    let latestCameras = [];
+
+    function selectedCameraIds() {
+      return Array.from(document.querySelectorAll('.camera-check:checked')).map(el => el.value);
+    }
+
+    function renderCameraChecks(cameras) {
+      const box = document.getElementById('cameraChecks');
+      const key = cameras.map(c => c.id + ':' + c.label).join('|');
+      if (key === lastCameraKey && box.children.length > 0) return;
+      lastCameraKey = key;
+      box.innerHTML = '';
+      for (const camera of cameras) {
+        const label = document.createElement('label');
+        label.className = 'camera-option';
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.className = 'camera-check';
+        input.value = camera.id;
+        input.checked = camera.id === 'head';
+        input.onchange = () => renderStreamTiles(latestCameras);
+        const text = document.createElement('span');
+        text.textContent = camera.label;
+        label.appendChild(input);
+        label.appendChild(text);
+        box.appendChild(label);
+      }
+    }
+
+    function renderStreamTiles(cameras) {
+      const ids = selectedCameraIds();
+      const streams = document.getElementById('streams');
+      const currentKey = streams.dataset.key || '';
+      const nextKey = ids.join('|');
+      if (currentKey === nextKey && streams.children.length > 0) return;
+      streams.dataset.key = nextKey;
+      streams.innerHTML = '';
+      const byId = Object.fromEntries(cameras.map(c => [c.id, c]));
+      for (const id of ids) {
+        const camera = byId[id] || {id, label: id};
+        const tile = document.createElement('div');
+        tile.className = 'tile';
+        tile.dataset.camera = id;
+        tile.innerHTML = `<div class="tile-head"><span class="tile-title"></span><span class="tile-meta"></span></div><img alt="">`;
+        tile.querySelector('.tile-title').textContent = camera.label;
+        tile.querySelector('img').alt = camera.label;
+        streams.appendChild(tile);
+      }
+    }
+
+    function updateCameraStatus(cameras) {
+      const selected = selectedCameraIds();
+      const active = cameras.filter(c => selected.includes(c.id));
+      const ages = active.map(c => c.shared && c.shared.age_s != null ? `${c.label}:${c.shared.age_s}s` : `${c.label}:waiting`);
+      document.getElementById('frameCount').textContent = active.length ? `${active.length} view(s)` : '-';
+      document.getElementById('frameAge').textContent = ages.length ? ages.join(' | ') : '-';
+      for (const camera of cameras) {
+        const tile = document.querySelector(`.tile[data-camera="${camera.id}"]`);
+        if (!tile) continue;
+        const shared = camera.shared || {};
+        tile.querySelector('.tile-meta').textContent = shared.fresh ? `${shared.age_s}s` : 'waiting';
+      }
+    }
+
     async function refreshStatus() {
       const res = await fetch('/api/status');
       const data = await res.json();
+      latestCameras = data.cameras || [];
       document.getElementById('status').textContent = data.ok ? 'online' : 'offline';
-      document.getElementById('cameraStatus').textContent = data.camera.status;
+      document.getElementById('cameraStatus').textContent = data.frame_source;
       const sourceEl = document.getElementById('cameraSource');
-      sourceEl.textContent = data.camera.label || data.camera.source;
-      sourceEl.title = data.camera.source;
-      document.getElementById('frameCount').textContent = data.camera.frame_count;
-      document.getElementById('frameAge').textContent = data.camera.frame_age_s + ' s';
+      sourceEl.textContent = data.shared_dir || '-';
+      sourceEl.title = data.shared_dir || '';
       document.getElementById('angle1').textContent = data.angle ? data.angle.angle1 : '-';
       document.getElementById('angle2').textContent = data.angle ? data.angle.angle2 : '-';
-      const select = document.getElementById('cameraSelect');
-      if (select.children.length === 0) {
-        for (const item of data.cameras) {
-          const source = typeof item === 'string' ? item : item.source;
-          const label = typeof item === 'string' ? item : item.label;
-          const available = typeof item === 'string' ? true : item.available;
-          const opt = document.createElement('option');
-          opt.value = source;
-          opt.textContent = available ? label : `${label} (missing)`;
-          opt.title = source;
-          if (source === data.camera.source) opt.selected = true;
-          select.appendChild(opt);
-        }
-      }
+      renderCameraChecks(latestCameras);
+      renderStreamTiles(latestCameras);
+      updateCameraStatus(latestCameras);
     }
     async function act(action) {
       const repeat = document.getElementById('repeat').value;
@@ -439,23 +576,18 @@ HTML = r"""<!doctype html>
       setTimeout(refreshStatus, 650);
     }
     let streamActive = true;
-    let streamDelayMs = 125;
+    let streamDelayMs = 180;
 
     function startSnapshotLoop() {
-      const img = document.getElementById('stream');
       function loadNext() {
         if (!streamActive) return;
-        img.src = '/snapshot.jpg?t=' + Date.now();
+        for (const img of document.querySelectorAll('.tile img')) {
+          const camera = img.closest('.tile').dataset.camera;
+          img.src = `/snapshot.jpg?camera=${encodeURIComponent(camera)}&t=${Date.now()}`;
+        }
       }
       loadNext();
       setInterval(loadNext, streamDelayMs);
-    }
-
-    async function setCamera() {
-      const source = document.getElementById('cameraSelect').value;
-      await fetch(`/api/camera?source=${encodeURIComponent(source)}`);
-      document.getElementById('stream').src = '/snapshot.jpg?t=' + Date.now();
-      setTimeout(refreshStatus, 500);
     }
     refreshStatus();
     setInterval(refreshStatus, 1000);
@@ -475,21 +607,14 @@ class AppHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         query = urllib.parse.parse_qs(parsed.query)
-        camera_state = self.server.camera.snapshot()
-        camera_state["label"] = self.server.camera_label(camera_state["source"])
         if parsed.path == "/":
             self._send_html(HTML)
         elif parsed.path == "/stream.mjpg":
-            self._stream_mjpeg()
+            self._stream_mjpeg(query)
         elif parsed.path == "/snapshot.jpg":
-            self._send_snapshot()
+            self._send_snapshot(query)
         elif parsed.path == "/api/status":
-            self._send_json({
-                "ok": True,
-                "camera": camera_state,
-                "angle": self.server.angles.snapshot(),
-                "cameras": self.server.camera_options,
-            })
+            self._send_json(self.server.status_payload())
         elif parsed.path == "/api/action":
             self._handle_action(query)
         elif parsed.path == "/api/camera":
@@ -519,10 +644,11 @@ class AppHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
-    def _send_snapshot(self) -> None:
-        jpeg = self.server.camera.get_jpeg()
+    def _send_snapshot(self, query: dict[str, list[str]]) -> None:
+        camera_id = self.server.camera_id_from_query(query)
+        jpeg = self.server.get_jpeg(camera_id)
         if not jpeg:
-            self.send_error(HTTPStatus.SERVICE_UNAVAILABLE, "no camera frame")
+            self.send_error(HTTPStatus.SERVICE_UNAVAILABLE, f"no frame for {camera_id}")
             return
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "image/jpeg")
@@ -533,7 +659,8 @@ class AppHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(jpeg)
 
-    def _stream_mjpeg(self) -> None:
+    def _stream_mjpeg(self, query: dict[str, list[str]]) -> None:
+        camera_id = self.server.camera_id_from_query(query)
         self.send_response(HTTPStatus.OK)
         self.send_header("Age", "0")
         self.send_header("Cache-Control", "no-cache, private")
@@ -542,7 +669,7 @@ class AppHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
         while True:
-            jpeg = self.server.camera.get_jpeg()
+            jpeg = self.server.get_jpeg(camera_id)
             if jpeg:
                 try:
                     self.wfile.write(b"--frame\r\n")
@@ -552,7 +679,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.wfile.write(b"\r\n")
                 except (BrokenPipeError, ConnectionResetError):
                     return
-            time.sleep(1.0 / max(1, self.server.camera.fps))
+            time.sleep(1.0 / max(1, self.server.fps))
 
     def _handle_action(self, query: dict[str, list[str]]) -> None:
         action = query.get("action", [""])[0]
@@ -573,6 +700,12 @@ class AppHandler(BaseHTTPRequestHandler):
         if not source:
             self._send_json({"ok": False, "error": "missing source"}, HTTPStatus.BAD_REQUEST)
             return
+        if self.server.camera is None:
+            self._send_json(
+                {"ok": False, "error": "direct camera is disabled in shared mode"},
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
         if source not in self.server.allowed_camera_sources:
             self._send_json({"ok": False, "error": f"camera not allowed: {source}"}, HTTPStatus.BAD_REQUEST)
             return
@@ -582,24 +715,81 @@ class AppHandler(BaseHTTPRequestHandler):
 
 class HeadCameraServer(ThreadingHTTPServer):
     def __init__(self, addr: tuple[str, int], handler: type[BaseHTTPRequestHandler],
-                 camera: CameraStream, angles: AngleReceiver, head: HeadUdpController,
-                 camera_options: list[dict[str, Any]]):
+                 camera: CameraStream | None, angles: AngleReceiver, head: HeadUdpController,
+                 camera_options: list[dict[str, Any]], shared: SharedFrameStore,
+                 frame_source: str, fps: int):
         super().__init__(addr, handler)
         self.camera = camera
         self.angles = angles
         self.head = head
+        self.shared = shared
+        self.frame_source = frame_source
+        self.fps = fps
         self.camera_options = camera_options
         self.allowed_camera_sources = {item["source"] for item in camera_options}
 
     def camera_label(self, source: str) -> str:
         return camera_label_for_source(source, self.camera_options)
 
+    def camera_id_from_query(self, query: dict[str, list[str]]) -> str:
+        value = query.get("camera", ["head"])[0]
+        return camera_id_for_value(value, self.camera_options)
+
+    def _direct_camera_id(self) -> str:
+        if self.camera is None:
+            return ""
+        return camera_id_for_value(self.camera.source, self.camera_options)
+
+    def get_jpeg(self, camera_id: str) -> bytes | None:
+        if self.frame_source in ("shared", "auto"):
+            jpeg = self.shared.read_jpeg(camera_id)
+            if jpeg:
+                return jpeg
+        if self.frame_source in ("direct", "auto") and self.camera is not None:
+            if camera_id == self._direct_camera_id():
+                return self.camera.get_jpeg()
+        return None
+
+    def status_payload(self) -> dict[str, Any]:
+        self.camera_options = list_camera_options(self.shared)
+        self.allowed_camera_sources = {item["source"] for item in self.camera_options}
+        direct = None
+        if self.camera is not None:
+            direct = self.camera.snapshot()
+            direct["label"] = self.camera_label(direct["source"])
+        return {
+            "ok": True,
+            "frame_source": self.frame_source,
+            "shared_dir": self.shared.directory,
+            "direct_camera": direct,
+            "camera": direct or {
+                "status": "shared",
+                "source": self.shared.directory,
+                "frame_count": None,
+                "frame_age_s": None,
+                "label": "shared frames",
+            },
+            "angle": self.angles.snapshot(),
+            "cameras": self.camera_options,
+        }
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--camera", default="head", help="head, wrist_a, wrist_b, or one of their configured device paths")
+    parser.add_argument("--camera", default="head", help="head, right_wrist, left_wrist, wrist_a, wrist_b, or a configured device path")
+    parser.add_argument(
+        "--frame-source",
+        choices=("shared", "direct"),
+        default=os.environ.get("HEAD_CAMERA_FRAME_SOURCE", "shared"),
+        help="shared reads /tmp/grabber_camera_frames without opening cameras; direct opens one camera device",
+    )
+    parser.add_argument(
+        "--shared-dir",
+        default=os.environ.get("CAMERA_SHARE_DIR", DEFAULT_SHARED_DIR),
+        help="directory containing shared camera jpg/json files",
+    )
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--fps", type=int, default=15)
@@ -611,14 +801,28 @@ def main() -> None:
     args = parse_args()
     angles = AngleReceiver()
     head = HeadUdpController(angles)
-    camera_options = list_camera_options()
+    shared = SharedFrameStore(args.shared_dir)
+    camera_options = list_camera_options(shared)
     camera_source = choose_camera_source(args.camera, camera_options)
-    camera = CameraStream(camera_source, args.width, args.height, args.fps, args.quality)
+    camera = None
+    if args.frame_source == "direct":
+        camera = CameraStream(camera_source, args.width, args.height, args.fps, args.quality)
 
     angles.start()
-    camera.start()
+    if camera is not None:
+        camera.start()
     try:
-        server = HeadCameraServer((args.host, args.port), AppHandler, camera, angles, head, camera_options)
+        server = HeadCameraServer(
+            (args.host, args.port),
+            AppHandler,
+            camera,
+            angles,
+            head,
+            camera_options,
+            shared,
+            args.frame_source,
+            args.fps,
+        )
     except PermissionError as exc:
         if exc.errno == errno.EACCES and args.port < 1024:
             print(f"ERROR: port {args.port} is a privileged port on Linux.")
@@ -635,14 +839,19 @@ def main() -> None:
             return
         raise
     print(f"Head camera control: http://{args.host}:{args.port}")
-    print(f"Camera source: {camera_source}")
+    print(f"Frame source: {args.frame_source}")
+    if camera is None:
+        print(f"Shared frame dir: {shared.directory}")
+    else:
+        print(f"Camera source: {camera_source}")
     print("Use Ctrl+C to stop.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        camera.stop()
+        if camera is not None:
+            camera.stop()
         angles.stop()
         server.server_close()
 
