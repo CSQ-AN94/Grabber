@@ -13,6 +13,7 @@ from typing import Sequence
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from .console import ProgressReporter
 from .core import (
     DemoParams,
     SafetyAbort,
@@ -727,18 +728,32 @@ class RobotSession:
                     f"最大关节差={start_error:.2f}°，上限={start_tolerance_deg:.2f}°"
                 )
         dense = self._dense_joint_path(actual_start, points_deg, max_step_deg)
-        LOG.info("SDK 执行 MoveIt 轨迹: %d 个密集关节点", len(dense))
+        LOG.info(
+            "SDK 执行 MoveIt 轨迹: %d 个密集关节点，速度 %d%%",
+            len(dense),
+            speed,
+        )
+        # Each point is a separate blocking movej, so a long path is minutes
+        # of apparent silence.  Report progress: an operator watching the
+        # e-stop must be able to tell motion from a hang.
+        progress = ProgressReporter(
+            "轨迹执行", len(dense), logger=LOG
+        )
         for index, joints in enumerate(dense, 1):
             if self.stop_event.is_set():
+                progress.close("用户停止")
                 raise SafetyAbort("用户停止")
+            progress.update(index - 1)
             rc = self.arm.rm_movej(joints, speed, 0, 0, 1)
             if rc != 0:
+                progress.close(f"第 {index} 点失败")
                 raise SafetyAbort(
                     f"MoveIt 轨迹点 {index}/{len(dense)} 执行失败: {rc}"
                 )
             self.current_tcp()
             feedback = np.asarray(self.joints_deg(), dtype=float)
             if feedback.shape != (7,) or not np.all(np.isfinite(feedback)):
+                progress.close(f"第 {index} 点反馈无效")
                 self.hold()
                 raise SafetyAbort(
                     "轨迹执行关节反馈含非有限数或维度无效，已停止继续下发"
@@ -750,11 +765,13 @@ class RobotSession:
                 not np.isfinite(tracking_error)
                 or tracking_error > tracking_tolerance_deg
             ):
+                progress.close(f"第 {index} 点跟踪超差")
                 raise SafetyAbort(
                     "轨迹执行反馈偏差过大，已停止继续下发: "
                     f"点 {index}/{len(dense)} 最大关节差={tracking_error:.2f}°，"
                     f"上限={tracking_tolerance_deg:.2f}°"
                 )
+        progress.close()
 
     def gripper_state(self) -> dict:
         """Read the installed RM Plus end-effector, not the legacy gripper API."""

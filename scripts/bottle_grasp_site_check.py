@@ -18,6 +18,7 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from bottle_grasp import console
 from bottle_grasp.demo import BottleDemo
 from bottle_grasp.site_check import (
     SiteCheckRunner,
@@ -69,12 +70,11 @@ def main() -> int:
     cli = parser.parse_args()
 
     Path(cli.output_dir).mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
-
+    logging.basicConfig(level=logging.INFO, handlers=[])
     demo = BottleDemo(build_args(cli), load_config(cli.config))
+    demo.timeline = console.install(
+        latest_log=Path(cli.output_dir) / "latest.log"
+    )
 
     def request_stop(signum=None, frame=None):
         LOG.warning("收到停止请求，体检中止")

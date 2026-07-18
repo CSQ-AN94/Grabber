@@ -23,6 +23,7 @@ from .camera_access import (
     hardware_reset_camera,
     prepare_camera_access,
 )
+from . import console
 from .collision import check_approach_corridor
 from .core import (
     BottleDetectionLost,
@@ -69,6 +70,9 @@ class BottleDemo:
         self.run_dir = Path(args.output_dir) / run_name
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.run_log_handler = logging.FileHandler(self.run_dir / "run.log")
+        # Evidence file: keeps DEBUG-level per-frame detail that the console
+        # deliberately hides.
+        self.run_log_handler.setLevel(logging.DEBUG)
         self.run_log_handler.setFormatter(
             logging.Formatter("%(asctime)s %(levelname)s %(message)s")
         )
@@ -88,6 +92,9 @@ class BottleDemo:
         self.scene_boxes: list[dict] = []
         self.head_scene_captured_monotonic: Optional[float] = None
         self.grasp_rotation: Optional[np.ndarray] = None
+        # Set by the entry point when console presentation is installed; the
+        # workflow must stay runnable (tests, embedding) without it.
+        self.timeline: Optional[console.RunTimeline] = None
 
     @property
     def T_flange_wrist_camera(self) -> np.ndarray:
@@ -114,7 +121,16 @@ class BottleDemo:
         )
 
     def stage(self, name: str, message: str = ""):
-        LOG.info("[%s] %s", name, message)
+        # The stage flag lets the console formatter render workflow phases
+        # differently from detail lines; file handlers ignore it.
+        LOG.info(
+            "%s %s" if message else "%s%s",
+            name,
+            message,
+            extra={console.STAGE_FLAG: True},
+        )
+        if self.timeline is not None:
+            self.timeline.mark(name)
         self.state.update(stage=name, message=message)
 
     @staticmethod
@@ -511,7 +527,10 @@ class BottleDemo:
             mads.append(mad)
             detections.append(detection)
             pixels.append(pixel)
-            LOG.info(
+            # Per-frame detail is evidence, not something an operator needs
+            # seven copies of on screen; the console shows the consensus line
+            # below, the run log keeps every frame at DEBUG.
+            LOG.debug(
                 "%s 帧 %d box=%s conf=%.3f base=[%.3f, %.3f, %.3f]",
                 label,
                 len(camera_points),
@@ -1054,13 +1073,13 @@ class BottleDemo:
 
         self.stage(
             name,
-            f"{len(plan['points_deg'])} 个 MoveIt 轨迹点，SDK {self.params.travel_speed}%",
+            f"{len(plan['points_deg'])} 个 MoveIt 轨迹点，SDK {self.params.transit_speed}%",
         )
         motion_error: BaseException | None = None
         try:
             self.robot.execute_planned_joints(
                 plan["points_deg"],
-                self.params.travel_speed,
+                self.params.transit_speed,
                 self.params.planned_joint_step_deg,
                 expected_start_joints_deg=plan.get("start_joints_deg"),
                 start_tolerance_deg=self.params.planned_start_tolerance_deg,

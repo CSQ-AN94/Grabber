@@ -42,6 +42,23 @@ class DemoParams:
     pregrasp_standoff_m: float = 0.085
     segment_m: float = 0.045
     lift_m: float = 0.05
+    # Three motion regimes with genuinely different risk, so they get
+    # separate knobs instead of one shared number:
+    #   transit_speed — the global MoveIt leg to the observation pose.  Fully
+    #     collision-validated, in free space, nowhere near the bottle.  This
+    #     is the leg that dominates cycle time (2026-07-18: 146 blocking
+    #     movej points took ~90 s at 3%).
+    #   travel_speed  — local straight-line approach toward the pregrasp
+    #     hover point; close to the object, keep conservative.
+    #   final_speed   — final approach, lift, lower, retreat; contact-adjacent.
+    # 2026-07-19, operator-approved: transit raised 3% -> 15% after the
+    # 2026-07-18 run spent ~90 s stepping 146 blocking movej points through
+    # free space.  The two contact-adjacent regimes below stay at 3%.
+    # Still executed as discrete blocking points (走一步停一下); switching to
+    # SDK connect=1 continuous trajectories would remove the remaining
+    # start/stop overhead but would also rewrite the per-point feedback
+    # contract, so it waits for real measured execution residuals.
+    transit_speed: int = 15
     travel_speed: int = 3
     final_speed: int = 3
     j4_singularity_deg: float = 8.0

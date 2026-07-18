@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from bottle_grasp import console
 from bottle_grasp.core import SafetyAbort
 from bottle_grasp.demo import BottleDemo
 from utils.config import load_config
@@ -143,15 +144,13 @@ def main() -> int:
             "with legacy phase flags"
         )
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler(Path(args.output_dir) / "latest.log"),
-        ],
-    )
+    logging.basicConfig(level=logging.INFO, handlers=[])
     demo = BottleDemo(args, load_config(args.config))
+    # Full detail keeps going to latest.log and the per-run run.log; the
+    # terminal gets phase structure, live progress and timing instead.
+    demo.timeline = console.install(
+        latest_log=Path(args.output_dir) / "latest.log"
+    )
 
     def request_stop(signum=None, frame=None):
         LOG.warning(
@@ -175,6 +174,13 @@ def main() -> int:
         return 1
     finally:
         demo.close()
+        # Where the wall clock actually went.  Printed on success and on
+        # failure alike: a slow run and an aborted run are both worth
+        # attributing to a phase.
+        if demo.timeline is not None:
+            summary = demo.timeline.render()
+            if summary:
+                print(summary)
 
 
 if __name__ == "__main__":
