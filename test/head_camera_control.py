@@ -67,9 +67,9 @@ CAMERA_SPECS = [
         "label": "右腕相机",
         "shared_name": "right_wrist",
         "env": "RIGHT_WRIST_CAMERA",
-        "aliases": ["wrist_b", "/dev/video20"],
+        "aliases": ["wrist_b", "/dev/video14"],
         "candidates": [
-            "/dev/video20",
+            "/dev/video14",
             "/dev/v4l/by-path/platform-3610000.usb-usb-0:3.2.4.3:1.3-video-index0",
         ],
     },
@@ -78,9 +78,9 @@ CAMERA_SPECS = [
         "label": "左腕相机",
         "shared_name": "left_wrist",
         "env": "LEFT_WRIST_CAMERA",
-        "aliases": ["wrist_a", "/dev/video14"],
+        "aliases": ["wrist_a", "/dev/video20"],
         "candidates": [
-            "/dev/video14",
+            "/dev/video20",
             "/dev/v4l/by-path/platform-3610000.usb-usb-0:3.2.4.4:1.3-video-index0",
         ],
     },

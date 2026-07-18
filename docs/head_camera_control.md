@@ -137,13 +137,13 @@ python3 head_camera_control.py --camera head --host 0.0.0.0 --port 8765
 | 名称 | 默认设备 |
 | --- | --- |
 | 头部相机 | `head`，共享帧 `head.jpg` |
-| 右腕相机 | `right_wrist`，共享帧 `right_wrist.jpg` |
-| 左腕相机 | `left_wrist`，共享帧 `left_wrist.jpg` |
+| 右腕相机 | `right_wrist`，direct 默认 `/dev/video14`，共享帧 `right_wrist.jpg` |
+| 左腕相机 | `left_wrist`，direct 默认 `/dev/video20`，共享帧 `left_wrist.jpg` |
 
 只有在 `direct` 直连模式下，才会用到底层设备号。设备顺序变化时可以启动前用环境变量覆盖：
 
 ```bash
-HEAD_CAMERA=/dev/video4 RIGHT_WRIST_CAMERA=/dev/video20 LEFT_WRIST_CAMERA=/dev/video14 FRAME_SOURCE=direct ./run_head_camera_control.sh
+HEAD_CAMERA=/dev/video4 RIGHT_WRIST_CAMERA=/dev/video14 LEFT_WRIST_CAMERA=/dev/video20 FRAME_SOURCE=direct ./run_head_camera_control.sh
 ```
 
 ## 常见问题
