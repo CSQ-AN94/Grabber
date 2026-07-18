@@ -153,6 +153,7 @@ class BottleDemo:
                 height=height,
                 fps=self.cfg.camera.fps,
                 strict_serial=True,
+                shared_name=camera_name,
             )
             if self.camera.initialization_successful:
                 self.camera.start()
@@ -535,6 +536,65 @@ class BottleDemo:
                     )
         return candidates
 
+    def _grasp_precheck_ok(
+        self, target: PlanTarget, target_base: np.ndarray
+    ) -> bool:
+        """预演从该观察位出发的抓取接近段，抓不动的观察位直接淘汰。
+
+        2026-07-18 真机 observe 实测的教训：观察位只按"转移代价+3°硬限位
+        余量"选，选出了 J2 距限位 3.3° 的端点——人到了，抓取阶段 5 个 roll
+        全部死于"J2 距限位过近"。观察位和抓取不是两个独立问题：这里用
+        candidate_path() 完全相同的几何（观察姿态朝向作为抓取朝向、同一组
+        roll 候选、同样的围栏+IK+奇异检查），从候选关节角出发做纯离线预演，
+        限位余量用更宽的 observation_grasp_margin_deg——头部定位和腕部精
+        定位之间目标会漂移约 3cm，软余量给这段漂移留关节空间。
+        """
+        tcp = target.flange @ self.T_flange_tcp
+        base_rotation = tcp[:3, :3]
+        precheck_params = replace(
+            self.params,
+            joint_limit_margin_deg=self.params.observation_grasp_margin_deg,
+        )
+        for roll_deg in (0, 15, -15, 30, -30):
+            rotation = base_rotation @ Rotation.from_euler(
+                "z", roll_deg, degrees=True
+            ).as_matrix()
+            axis = rotation[:, 2]
+            grasp = np.eye(4)
+            grasp[:3, :3] = rotation
+            grasp[:3, 3] = target_base
+            pregrasp = grasp.copy()
+            pregrasp[:3, 3] = (
+                target_base - axis * self.params.pregrasp_standoff_m
+            )
+            pregrasp_pose = matrix_pose(pregrasp)
+            grasp_pose = matrix_pose(grasp)
+            approach_path = interpolate_poses(
+                pregrasp_pose, grasp_pose, self.params.segment_m
+            )
+            try:
+                for index, pose in enumerate(
+                    [pregrasp_pose, *approach_path], 1
+                ):
+                    self.safety.assert_tcp_point(
+                        pose[:3], label=f"抓取预检路径点 {index}"
+                    )
+                self.robot.plan_ik(
+                    [pregrasp_pose, *approach_path],
+                    precheck_params,
+                    allow_first_jump=True,
+                    seed_joints_deg=target.goal_joints,
+                )
+                return True
+            except SafetyAbort as exc:
+                LOG.debug(
+                    "%s 抓取预检 roll %+d° 不可行: %s",
+                    target.label,
+                    roll_deg,
+                    exc,
+                )
+        return False
+
     def _observation_plan_targets(
         self, target_base: np.ndarray
     ) -> list[PlanTarget]:
@@ -567,15 +627,29 @@ class BottleDemo:
                 LOG.debug("观察位候选 %d 被拒绝: %s", index, exc)
         if not accepted:
             raise SafetyAbort("所有右腕观察位候选均越界、近限位或逆解失败")
-        accepted.sort(key=lambda target: target.score)
+        graspable = []
+        for target in accepted:
+            if self._grasp_precheck_ok(target, np.asarray(target_base)):
+                graspable.append(target)
+            else:
+                LOG.info(
+                    "%s 通过端点检查但抓取预检不可行，淘汰", target.label
+                )
+        if not graspable:
+            raise SafetyAbort(
+                f"{len(accepted)} 个观察位端点全部未通过抓取预检"
+                "（从这些姿态出发的接近段会撞限位/奇异/围栏）——"
+                "目标可能位于可达边缘，考虑调整瓶子位置或移动底盘"
+            )
+        graspable.sort(key=lambda target: target.score)
         self.stage(
             "生成右腕观察位候选",
             (
-                f"端点通过 {len(accepted)} 个；"
+                f"端点通过 {len(accepted)} 个，抓取预检通过 {len(graspable)} 个；"
                 f"最多尝试前 {self.params.global_plan_max_candidates} 个"
             ),
         )
-        return accepted
+        return graspable
 
     def _select_observation_flange(
         self, target_base: np.ndarray

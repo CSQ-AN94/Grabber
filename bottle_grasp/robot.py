@@ -352,11 +352,23 @@ class RobotSession:
         params: DemoParams,
         *,
         allow_first_jump: bool = False,
+        seed_joints_deg: Sequence[float] | None = None,
     ) -> list[list[float]]:
+        """Solve a sequential IK chain with limit/singularity/jump guards.
+
+        seed_joints_deg lets callers check a hypothetical path from a pose the
+        arm is *not* currently in (e.g. grasp-feasibility precheck of an
+        observation candidate before ever moving there). No motion happens
+        here either way.
+        """
         self._set_algo_tool_z(
             self.model_flange_offset_m + self.tcp_z_m
         )
-        q = self.joints_deg()
+        q = (
+            list(map(float, seed_joints_deg))
+            if seed_joints_deg is not None
+            else self.joints_deg()
+        )
         rc_min, qmin = self.arm.rm_get_joint_min_pos()
         rc_max, qmax = self.arm.rm_get_joint_max_pos()
         if rc_min != 0 or rc_max != 0:

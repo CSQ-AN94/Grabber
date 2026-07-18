@@ -74,6 +74,11 @@ class DemoParams:
     # box. The bounds keep failure deterministic instead of retrying forever.
     global_plan_max_candidates: int = 8
     global_plan_attempts_per_candidate: int = 2
+    # 选观察位时预演后续抓取接近段用的软限位余量。2026-07-18 真机 observe：
+    # 端点只按 3° 硬余量过关，选出 J2=129.2°（距限位 3.3°）的观察位，到位
+    # 后 5 个抓取 roll 全部死于"J2 距限位过近"。预检余量必须显著大于硬
+    # 余量，给"头部定位→腕部精定位"之间约 3cm 的目标漂移留出关节空间。
+    observation_grasp_margin_deg: float = 10.0
     replan_exclusion_size_m: float = 0.10
     head_width: int = 848
     head_height: int = 480

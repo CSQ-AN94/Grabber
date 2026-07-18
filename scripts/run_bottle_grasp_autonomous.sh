@@ -12,6 +12,13 @@ set -euo pipefail
 # 这些检查仍然只能避开已建模的物体；显示器、杂物等未进入场景时无法自动避让，
 # 所以运行前仍须清空周围并由人守急停。
 #
+# 2026-07-18：头部定位阶段（plan/observe/grasp/cycle，不含 finish）现在
+# 每轮从头部点云实测桌面并在 ±12cm 内自适应 table_top 电子围栏（跟着底盘
+# 停靠位置走），超出容差会直接拒跑并提示重新测量——不再需要底盘小幅挪动
+# 就手动改 safety_profiles.json。日志里找"桌面围栏自适应"这条 stage 确认
+# 生效。run_bottle_grasp_resume.sh（跳过头部相机的续抓模式）不受益于这项，
+# 它仍按原来的方式依赖静态围栏配置。
+#
 # 用法（在 Mac 上执行，自动同步代码到机器人并远程运行）：
 #   scripts/run_bottle_grasp_autonomous.sh plan     # 纯离线：头部定位+MoveIt规划，不动机器人
 #   scripts/run_bottle_grasp_autonomous.sh observe  # 真机移动到观察位+腕部定位，不抓取
