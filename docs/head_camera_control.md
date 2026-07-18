@@ -6,6 +6,8 @@
 
 默认运行在 `shared` 模式：网页只读取其他机器人程序发布出来的最新 JPEG 帧，不直接打开 `/dev/video*` 或 RealSense pipeline，因此可以和夹水瓶 demo 同时运行。
 
+注意：`shared` 模式本身不采图。只有夹水瓶 demo 或其他使用 `sensors.CameraThread` 的程序正在运行并发布共享帧时，网页画面才会实时刷新。如果共享帧超过 3 秒没有更新，网页会显示 `stale` 或等待提示图，而不是继续显示旧照片。
+
 ## 文件
 
 - `test/head_camera_control.py`：网页服务和实时画面刷新，默认不占用相机设备
@@ -136,13 +138,25 @@ ls -lh /tmp/grabber_camera_frames/
 
 ### 画面看起来没有刷新
 
-看画面左上角的 `frame` 数字和时间。如果它们不变，说明服务端没有读到新帧。
+先看右侧 `Age` 或每个画面标题栏：
+
+- `0.xs` / `1.xs`：共享帧正在更新，是实时画面
+- `stale 10s` 之类：网页服务在跑，但共享帧已经过期；通常是夹水瓶 demo / `CameraThread` 没有运行，或对应相机没有被打开
+- `waiting`：还没有对应相机的共享帧文件
+
+默认 `shared` 模式不直接打开相机，所以单独启动网页服务时，如果没有其他程序发布共享帧，它不会凭空产生实时画面。
 
 可以重启服务：
 
 ```bash
 Ctrl+C
 ./run_head_camera_control.sh
+```
+
+如果只是单独测试摄像头画面、确认没有夹水瓶 demo 或其他视觉程序在用相机，可以临时使用直连模式：
+
+```bash
+FRAME_SOURCE=direct ./run_head_camera_control.sh head
 ```
 
 ### 网页打不开

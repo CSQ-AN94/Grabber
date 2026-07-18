@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import html
 import json
 import os
 import select
@@ -175,7 +176,9 @@ class SharedFrameStore:
             os.path.join(self.directory, f"{safe_id}.json"),
         )
 
-    def read_jpeg(self, camera_id: str) -> bytes | None:
+    def read_jpeg(self, camera_id: str, require_fresh: bool = True) -> bytes | None:
+        if require_fresh and not self.info(camera_id).get("fresh"):
+            return None
         jpg_path, _ = self._paths(camera_id)
         try:
             with open(jpg_path, "rb") as fh:
@@ -540,17 +543,23 @@ HTML = r"""<!doctype html>
       }
     }
 
+    function sharedStatusText(shared) {
+      if (!shared) return 'waiting';
+      if (shared.fresh) return `${shared.age_s}s`;
+      if (shared.exists && shared.age_s != null) return `stale ${shared.age_s}s`;
+      return 'waiting';
+    }
+
     function updateCameraStatus(cameras) {
       const selected = selectedCameraIds();
       const active = cameras.filter(c => selected.includes(c.id));
-      const ages = active.map(c => c.shared && c.shared.age_s != null ? `${c.label}:${c.shared.age_s}s` : `${c.label}:waiting`);
+      const ages = active.map(c => `${c.label}:${sharedStatusText(c.shared)}`);
       document.getElementById('frameCount').textContent = active.length ? `${active.length} view(s)` : '-';
       document.getElementById('frameAge').textContent = ages.length ? ages.join(' | ') : '-';
       for (const camera of cameras) {
         const tile = document.querySelector(`.tile[data-camera="${camera.id}"]`);
         if (!tile) continue;
-        const shared = camera.shared || {};
-        tile.querySelector('.tile-meta').textContent = shared.fresh ? `${shared.age_s}s` : 'waiting';
+        tile.querySelector('.tile-meta').textContent = sharedStatusText(camera.shared);
       }
     }
 
@@ -647,17 +656,20 @@ class AppHandler(BaseHTTPRequestHandler):
     def _send_snapshot(self, query: dict[str, list[str]]) -> None:
         camera_id = self.server.camera_id_from_query(query)
         jpeg = self.server.get_jpeg(camera_id)
-        if not jpeg:
-            self.send_error(HTTPStatus.SERVICE_UNAVAILABLE, f"no frame for {camera_id}")
+        if jpeg:
+            self._send_image(jpeg, "image/jpeg")
             return
+        self._send_image(self.server.placeholder_svg(camera_id), "image/svg+xml; charset=utf-8")
+
+    def _send_image(self, payload: bytes, content_type: str) -> None:
         self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Type", content_type)
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
-        self.send_header("Content-Length", str(len(jpeg)))
+        self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-        self.wfile.write(jpeg)
+        self.wfile.write(payload)
 
     def _stream_mjpeg(self, query: dict[str, list[str]]) -> None:
         camera_id = self.server.camera_id_from_query(query)
@@ -742,13 +754,46 @@ class HeadCameraServer(ThreadingHTTPServer):
 
     def get_jpeg(self, camera_id: str) -> bytes | None:
         if self.frame_source in ("shared", "auto"):
-            jpeg = self.shared.read_jpeg(camera_id)
+            jpeg = self.shared.read_jpeg(camera_id, require_fresh=True)
             if jpeg:
                 return jpeg
         if self.frame_source in ("direct", "auto") and self.camera is not None:
             if camera_id == self._direct_camera_id():
                 return self.camera.get_jpeg()
         return None
+
+    def placeholder_svg(self, camera_id: str) -> bytes:
+        info = self.shared.info(camera_id)
+        label = camera_id
+        for option in self.camera_options:
+            if option["id"] == camera_id:
+                label = option["label"]
+                break
+
+        if info.get("exists") and info.get("age_s") is not None:
+            detail = f"last shared frame is {info['age_s']}s old"
+        else:
+            detail = "no shared frame file yet"
+        mode = "shared mode waits for CameraThread frames" if self.frame_source == "shared" else "direct camera has no frame"
+        lines = [
+            "Waiting for fresh camera frame",
+            f"{label} ({camera_id})",
+            detail,
+            mode,
+        ]
+        escaped = [html.escape(str(line), quote=False) for line in lines]
+        svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 480">
+  <rect width="640" height="480" fill="#07090d"/>
+  <rect x="34" y="34" width="572" height="412" rx="10" fill="#151922" stroke="#323946" stroke-width="2"/>
+  <circle cx="82" cy="92" r="10" fill="#f5b85b"/>
+  <text x="108" y="100" fill="#edf1f7" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="25" font-weight="650">{escaped[0]}</text>
+  <text x="56" y="168" fill="#edf1f7" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="22">{escaped[1]}</text>
+  <text x="56" y="214" fill="#f5b85b" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="20">{escaped[2]}</text>
+  <text x="56" y="260" fill="#98a2b3" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="18">{escaped[3]}</text>
+  <text x="56" y="306" fill="#98a2b3" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="18">Run bottle demo/CameraThread, or use direct mode when cameras are free.</text>
+</svg>
+"""
+        return svg.encode("utf-8")
 
     def status_payload(self) -> dict[str, Any]:
         self.camera_options = list_camera_options(self.shared)
