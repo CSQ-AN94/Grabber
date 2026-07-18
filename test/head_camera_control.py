@@ -332,6 +332,9 @@ class CameraStream:
     def stop(self) -> None:
         self._stop.set()
 
+    def join(self, timeout: float = 2.0) -> None:
+        self._thread.join(timeout=timeout)
+
     def set_source(self, source: str) -> None:
         with self._lock:
             self.source = source
@@ -445,6 +448,9 @@ HTML = r"""<!doctype html>
     button:active { transform:translateY(1px); }
     .wide { grid-column:1 / span 3; font-size:14px; }
     input, select { width:100%; min-height:36px; color:var(--text); background:#10151d; border:1px solid var(--line); border-radius:6px; padding:0 9px; }
+    .mode-buttons { display:grid; grid-template-columns:1fr 1fr; gap:8px; width:100%; }
+    .mode-buttons button { height:36px; font-size:13px; }
+    .mode-buttons button[aria-pressed="true"] { border-color:var(--accent); color:#0b1712; background:var(--accent); }
     .camera-options { display:grid; gap:8px; }
     .camera-option { display:flex; align-items:center; gap:9px; min-height:34px; padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:#10151d; font-size:13px; }
     .camera-option input { width:auto; min-height:0; }
@@ -485,6 +491,14 @@ HTML = r"""<!doctype html>
       </div>
 
       <div class="section">
+        <div class="row"><span class="label">Mode</span><div class="mode-buttons">
+          <button id="modeShared" onclick="setMode('shared')" aria-pressed="false">Shared</button>
+          <button id="modeDirect" onclick="setMode('direct')" aria-pressed="false">Direct</button>
+        </div></div>
+        <div class="row"><span class="label">Direct</span><select id="directCamera" onchange="directCameraChanged()"></select></div>
+      </div>
+
+      <div class="section">
         <div class="row"><span class="label">View</span><span class="value">选择一路或多路画面</span></div>
         <div id="cameraChecks" class="camera-options"></div>
         <p class="small">Default mode reads shared frames from /tmp/grabber_camera_frames, so this page does not open camera devices while demos are running.</p>
@@ -493,7 +507,9 @@ HTML = r"""<!doctype html>
   </main>
   <script>
     let lastCameraKey = '';
+    let lastDirectKey = '';
     let latestCameras = [];
+    let latestStatus = null;
 
     function selectedCameraIds() {
       return Array.from(document.querySelectorAll('.camera-check:checked')).map(el => el.value);
@@ -519,6 +535,24 @@ HTML = r"""<!doctype html>
         label.appendChild(input);
         label.appendChild(text);
         box.appendChild(label);
+      }
+    }
+
+    function renderDirectOptions(cameras, directId) {
+      const select = document.getElementById('directCamera');
+      const key = cameras.map(c => c.id + ':' + c.label + ':' + c.source).join('|');
+      if (key !== lastDirectKey) {
+        lastDirectKey = key;
+        select.innerHTML = '';
+        for (const camera of cameras) {
+          const option = document.createElement('option');
+          option.value = camera.id;
+          option.textContent = camera.label;
+          select.appendChild(option);
+        }
+      }
+      if (directId && Array.from(select.options).some(opt => opt.value === directId)) {
+        select.value = directId;
       }
     }
 
@@ -572,9 +606,15 @@ HTML = r"""<!doctype html>
       }
     }
 
+    function updateModeControls(data) {
+      document.getElementById('modeShared').setAttribute('aria-pressed', data.frame_source === 'shared' ? 'true' : 'false');
+      document.getElementById('modeDirect').setAttribute('aria-pressed', data.frame_source === 'direct' ? 'true' : 'false');
+    }
+
     async function refreshStatus() {
       const res = await fetch('/api/status');
       const data = await res.json();
+      latestStatus = data;
       latestCameras = data.cameras || [];
       document.getElementById('status').textContent = data.ok ? 'online' : 'offline';
       document.getElementById('cameraStatus').textContent = data.frame_source;
@@ -585,9 +625,29 @@ HTML = r"""<!doctype html>
       document.getElementById('angle1').textContent = data.angle ? data.angle.angle1 : '-';
       document.getElementById('angle2').textContent = data.angle ? data.angle.angle2 : '-';
       renderCameraChecks(latestCameras);
+      renderDirectOptions(latestCameras, data.direct_camera ? data.direct_camera.id : 'head');
       renderStreamTiles(latestCameras);
       updateCameraStatus(latestCameras, data);
+      updateModeControls(data);
     }
+
+    async function setMode(mode) {
+      const directCamera = document.getElementById('directCamera').value || 'head';
+      document.getElementById('status').textContent = 'switching';
+      const res = await fetch(`/api/mode?source=${encodeURIComponent(mode)}&camera=${encodeURIComponent(directCamera)}`);
+      const data = await res.json();
+      if (!data.ok) {
+        document.getElementById('status').textContent = data.error || 'error';
+      }
+      setTimeout(refreshStatus, 350);
+    }
+
+    function directCameraChanged() {
+      if (latestStatus && latestStatus.frame_source === 'direct') {
+        setMode('direct');
+      }
+    }
+
     async function act(action) {
       const repeat = document.getElementById('repeat').value;
       const interval = document.getElementById('interval').value;
@@ -636,6 +696,8 @@ class AppHandler(BaseHTTPRequestHandler):
             self._send_json(self.server.status_payload())
         elif parsed.path == "/api/action":
             self._handle_action(query)
+        elif parsed.path == "/api/mode":
+            self._handle_mode(query)
         elif parsed.path == "/api/camera":
             self._handle_camera(query)
         else:
@@ -717,6 +779,16 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         self._send_json(result)
 
+    def _handle_mode(self, query: dict[str, list[str]]) -> None:
+        source = query.get("source", query.get("mode", [""]))[0]
+        camera_id = query.get("camera", ["head"])[0]
+        try:
+            result = self.server.set_frame_source(source, camera_id)
+        except Exception as exc:  # noqa: BLE001 - return the error to the web UI.
+            self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        self._send_json(result)
+
     def _handle_camera(self, query: dict[str, list[str]]) -> None:
         source = query.get("source", [""])[0]
         if not source:
@@ -739,16 +811,20 @@ class HeadCameraServer(ThreadingHTTPServer):
     def __init__(self, addr: tuple[str, int], handler: type[BaseHTTPRequestHandler],
                  camera: CameraStream | None, angles: AngleReceiver, head: HeadUdpController,
                  camera_options: list[dict[str, Any]], shared: SharedFrameStore,
-                 frame_source: str, fps: int):
+                 frame_source: str, width: int, height: int, fps: int, quality: int):
         super().__init__(addr, handler)
         self.camera = camera
         self.angles = angles
         self.head = head
         self.shared = shared
         self.frame_source = frame_source
+        self.width = width
+        self.height = height
         self.fps = fps
+        self.quality = quality
         self.camera_options = camera_options
         self.allowed_camera_sources = {item["source"] for item in camera_options}
+        self._mode_lock = threading.Lock()
 
     def camera_label(self, source: str) -> str:
         return camera_label_for_source(source, self.camera_options)
@@ -762,14 +838,52 @@ class HeadCameraServer(ThreadingHTTPServer):
             return ""
         return camera_id_for_value(self.camera.source, self.camera_options)
 
+    def _source_for_camera_id(self, camera_id: str) -> str:
+        self.camera_options = list_camera_options(self.shared)
+        self.allowed_camera_sources = {item["source"] for item in self.camera_options}
+        for option in self.camera_options:
+            if option["id"] == camera_id:
+                return option["source"]
+        return choose_camera_source(camera_id, self.camera_options)
+
+    def set_frame_source(self, frame_source: str, camera_id: str = "head") -> dict[str, Any]:
+        if frame_source not in ("shared", "direct"):
+            raise ValueError("source must be shared or direct")
+
+        with self._mode_lock:
+            if frame_source == "shared":
+                old_camera = self.camera
+                self.camera = None
+                self.frame_source = "shared"
+                if old_camera is not None:
+                    old_camera.stop()
+                    old_camera.join()
+                return {"ok": True, "frame_source": self.frame_source}
+
+            source = self._source_for_camera_id(camera_id)
+            if source not in self.allowed_camera_sources:
+                raise ValueError(f"camera not allowed: {source}")
+            if self.camera is None:
+                self.camera = CameraStream(source, self.width, self.height, self.fps, self.quality)
+                self.camera.start()
+            else:
+                self.camera.set_source(source)
+            self.frame_source = "direct"
+            return {"ok": True, "frame_source": self.frame_source, "camera": camera_id, "source": source}
+
     def get_jpeg(self, camera_id: str) -> bytes | None:
-        if self.frame_source in ("shared", "auto"):
+        with self._mode_lock:
+            frame_source = self.frame_source
+            camera = self.camera
+            direct_id = camera_id_for_value(camera.source, self.camera_options) if camera is not None else ""
+
+        if frame_source in ("shared", "auto"):
             jpeg = self.shared.read_jpeg(camera_id, require_fresh=True)
             if jpeg:
                 return jpeg
-        if self.frame_source in ("direct", "auto") and self.camera is not None:
-            if camera_id == self._direct_camera_id():
-                return self.camera.get_jpeg()
+        if frame_source in ("direct", "auto") and camera is not None:
+            if camera_id == direct_id:
+                return camera.get_jpeg()
         return None
 
     def placeholder_svg(self, camera_id: str) -> bytes:
@@ -808,14 +922,17 @@ class HeadCameraServer(ThreadingHTTPServer):
     def status_payload(self) -> dict[str, Any]:
         self.camera_options = list_camera_options(self.shared)
         self.allowed_camera_sources = {item["source"] for item in self.camera_options}
+        with self._mode_lock:
+            frame_source = self.frame_source
+            camera = self.camera
         direct = None
-        if self.camera is not None:
-            direct = self.camera.snapshot()
+        if camera is not None:
+            direct = camera.snapshot()
             direct["label"] = self.camera_label(direct["source"])
-            direct["id"] = self._direct_camera_id()
+            direct["id"] = camera_id_for_value(direct["source"], self.camera_options)
         return {
             "ok": True,
-            "frame_source": self.frame_source,
+            "frame_source": frame_source,
             "shared_dir": self.shared.directory,
             "direct_camera": direct,
             "camera": direct or {
@@ -838,7 +955,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--frame-source",
         choices=("shared", "direct"),
-        default=os.environ.get("HEAD_CAMERA_FRAME_SOURCE", "shared"),
+        default=os.environ.get("FRAME_SOURCE", os.environ.get("HEAD_CAMERA_FRAME_SOURCE", "shared")),
         help="shared reads /tmp/grabber_camera_frames without opening cameras; direct opens one camera device",
     )
     parser.add_argument(
@@ -877,7 +994,10 @@ def main() -> None:
             camera_options,
             shared,
             args.frame_source,
+            args.width,
+            args.height,
             args.fps,
+            args.quality,
         )
     except PermissionError as exc:
         if exc.errno == errno.EACCES and args.port < 1024:

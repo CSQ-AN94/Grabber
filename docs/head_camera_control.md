@@ -12,6 +12,8 @@
 
 - `test/head_camera_control.py`：网页服务和实时画面刷新，默认不占用相机设备
 - `test/run_head_camera_control.sh`：启动脚本，默认使用 `head` 头部相机
+- `test/run_head_camera_shared.sh`：强制 shared 模式启动
+- `test/run_head_camera_direct.sh`：强制 direct 模式启动
 
 ## 运行位置
 
@@ -34,6 +36,29 @@ cd ~/test
 
 ```text
 http://192.168.3.68:8765
+```
+
+## 两种启动模式
+
+shared 模式不打开相机，只读 `/tmp/grabber_camera_frames`，适合和夹水瓶 demo 一起跑：
+
+```bash
+cd ~/Grabber/test
+./run_head_camera_shared.sh
+```
+
+direct 模式会直接打开一路相机，适合单独调摆放、调头部角度：
+
+```bash
+cd ~/Grabber/test
+./run_head_camera_direct.sh head
+```
+
+等价写法：
+
+```bash
+FRAME_SOURCE=shared ./run_head_camera_control.sh head
+FRAME_SOURCE=direct ./run_head_camera_control.sh head
 ```
 
 ## 手动启动
@@ -60,7 +85,7 @@ python3 head_camera_control.py --camera head --host 0.0.0.0 --port 8765
 如果只是独立测试网页、没有其他程序发布共享帧，可以显式开启直连相机模式。注意这个模式会直接打开相机设备，可能和夹水瓶 demo 冲突：
 
 ```bash
-FRAME_SOURCE=direct ./run_head_camera_control.sh head
+./run_head_camera_direct.sh head
 ```
 
 ## 使用
@@ -71,9 +96,13 @@ FRAME_SOURCE=direct ./run_head_camera_control.sh head
 - `↑ / ↓ / ← / →`：调整头部角度
 - `●`：回中
 - `Read Angles`：刷新角度读数
+- `Mode`：在网页端切换 `Shared` / `Direct`
+- `Direct`：选择 direct 模式要直连的相机
 - `View`：可以同时勾选 `头部相机`、`右腕相机`、`左腕相机`
 
 打开网页本身不会移动头部，只有点击方向按钮或回中按钮才会发控制指令。
+
+网页切到 `Shared` 会释放 direct 打开的相机；网页切到 `Direct` 会打开 `Direct` 下拉框里选中的那一路相机。Direct 模式一次只直连一路，其他勾选的画面会显示等待提示。
 
 ## 控制方式
 
@@ -156,7 +185,7 @@ Ctrl+C
 如果只是单独测试摄像头画面、确认没有夹水瓶 demo 或其他视觉程序在用相机，可以临时使用直连模式：
 
 ```bash
-FRAME_SOURCE=direct ./run_head_camera_control.sh head
+./run_head_camera_direct.sh head
 ```
 
 ### 网页打不开
