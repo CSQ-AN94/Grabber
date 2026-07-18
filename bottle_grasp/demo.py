@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import threading
 import time
 from dataclasses import asdict, replace
@@ -1213,7 +1214,38 @@ class BottleDemo:
             )
             time.sleep(self.args.observe_seconds)
             return
+        if getattr(self.args, "confirm_before_grasp", False):
+            self._wait_for_grasp_confirmation()
         self._finish_grasp_from_wrist(wrist_target)
+
+    def _wait_for_grasp_confirmation(self):
+        """观察位人工确认关卡：到位、检测到瓶子后暂停，Enter 继续/STOP 中止。
+
+        跟"跑完 observe 停住、再另开一次 cycle"不同，这一步不重启进程——
+        相机、YOLO 模型、MoveIt 只启动一次（这些初始化合计约 30-40 秒），
+        操作者只是在同一次运行里对着已经到位的真实姿态按 Enter。这也避免
+        了 2026-07-18 那次"observe 停住后接续抓脚本，走的是另一条跳过头部
+        相机/抓取预检的代码路径"——确认后继续走的是同一个 _finish_grasp_
+        from_wrist，跟 grasp/cycle 完全同一条路。
+        """
+        self.stage(
+            "等待人工确认",
+            "已到观察位并检测到水瓶；确认无误后按 Enter 继续抓取，Ctrl+C/STOP 中止",
+        )
+        confirmed = threading.Event()
+
+        def _read_confirmation():
+            try:
+                sys.stdin.readline()
+            except Exception:
+                pass
+            confirmed.set()
+
+        threading.Thread(target=_read_confirmation, daemon=True).start()
+        while not confirmed.is_set():
+            if self.stop_event.wait(0.2):
+                raise SafetyAbort("确认抓取前收到停止请求")
+        self.stage("人工确认通过", "继续执行抓取")
 
     def _finish_grasp_from_wrist(self, wrist_target: Localization):
         """续抓/普通模式收尾：抓取抬升后按 --place-back/--return-home 决定后续动作。"""

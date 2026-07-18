@@ -216,6 +216,16 @@
 具体命令、参数含义看 [demos_overview.md](demos_overview.md) 第三节，那里列得
 很全，这里不重复。
 
+**2026-07-18 追加 `watch` 子命令**（`run_bottle_grasp_autonomous.sh watch`）：
+在同一次运行里完成"到观察位确认+抓取"，不用像之前那样跑完 `observe`
+再切到 `run_bottle_grasp_resume.sh cycle`——那种拼接走的是完全不同的
+代码路径（resume 跳过头部相机/抓取预检），2026-07-18 当天就是这么拼出
+了"观察位选得到但抓取脱节"的问题。`watch` 到观察位并检出瓶子后在终端
+暂停，操作者确认真实姿态没问题、按 Enter 再继续，走的是跟 `grasp`/
+`cycle` 完全同一条 `_finish_grasp_from_wrist` 路径，且不重启进程（省约
+30-40秒的相机/YOLO/MoveIt 初始化）。Ctrl+C/STOP 在等待期间仍然立即生效
+（轮询 `stop_event`，不是裸 `input()` 阻塞）。未真机验证。
+
 ## 抓取核心逻辑（两套流程共用，别重复造）
 
 `bottle_grasp/demo.py` 的 `_grasp_and_lift()`：空夹基线标定→直线分段接近

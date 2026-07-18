@@ -50,6 +50,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="execute only through wrist observation and localization",
     )
     parser.add_argument(
+        "--confirm-before-grasp",
+        action="store_true",
+        help=(
+            "到达观察位、检测到水瓶后暂停等待终端 Enter 再继续抓取；"
+            "同一进程内暂停，不重启相机/YOLO/MoveIt。与 --stop-after-observation"
+            "互斥（后者直接不抓取退出）"
+        ),
+    )
+    parser.add_argument(
         "--place-back",
         action="store_true",
         help="抓取抬升后把瓶子放回桌面并退开（不加则保持抓着不动）",
@@ -93,6 +102,11 @@ def main() -> int:
     args = build_parser().parse_args()
     if args.execute and args.plan_only:
         raise SystemExit("--execute and --plan-only are mutually exclusive")
+    if args.confirm_before_grasp and args.stop_after_observation:
+        raise SystemExit(
+            "--confirm-before-grasp and --stop-after-observation are "
+            "mutually exclusive"
+        )
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,

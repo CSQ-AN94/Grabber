@@ -22,13 +22,20 @@ set -euo pipefail
 # 用法（在 Mac 上执行，自动同步代码到机器人并远程运行）：
 #   scripts/run_bottle_grasp_autonomous.sh plan     # 纯离线：头部定位+MoveIt规划，不动机器人
 #   scripts/run_bottle_grasp_autonomous.sh observe  # 真机移动到观察位+腕部定位，不抓取
+#   scripts/run_bottle_grasp_autonomous.sh watch    # observe+cycle 一次运行内完成：到观察位并检出水瓶后
+#                                                    #   暂停等终端 Enter，确认后继续抓取+抬升+放回+返回初始姿态
 #   scripts/run_bottle_grasp_autonomous.sh grasp    # 真机抓取+抬升，保持
-#   scripts/run_bottle_grasp_autonomous.sh cycle    # 真机抓取+抬升+放回+退开+返回初始姿态
+#   scripts/run_bottle_grasp_autonomous.sh cycle    # 真机抓取+抬升+放回+退开+返回初始姿态（一镜到底，不暂停）
 #   scripts/run_bottle_grasp_autonomous.sh finish   # 夹爪已抓着水瓶（上一轮遗留）：跳过定位/抓取，直接放回+返回初始姿态
 #   scripts/run_bottle_grasp_autonomous.sh selftest # 判定 MoveIt 碰撞检查是否已修好
 #
 # 建议顺序：先 plan 看MoveIt规划出的路径点数/耗时是否正常 → observe 看真机
-# 移动到观察位、瓶子能不能被腕部相机稳定检测到 → 确认无误后再 grasp/cycle。
+# 移动到观察位、瓶子能不能被腕部相机稳定检测到 → 确认无误后用 watch（推荐）
+# 或直接 cycle。watch 和先跑 observe 再另开一次 cycle 的区别：watch 全程
+# 只有一个进程，不重新初始化相机/YOLO/MoveIt（省约30-40秒），且确认后走的
+# 和 grasp/cycle 完全同一条代码路径——不会像"observe 后接续抓脚本"那样切到
+# 另一条跳过头部相机/抓取预检的流程（2026-07-18 真机就是这样把两段流程接
+# 出了衔接问题，watch 就是为了消灭这类拼接风险而加的）。
 
 ROBOT_HOST="${ROBOT_HOST:-rm@192.168.3.68}"
 REMOTE_DIR="${REMOTE_DIR:-/home/rm/Grabber}"
@@ -41,12 +48,13 @@ MODE="${1:-}"
 case "${MODE}" in
   plan)     EXTRA_ARGS="--plan-only"; CAMERA_ARGS="--camera head" ;;
   observe)  EXTRA_ARGS="--execute --stop-after-observation"; CAMERA_ARGS="--camera head --camera right_wrist" ;;
+  watch)    EXTRA_ARGS="--execute --confirm-before-grasp --place-back --return-home"; CAMERA_ARGS="--camera head --camera right_wrist" ;;
   grasp)    EXTRA_ARGS="--execute"; CAMERA_ARGS="--camera head --camera right_wrist" ;;
   cycle)    EXTRA_ARGS="--execute --place-back --return-home"; CAMERA_ARGS="--camera head --camera right_wrist" ;;
   finish)   EXTRA_ARGS="--execute --finish-from-current --place-back --return-home"; CAMERA_ARGS="--camera right_wrist" ;;
   selftest) EXTRA_ARGS="" ;;
   *)
-    echo "用法: $0 {plan|observe|grasp|cycle|finish|selftest}"
+    echo "用法: $0 {plan|observe|watch|grasp|cycle|finish|selftest}"
     exit 1
     ;;
 esac
