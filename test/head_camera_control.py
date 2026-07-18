@@ -550,16 +550,25 @@ HTML = r"""<!doctype html>
       return 'waiting';
     }
 
-    function updateCameraStatus(cameras) {
+    function cameraStatusText(camera, data) {
+      const direct = data.direct_camera || {};
+      if (data.frame_source === 'direct' && direct.id === camera.id) {
+        return direct.frame_age_s != null ? `direct ${direct.frame_age_s}s` : 'direct';
+      }
+      return sharedStatusText(camera.shared);
+    }
+
+    function updateCameraStatus(cameras, data) {
       const selected = selectedCameraIds();
       const active = cameras.filter(c => selected.includes(c.id));
-      const ages = active.map(c => `${c.label}:${sharedStatusText(c.shared)}`);
-      document.getElementById('frameCount').textContent = active.length ? `${active.length} view(s)` : '-';
+      const direct = data.direct_camera || null;
+      const ages = active.map(c => `${c.label}:${cameraStatusText(c, data)}`);
+      document.getElementById('frameCount').textContent = direct ? `frame ${direct.frame_count}` : (active.length ? `${active.length} view(s)` : '-');
       document.getElementById('frameAge').textContent = ages.length ? ages.join(' | ') : '-';
       for (const camera of cameras) {
         const tile = document.querySelector(`.tile[data-camera="${camera.id}"]`);
         if (!tile) continue;
-        tile.querySelector('.tile-meta').textContent = sharedStatusText(camera.shared);
+        tile.querySelector('.tile-meta').textContent = cameraStatusText(camera, data);
       }
     }
 
@@ -570,13 +579,14 @@ HTML = r"""<!doctype html>
       document.getElementById('status').textContent = data.ok ? 'online' : 'offline';
       document.getElementById('cameraStatus').textContent = data.frame_source;
       const sourceEl = document.getElementById('cameraSource');
-      sourceEl.textContent = data.shared_dir || '-';
-      sourceEl.title = data.shared_dir || '';
+      const sourceText = data.direct_camera ? data.direct_camera.source : data.shared_dir;
+      sourceEl.textContent = sourceText || '-';
+      sourceEl.title = sourceText || '';
       document.getElementById('angle1').textContent = data.angle ? data.angle.angle1 : '-';
       document.getElementById('angle2').textContent = data.angle ? data.angle.angle2 : '-';
       renderCameraChecks(latestCameras);
       renderStreamTiles(latestCameras);
-      updateCameraStatus(latestCameras);
+      updateCameraStatus(latestCameras, data);
     }
     async function act(action) {
       const repeat = document.getElementById('repeat').value;
@@ -802,6 +812,7 @@ class HeadCameraServer(ThreadingHTTPServer):
         if self.camera is not None:
             direct = self.camera.snapshot()
             direct["label"] = self.camera_label(direct["source"])
+            direct["id"] = self._direct_camera_id()
         return {
             "ok": True,
             "frame_source": self.frame_source,
