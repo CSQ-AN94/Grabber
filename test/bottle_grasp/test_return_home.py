@@ -144,3 +144,50 @@ def test_place_back_closes_empty_gripper_only_after_retreat():
     last_move = max(i for i, call in enumerate(calls) if call[0] == "move")
     completed_stage = calls.index(("stage", "放回完成"))
     assert retreat_stage < last_move < close_index < completed_stage
+
+
+def test_complete_task_visually_confirms_release_before_empty_close():
+    calls = []
+    demo = demo_module.BottleDemo.__new__(demo_module.BottleDemo)
+    demo.params = demo_module.DemoParams()
+    demo.stage = lambda name, msg="": calls.append(("stage", name))
+
+    class FakeSafety:
+        @staticmethod
+        def assert_tcp_point(_point, *, label):
+            calls.append(("fence", label))
+
+    class FakeRobot:
+        @staticmethod
+        def current_tcp():
+            return np.eye(4)
+
+        @staticmethod
+        def escape_j4_singularity(_params, _safety):
+            return None
+
+        @staticmethod
+        def move_linear(_pose, _speed):
+            calls.append(("move",))
+
+        @staticmethod
+        def open_gripper(_params):
+            calls.append(("open",))
+
+        @staticmethod
+        def close_empty_gripper(_params):
+            calls.append(("close_empty",))
+
+    locked = object()
+    demo.safety = FakeSafety()
+    demo.robot = FakeRobot()
+    demo._plan_ik_avoiding_singularity = lambda path, params, **kwargs: path
+    demo._confirm_released_target = lambda target: calls.append(
+        ("release_confirm", target)
+    )
+
+    demo._place_back(locked)
+
+    assert calls.index(("release_confirm", locked)) < calls.index(
+        ("close_empty",)
+    )

@@ -1,5 +1,12 @@
 # 机械臂避障/运动规划 — 领域介绍 + 本项目的具体应用
 
+> **2026-07-18 当前入口与安全状态：** 现场只运行
+> `scripts/run_bottle_grasp.sh from-observation` 或
+> `scripts/run_bottle_grasp.sh from-start`。旧 `selftest/plan/observe/watch/grasp/cycle/finish`
+> 阶段 launcher 均已停用，**禁止复制本文历史命令执行真机**；MoveIt 全局轨迹现在
+> 必须通过 live scene、同状态 FK、双重密集复核和执行反馈门禁。现场操作只以
+> `docs/bottle_grasp_demo_runbook.md` 为准。
+
 写这份文档的目的：让你（或者你带去问的另一个AI）能快速理解"避障"在机械臂
 控制里到底是什么、有哪几层、以及本项目现在具体卡在哪一层的哪个问题上。
 
@@ -223,20 +230,22 @@ MoveIt 层不需要这套：动态 RGB-D 体素本来就每轮反映真实桌面
   属纵深防御预期行为；若后续频繁发生拖慢规划，再考虑把 padding 微调到
   +3cm，不要动 clearance。
 
-### 4.7 真机复测清单（跑过才算完成）
+### 4.7 当前真机复测清单（完整流程跑过才算完成）
 
-1. `run_bottle_grasp_autonomous.sh selftest` — 确认碰撞链仍健康；
-2. ~~`plan`/`observe` 验证 lvsf+padding 组合~~ **已于 2026-07-18 observe
-   验证**（见 4.6）：规划耗时正常、narrow-band 循环未复现（零星 0.4cm 级
-   拒绝由围栏拦截+自动换路，可接受）；
-3. 人为中断一次规划（Ctrl-C helper），再跑 `plan` — 确认无残留障碍物
-   （日志里 stale REMOVE 数量）；
-4. 桌面自适应容差拒跑：把底盘挪远/近重跑 `plan`，确认禁区顶面跟着变、
-   高度差超过 12cm 时明确拒跑（正常跟随已于 2026-07-18 验证）；
-5. 从垂下姿态跑一次 `finish` — 验证 J4 弯肘逃逸（上次在这里安全中止）；
-6. **抓取预检后的完整 `grasp`/`cycle`** — 验证 4.5：日志应显示"抓取预检
-   通过 Y 个"，选出的观察位不再出现 J2 贴限位，抓取阶段 roll 候选不再
-   全灭。
+旧的阶段命令不能再拼成验收。按风险递增只运行：
+
+1. `scripts/run_bottle_grasp.sh from-observation`：验证当前观察位、半瓶截断关联、
+   共享抓放尾段、固定头部释放确认和正常退出；
+2. 检查本轮 `task_result.json`、`task_journal.jsonl`、现场视频和真实物体终态，不能
+   只看单测或某个 MoveIt `success`；
+3. `scripts/run_bottle_grasp.sh from-start`：验证 live scene、同状态 FK、端点模型、
+   双重密集复核、SDK 跟踪反馈、完整抓放以及返回 home；
+4. 人为中断只在专门的开发诊断环境进行；诊断结果不能替代上述两个完整流程；
+5. 至少连续三轮获得真实 `DONE` 后，才把当前固定布置/profile 记为已验收。更换桌子、
+   标定、瓶型或障碍布局后重新验收。
+
+精确前置条件、终点和遥操恢复方式见
+[当前实机运行手册](../bottle_grasp_demo_runbook.md)。
 
 ## 五、参考资料
 

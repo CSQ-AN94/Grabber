@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import signal
 import sys
 from pathlib import Path
@@ -22,6 +23,14 @@ LOG = logging.getLogger("bottle_demo")
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Right wrist RGB-D bottle grasp demo"
+    )
+    parser.add_argument(
+        "--task-mode",
+        choices=("from-observation", "from-start"),
+        help=(
+            "run one supported real-robot transaction: start at the verified "
+            "right-wrist observation pose, or start with head localization"
+        ),
     )
     parser.add_argument(
         "--execute",
@@ -100,12 +109,38 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
+    if (
+        not args.task_mode
+        and os.environ.get("BOTTLE_GRASP_ALLOW_LEGACY") != "1"
+    ):
+        raise SystemExit(
+            "legacy phase flags are disabled; use --execute --task-mode "
+            "{from-observation|from-start}. Developers may set "
+            "BOTTLE_GRASP_ALLOW_LEGACY=1 for isolated diagnostics only."
+        )
     if args.execute and args.plan_only:
         raise SystemExit("--execute and --plan-only are mutually exclusive")
     if args.confirm_before_grasp and args.stop_after_observation:
         raise SystemExit(
             "--confirm-before-grasp and --stop-after-observation are "
             "mutually exclusive"
+        )
+    if args.task_mode and not args.execute:
+        raise SystemExit("--task-mode requires --execute")
+    if args.task_mode and any(
+        (
+            args.plan_only,
+            args.stop_after_observation,
+            args.confirm_before_grasp,
+            args.place_back,
+            args.return_home,
+            args.resume_at_wrist,
+            args.finish_from_current,
+        )
+    ):
+        raise SystemExit(
+            "--task-mode owns the complete workflow and cannot be combined "
+            "with legacy phase flags"
         )
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
@@ -119,7 +154,10 @@ def main() -> int:
     demo = BottleDemo(args, load_config(args.config))
 
     def request_stop(signum=None, frame=None):
-        LOG.warning("收到停止请求：缓停并保持，不自动后退")
+        LOG.warning(
+            "收到停止请求：后台监控线程正请求控制器缓停；不自动后退。"
+            "硬件急停仍是最终保护"
+        )
         demo.stop_event.set()
 
     signal.signal(signal.SIGINT, request_stop)

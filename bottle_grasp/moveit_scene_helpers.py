@@ -39,6 +39,29 @@ def live_world_object_ids(node, timeout=20.0):
     return [item.id for item in response.scene.world.collision_objects]
 
 
+def live_scene_object_ids(node, timeout=20.0):
+    """Read back world and attached object IDs after applying a scene diff."""
+    client = node.create_client(GetPlanningScene, "/get_planning_scene")
+    wait(client)
+    request = GetPlanningScene.Request()
+    request.components.components = (
+        PlanningSceneComponents.WORLD_OBJECT_NAMES
+        | PlanningSceneComponents.ROBOT_STATE_ATTACHED_OBJECTS
+    )
+    future = client.call_async(request)
+    rclpy.spin_until_future_complete(node, future, timeout_sec=timeout)
+    response = future.result()
+    if response is None:
+        raise RuntimeError("get_planning_scene timed out")
+    return (
+        [item.id for item in response.scene.world.collision_objects],
+        [
+            item.object.id
+            for item in response.scene.robot_state.attached_collision_objects
+        ],
+    )
+
+
 def remove_stale_objects(scene, frame_id, existing_ids):
     """Delete every demo-owned object before re-adding the current request.
 

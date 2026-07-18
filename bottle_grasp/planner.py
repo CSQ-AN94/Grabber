@@ -14,11 +14,14 @@ from typing import Sequence
 import numpy as np
 
 from .core import SafetyAbort
+from .scene_ids import RGBD_VOXELS_ID
 
 LOG = logging.getLogger("bottle_demo")
 
 
 class MoveItPlanner:
+    enforces_model_contract = True
+
     def __init__(self, project_root: Path, run_dir: Path):
         self.project_root = Path(project_root)
         self.run_dir = Path(run_dir)
@@ -106,6 +109,59 @@ class MoveItPlanner:
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise SafetyAbort(f"{operation} 结果无法解析: {exc}") from exc
 
+    @staticmethod
+    def _normalize_right_arm_trajectory(plan: dict) -> None:
+        """Interpret trajectory columns by name, never by message order."""
+        expected = [f"r_joint{i}" for i in range(1, 8)]
+        names = list(plan.get("joint_names") or [])
+        if (
+            len(names) != len(expected)
+            or len(set(names)) != len(names)
+            or set(names) != set(expected)
+        ):
+            raise SafetyAbort(
+                "MoveIt 右臂轨迹关节集合/顺序契约无效: " + repr(names)
+            )
+        source_index = {name: index for index, name in enumerate(names)}
+        normalized = []
+        for point_index, raw in enumerate(plan.get("points_deg") or [], 1):
+            point = np.asarray(raw, dtype=float)
+            if point.shape != (len(names),) or not np.all(np.isfinite(point)):
+                raise SafetyAbort(
+                    f"MoveIt 轨迹点 {point_index} 维度或数值无效"
+                )
+            normalized.append(
+                [float(point[source_index[name]]) for name in expected]
+            )
+        if not normalized:
+            raise SafetyAbort("MoveIt 返回空轨迹")
+        plan["joint_names"] = expected
+        plan["points_deg"] = normalized
+
+    @staticmethod
+    def _assert_live_scene_contract(
+        result: dict,
+        *,
+        obstacles: Sequence[Sequence[float]],
+        boxes: Sequence[dict],
+        tool_guard: dict,
+    ) -> None:
+        attached_ids = set(result.get("attached_object_ids") or [])
+        if tool_guard and "bottle_tool_guard" not in attached_ids:
+            raise SafetyAbort(
+                "MoveIt live PlanningScene 未发现 bottle_tool_guard，禁止执行"
+            )
+        expected_world_ids = {str(item["id"]) for item in boxes}
+        if obstacles:
+            expected_world_ids.add(RGBD_VOXELS_ID)
+        live_world_ids = set(result.get("world_collision_ids") or [])
+        missing = sorted(expected_world_ids - live_world_ids)
+        if missing:
+            raise SafetyAbort(
+                "MoveIt live PlanningScene 缺少请求的碰撞几何，禁止执行: "
+                + ", ".join(missing[:8])
+            )
+
     def plan(
         self,
         *,
@@ -120,7 +176,22 @@ class MoveItPlanner:
         planning_frame: str,
         tool_guard: dict,
         voxel_size: float,
+        goal_constraint: str = "pose",
+        planner_id: str = "RRTConnectkConfigDefault",
+        allowed_planning_time_s: float = 6.0,
+        num_planning_attempts: int = 12,
     ) -> dict:
+        if goal_constraint not in {"pose", "joints"}:
+            raise SafetyAbort(
+                f"未知 MoveIt 目标约束类型: {goal_constraint!r}"
+            )
+        if (
+            not planner_id
+            or not np.isfinite(allowed_planning_time_s)
+            or allowed_planning_time_s <= 0
+            or int(num_planning_attempts) < 1
+        ):
+            raise SafetyAbort("MoveIt 搜索策略或时间/尝试预算无效")
         request_path = self.run_dir / f"{name}_request.json"
         output_path = self.run_dir / f"{name}_plan.json"
         request_path.write_text(
@@ -134,6 +205,10 @@ class MoveItPlanner:
                     ),
                     "goal_joints_deg": list(map(float, goal_joints_deg)),
                     "target_flange": np.asarray(target_flange, dtype=float).tolist(),
+                    "goal_constraint": goal_constraint,
+                    "planner_id": str(planner_id),
+                    "allowed_planning_time_s": float(allowed_planning_time_s),
+                    "num_planning_attempts": int(num_planning_attempts),
                     "obstacles": [list(map(float, item)) for item in obstacles],
                     "boxes": list(boxes),
                     "workspace": workspace,
@@ -153,8 +228,33 @@ class MoveItPlanner:
             output_path=output_path,
             timeout_s=40,
         )
+        self._assert_live_scene_contract(
+            plan,
+            obstacles=obstacles,
+            boxes=boxes,
+            tool_guard=tool_guard,
+        )
         if not plan.get("success"):
-            raise SafetyAbort(f"MoveIt2 规划失败: error={plan.get('error_code')}")
+            contacts = plan.get("goal_state_contacts") or []
+            detail = (
+                f"; 候选关节终态碰撞={contacts[:3]}"
+                if contacts
+                else ""
+            )
+            raise SafetyAbort(
+                "MoveIt2 规划失败: "
+                f"error={plan.get('error_code')}; "
+                f"goal_constraint={plan.get('goal_constraint', goal_constraint)}"
+                f"{detail}"
+            )
+        self._normalize_right_arm_trajectory(plan)
+        required_fk = ("start_link7_fk", "endpoint_link7_fk")
+        missing_fk = [name for name in required_fk if not plan.get(name)]
+        if missing_fk:
+            raise SafetyAbort(
+                "MoveIt2 未返回运行时 FK 对齐证据，禁止执行: "
+                + ", ".join(missing_fk)
+            )
         LOG.info(
             "MoveIt2 规划 %s 成功: %d 点, %.3fs",
             name,
@@ -205,6 +305,12 @@ class MoveItPlanner:
             request_path=request_path,
             output_path=output_path,
             timeout_s=90,
+        )
+        self._assert_live_scene_contract(
+            validation,
+            obstacles=obstacles,
+            boxes=boxes,
+            tool_guard=tool_guard,
         )
         if not validation.get("success"):
             raise SafetyAbort(

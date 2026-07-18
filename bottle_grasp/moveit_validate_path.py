@@ -10,7 +10,11 @@ import sys
 import rclpy
 from moveit_msgs.msg import PlanningScene, RobotState
 from moveit_msgs.srv import ApplyPlanningScene, GetStateValidity
-from moveit_scene_helpers import build_request_scene, wait
+from moveit_scene_helpers import (
+    build_request_scene,
+    live_scene_object_ids,
+    wait,
+)
 from sensor_msgs.msg import JointState
 
 
@@ -38,6 +42,9 @@ def main():
         rclpy.spin_until_future_complete(node, future, timeout_sec=20)
         if future.result() is None or not future.result().success:
             raise RuntimeError("failed to apply validation scene")
+        world_collision_ids, attached_object_ids = live_scene_object_ids(
+            node, timeout=10
+        )
 
         right_names = [f"r_joint{i}" for i in range(1, 8)]
         left_names = [f"l_joint{i}" for i in range(1, 8)]
@@ -84,6 +91,8 @@ def main():
                 else invalid[0]["index"] + 1
             ),
             "invalid": invalid,
+            "world_collision_ids": world_collision_ids,
+            "attached_object_ids": attached_object_ids,
         }
         with open(output_path, "w", encoding="utf-8") as stream:
             json.dump(output, stream, indent=2)

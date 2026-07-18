@@ -12,6 +12,7 @@ the Cartesian path from the new pose.
 import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -224,3 +225,29 @@ def test_plan_local_leg_skips_escape_when_not_in_band():
     )
     assert result == _straight_down_path()
     assert not any("弯肘逃逸" in name for name in stages)
+
+
+def test_complete_task_never_uses_unplanned_j4_escape_bypass():
+    demo = demo_module.BottleDemo.__new__(demo_module.BottleDemo)
+    demo.args = SimpleNamespace(task_mode="from-start")
+    demo.safety = _AcceptAllFence()
+    demo.stage = lambda *_args, **_kwargs: None
+
+    class InBandTaskRobot:
+        @staticmethod
+        def joints_deg():
+            return [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+
+        @staticmethod
+        def escape_j4_singularity(*_args, **_kwargs):
+            raise AssertionError("complete task must not call escape movej")
+
+    demo.robot = InBandTaskRobot()
+    built = []
+
+    with pytest.raises(SafetyAbort, match="禁止用未经过场景规划"):
+        demo._plan_local_leg(
+            "抬升", lambda: built.append(True) or _straight_down_path(), DemoParams()
+        )
+
+    assert built == []

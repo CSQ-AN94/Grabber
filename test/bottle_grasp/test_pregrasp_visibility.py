@@ -22,6 +22,7 @@ from bottle_grasp.core import (
     SafetyAbort,
 )
 from bottle_grasp.demo import BottleDemo
+from bottle_grasp.target_guard import GuardResult
 
 
 def _localization() -> Localization:
@@ -55,7 +56,7 @@ def _demo_with_two_segment_path():
             self.moves = []
 
         def plan_ik(self, path, params, *, allow_first_jump=False):
-            assert allow_first_jump
+            assert not allow_first_jump
             return [[0.0] * 7 for _ in path]
 
         def move_linear(self, pose, speed):
@@ -175,3 +176,110 @@ def test_pregrasp_path_that_moves_farther_from_locked_bottle_is_rejected():
         demo._approach_pregrasp(_localization())
 
     assert demo.robot.moves == []
+
+
+def test_pregrasp_confirmation_uses_head_when_partial_wrist_view_is_lost():
+    """2026-07-18 replay: after two approach segments the partial wrist
+    detection became 0/3, while the fixed head still confirmed the same
+    locked target.  Presence confirmation must use that independent adapter
+    instead of rerunning full wrist 3-D localization.
+    """
+    demo = BottleDemo.__new__(BottleDemo)
+    target = _localization()
+    head_checks = []
+    stages = []
+    demo.ensure_bottle_visible = lambda target_base=None: (_ for _ in ()).throw(
+        BottleDetectionLost("partial wrist view lost")
+    )
+    demo._confirm_locked_target_from_head = lambda point: head_checks.append(
+        np.asarray(point).copy()
+    )
+    demo.stage = lambda name, message="": stages.append((name, message))
+
+    result = demo._confirm_target_at_pregrasp(target)
+
+    assert result.source == "head"
+    assert result.detection is None
+    np.testing.assert_allclose(head_checks, [target.point_base])
+    assert any(name == "预抓取目标确认" for name, _ in stages)
+
+
+def test_pregrasp_confirmation_returns_the_current_wrist_box():
+    demo = BottleDemo.__new__(BottleDemo)
+    target = _localization()
+    current = Detection((310, 190, 470, 479), 0.88, "bottle")
+    demo.ensure_bottle_visible = lambda target_base=None: current
+    demo._confirm_locked_target_from_head = lambda _: pytest.fail(
+        "current associated wrist detection should be sufficient"
+    )
+    demo.stage = lambda *_: None
+
+    result = demo._confirm_target_at_pregrasp(target)
+
+    assert result.source == "wrist"
+    assert result.detection is current
+
+
+def _demo_capturing_final_corridor(tmp_path, confirmation):
+    demo = BottleDemo.__new__(BottleDemo)
+    demo.params = DemoParams()
+    demo.run_dir = tmp_path
+    demo.stage = lambda *_: None
+    demo._approach_pregrasp = lambda _: None
+    demo._confirm_target_at_pregrasp = lambda _: confirmation
+    pose = [0.0] * 6
+    demo.candidate_path = lambda _: (pose, pose, [])
+    captured = []
+    demo.collision_gate = lambda target_box, target: captured.append(
+        target_box
+    )
+    demo.ensure_bottle_visible = lambda target_base=None: None
+    demo._plan_local_leg = lambda *_args, **_kwargs: []
+    demo._confirm_lifted_target = lambda target: target
+
+    class Robot:
+        @staticmethod
+        def calibrate_empty_close(_params):
+            return 0
+
+        @staticmethod
+        def current_tcp():
+            return np.eye(4)
+
+        @staticmethod
+        def plan_ik(_path, _params):
+            return None
+
+        @staticmethod
+        def move_linear(_pose, _speed):
+            return None
+
+        @staticmethod
+        def close_gripper(_params):
+            return {"pos": [500]}
+
+    demo.robot = Robot()
+    return demo, captured
+
+
+def test_final_corridor_uses_the_current_pregrasp_wrist_box(tmp_path):
+    old = _localization()
+    current = Detection((310, 190, 470, 479), 0.88, "bottle")
+    demo, captured = _demo_capturing_final_corridor(
+        tmp_path, GuardResult("wrist", current)
+    )
+
+    demo._grasp_and_lift(old)
+
+    assert captured == [current.box]
+
+
+def test_final_corridor_has_no_wrist_mask_after_head_only_confirmation(tmp_path):
+    old = _localization()
+    demo, captured = _demo_capturing_final_corridor(
+        tmp_path, GuardResult("head")
+    )
+
+    demo._grasp_and_lift(old)
+
+    assert captured == [None]

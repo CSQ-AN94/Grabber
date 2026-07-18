@@ -1,67 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 复现 2026-07-16 首次成功抓取的标准流程（续抓模式，从观察位开始）。
-#
-# 前置条件（缺一不可）：
-#   1. 右臂已处于观察位：腕部相机距瓶约 30cm，瓶子完整、居中出现在画面里
-#      （用 scripts/wrist_camera_server.py 起直播，浏览器开 http://<robot>:8875 对照拖动）
-#      启动本脚本时会自动停止占用右腕相机的已知预览程序；未知占用者只报告不乱杀
-#      grasp/cycle 同时预检头部相机：腕部关联丢失时会暂停并用头部3帧补充确认
-#   2. 瓶子放稳、周围 15cm 无遮挡
-#   3. 有人守在硬件急停旁
-#   4. bottle_grasp/safety_profiles.json 的 table_demo 桌面禁入区与实际桌面一致
-#      （桌子挪过就要重新量：头部深度实测桌面 z，改 keepout min/max）
-#
-# 用法（在 Mac 上执行，自动同步代码到机器人并远程运行）：
-#   scripts/run_bottle_grasp_resume.sh check   # 第1步：无运动视觉确认（必须先跑）
-#   scripts/run_bottle_grasp_resume.sh grasp   # 第2步：抓取+抬升5cm+保持
-#   scripts/run_bottle_grasp_resume.sh cycle   # 第2步替代：抓取+抬升+放回+退开
-#
-# check 通过标准：日志出现 "共识帧 7/7" 且散布 < 5mm。
-# 任何一步安全中止后：看日志最后的 ERROR 行，对照 docs/bottle_grasp_demo_runbook.md 排查表。
-
-ROBOT_HOST="${ROBOT_HOST:-rm@192.168.3.68}"
-REMOTE_DIR="${REMOTE_DIR:-/home/rm/Grabber}"
-REMOTE_PY="${REMOTE_PY:-/home/rm/miniconda3/envs/tube_vision/bin/python}"
-SAFETY_PROFILE="${SAFETY_PROFILE:-table_demo}"
-PORT="${PORT:-8879}"
-
-MODE="${1:-}"
-case "${MODE}" in
-  check) EXECUTE_ARG=""; CAMERA_ARGS="--camera right_wrist"; EXTRA_ARGS="--stop-after-observation --observe-seconds 2" ;;
-  grasp) EXECUTE_ARG="--execute"; CAMERA_ARGS="--camera head --camera right_wrist"; EXTRA_ARGS="" ;;
-  cycle) EXECUTE_ARG="--execute"; CAMERA_ARGS="--camera head --camera right_wrist"; EXTRA_ARGS="--place-back" ;;
-  *)
-    echo "用法: $0 {check|grasp|cycle}"
-    echo "  check = 无运动视觉确认；grasp = 抓取并保持；cycle = 抓取后放回退开"
-    exit 1
-    ;;
-esac
-
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-echo "== 同步 bottle_grasp 代码到机器人 =="
-(
-  cd "${SCRIPT_DIR}/.."
-  rsync -azR --exclude='__pycache__/' --exclude='*.pyc' \
-    bottle_grasp/ scripts/bottle_grasp_demo.py sensors/camera_thread.py \
-    "${ROBOT_HOST}:${REMOTE_DIR}/"
-)
-
-if [[ "${MODE}" != "check" ]]; then
-  echo ""
-  echo "!! 即将执行真机运动（3% 低速）。确认有人守在急停旁，按 Enter 继续，Ctrl+C 取消 !!"
-  read -r
-fi
-
-echo "== 运行 (${MODE}) =="
-# shellcheck disable=SC2029
-ssh -tt "${ROBOT_HOST}" \
-  "set -o pipefail; cd '${REMOTE_DIR}' && \
-   '${REMOTE_PY}' -m bottle_grasp.camera_access \
-     --config config.yaml ${CAMERA_ARGS} --no-probe && \
-   '${REMOTE_PY}' scripts/bottle_grasp_demo.py \
-     ${EXECUTE_ARG} --resume-at-wrist ${EXTRA_ARGS} \
-     --safety-profile '${SAFETY_PROFILE}' --port '${PORT}' \
-     2>&1 | tee outputs/bottle_grasp/latest.log | grep -v '丢弃'"
+echo "此 launcher 已停用：新的观察位流程不会读取历史定位，也不是 resume。" >&2
+echo "右臂已在观察位时请只运行：" >&2
+echo "  scripts/run_bottle_grasp.sh from-observation" >&2
+exit 2

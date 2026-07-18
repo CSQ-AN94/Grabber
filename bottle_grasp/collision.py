@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 
-from .core import DemoParams, Localization, SafetyAbort
+from .core import DemoParams, SafetyAbort
 
 
 def classify_moveit_collision_probe(
@@ -35,12 +35,17 @@ def check_approach_corridor(
     *,
     camera: Any,
     robot: Any,
-    localization: Localization,
+    target_box: Sequence[int] | None,
     target_base: np.ndarray,
     T_flange_camera: np.ndarray,
     params: DemoParams,
 ) -> int:
-    """Return blocker count or abort if the straight TCP corridor is occupied."""
+    """Return blocker count or abort if the straight TCP corridor is occupied.
+
+    The target's own occupied cylinder is always removed.  A current wrist box
+    narrows that removal further to ``box ∩ cylinder``; head-only confirmation
+    uses the cylinder alone.  Neither case creates a broad clearance hole.
+    """
     _, depth = camera.get_latest_frames()
     K, _ = camera.get_camera_intrinsics()
     if depth is None or K is None:
@@ -54,13 +59,6 @@ def check_approach_corridor(
         & (zz > params.min_depth_m)
         & (zz < params.max_depth_m)
     )
-    x1, y1, x2, y2 = localization.box
-    valid &= ~(
-        (uu >= x1 - 8)
-        & (uu <= x2 + 8)
-        & (vv >= y1 - 8)
-        & (vv <= y2 + 8)
-    )
     z = zz[valid]
     u, v = uu[valid], vv[valid]
     camera_points = np.column_stack(
@@ -73,6 +71,30 @@ def check_approach_corridor(
     )
     T_base_camera = robot.current_flange() @ T_flange_camera
     points = (T_base_camera @ camera_points.T).T[:, :3]
+
+    target = np.asarray(target_base, dtype=float)
+    radial = np.linalg.norm(points[:, :2] - target[:2], axis=1)
+    target_samples = (
+        (radial <= params.target_occupancy_radius_m)
+        & (
+            points[:, 2]
+            >= target[2] - params.target_occupancy_below_grasp_m
+        )
+        & (
+            points[:, 2]
+            <= target[2] + params.target_occupancy_above_grasp_m
+        )
+    )
+    if target_box is not None:
+        x1, y1, x2, y2 = target_box
+        in_current_box = (
+            (u >= x1 - params.target_occupancy_box_pad_px)
+            & (u <= x2 + params.target_occupancy_box_pad_px)
+            & (v >= y1 - params.target_occupancy_box_pad_px)
+            & (v <= y2 + params.target_occupancy_box_pad_px)
+        )
+        target_samples &= in_current_box
+    points = points[~target_samples]
 
     start = robot.current_tcp()[:3, 3]
     vector = target_base - start

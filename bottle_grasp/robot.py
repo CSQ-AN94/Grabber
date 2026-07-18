@@ -11,6 +11,7 @@ import time
 from typing import Sequence
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 from .core import (
     DemoParams,
@@ -550,7 +551,20 @@ class RobotSession:
         tcp_points = [self.tcp_from_joints(joints)[:3, 3] for joints in dense]
         return safety_profile.assert_tcp_path(tcp_points)
 
-    def move_linear(self, pose: Sequence[float], speed: int):
+    def move_linear(
+        self,
+        pose: Sequence[float],
+        speed: int,
+        *,
+        position_tolerance_m: float = 0.008,
+        orientation_tolerance_deg: float = 4.0,
+    ):
+        """Execute one blocking Cartesian leg and verify measured arrival.
+
+        A zero SDK return code only says that the command completed.  Every
+        local grasp/place leg therefore closes the loop with fresh controller
+        state before the next waypoint is allowed to run.
+        """
         if self.stop_event.is_set():
             raise SafetyAbort("用户停止")
         target = list(map(float, pose))
@@ -568,6 +582,36 @@ class RobotSession:
                     f"Python 电子围栏拒绝）: {context}"
                 )
             raise SafetyAbort(f"movel 失败: rc={rc}; {context}")
+        self.assert_arm_healthy()
+        actual = self.current_tcp()
+        expected = pose_matrix(target)
+        position_error = float(
+            np.linalg.norm(actual[:3, 3] - expected[:3, 3])
+        )
+        orientation_error = float(
+            np.degrees(
+                Rotation.from_matrix(
+                    actual[:3, :3].T @ expected[:3, :3]
+                ).magnitude()
+            )
+        )
+        if (
+            not np.isfinite(position_error)
+            or not np.isfinite(orientation_error)
+            or position_error > position_tolerance_m
+            or orientation_error > orientation_tolerance_deg
+        ):
+            # A completed-but-missed move is just as unsafe as a failed one:
+            # downstream collision checks and grasp state would otherwise be
+            # based on a pose that the robot never reached.
+            self.hold()
+            raise SafetyAbort(
+                "movel 执行反馈偏差过大，已停止继续下发: "
+                f"位置差={position_error * 1000:.1f} mm "
+                f"(上限 {position_tolerance_m * 1000:.1f} mm)，"
+                f"姿态差={orientation_error:.1f}° "
+                f"(上限 {orientation_tolerance_deg:.1f}°)"
+            )
 
     def _motion_failure_context(
         self, target: Sequence[float], speed: int
@@ -645,6 +689,10 @@ class RobotSession:
         points_deg: Sequence[Sequence[float]],
         speed: int,
         max_step_deg: float,
+        *,
+        expected_start_joints_deg: Sequence[float] | None = None,
+        start_tolerance_deg: float = 0.8,
+        tracking_tolerance_deg: float = 1.2,
     ) -> None:
         """Execute a dense, collision-checked MoveIt path through SDK movej.
 
@@ -655,9 +703,30 @@ class RobotSession:
             raise SafetyAbort("只规划会话禁止执行运动")
         if not points_deg:
             raise SafetyAbort("规划轨迹为空")
-        dense = self._dense_joint_path(
-            self.joints_deg(), points_deg, max_step_deg
-        )
+        if (
+            not np.isfinite(start_tolerance_deg)
+            or start_tolerance_deg <= 0
+            or not np.isfinite(tracking_tolerance_deg)
+            or tracking_tolerance_deg <= 0
+        ):
+            raise SafetyAbort("轨迹执行反馈容差必须是正的有限数")
+        actual_start = np.asarray(self.joints_deg(), dtype=float)
+        if actual_start.shape != (7,) or not np.all(np.isfinite(actual_start)):
+            raise SafetyAbort("实机规划起点关节反馈含非有限数或维度无效")
+        if expected_start_joints_deg is not None:
+            expected_start = np.asarray(expected_start_joints_deg, dtype=float)
+            if (
+                expected_start.shape != actual_start.shape
+                or not np.all(np.isfinite(expected_start))
+            ):
+                raise SafetyAbort("规划起点关节维度或数值与实机不一致")
+            start_error = float(np.max(np.abs(actual_start - expected_start)))
+            if start_error > start_tolerance_deg:
+                raise SafetyAbort(
+                    "轨迹已过期：实机已偏离规划起点，拒绝执行: "
+                    f"最大关节差={start_error:.2f}°，上限={start_tolerance_deg:.2f}°"
+                )
+        dense = self._dense_joint_path(actual_start, points_deg, max_step_deg)
         LOG.info("SDK 执行 MoveIt 轨迹: %d 个密集关节点", len(dense))
         for index, joints in enumerate(dense, 1):
             if self.stop_event.is_set():
@@ -668,6 +737,24 @@ class RobotSession:
                     f"MoveIt 轨迹点 {index}/{len(dense)} 执行失败: {rc}"
                 )
             self.current_tcp()
+            feedback = np.asarray(self.joints_deg(), dtype=float)
+            if feedback.shape != (7,) or not np.all(np.isfinite(feedback)):
+                self.hold()
+                raise SafetyAbort(
+                    "轨迹执行关节反馈含非有限数或维度无效，已停止继续下发"
+                )
+            tracking_error = float(
+                np.max(np.abs(feedback - np.asarray(joints, dtype=float)))
+            )
+            if (
+                not np.isfinite(tracking_error)
+                or tracking_error > tracking_tolerance_deg
+            ):
+                raise SafetyAbort(
+                    "轨迹执行反馈偏差过大，已停止继续下发: "
+                    f"点 {index}/{len(dense)} 最大关节差={tracking_error:.2f}°，"
+                    f"上限={tracking_tolerance_deg:.2f}°"
+                )
 
     def gripper_state(self) -> dict:
         """Read the installed RM Plus end-effector, not the legacy gripper API."""

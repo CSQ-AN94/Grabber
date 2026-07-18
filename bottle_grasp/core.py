@@ -51,14 +51,36 @@ class DemoParams:
     joint_limit_margin_deg: float = 3.0
     corridor_radius_m: float = 0.045
     obstacle_min_points: int = 18
+    # The target itself is occupied space, not a generic clearance hole.  The
+    # grasp point is roughly two-thirds down the bottle; these asymmetric
+    # bounds cover the physical cylinder while leaving the measured table and
+    # neighbouring objects outside it visible to the local corridor gate.
+    target_occupancy_radius_m: float = 0.038
+    target_occupancy_above_grasp_m: float = 0.18
+    target_occupancy_below_grasp_m: float = 0.055
+    target_occupancy_box_pad_px: int = 8
     frame_timeout_s: float = 1.0
     head_min_depth_m: float = 0.25
     head_max_depth_m: float = 2.2
     scene_voxel_m: float = 0.065
     scene_max_voxels: int = 550
-    scene_target_clearance_m: float = 0.14
+    # Kept for config compatibility only.  Global scene construction must not
+    # erase a clearance sphere around the target: the 2026-07-18 value (14 cm)
+    # could delete real obstacles beside the bottle.  Contact semantics belong
+    # to the later local grasp stage, not the observation-transfer scene.
+    scene_target_clearance_m: float = 0.0
     scene_image_bottom_crop: int = 405
     planned_joint_step_deg: float = 1.5
+    # A MoveIt path is executed by the SDK adapter during the migration to a
+    # FollowJointTrajectory controller.  Refuse stale starts, endpoint model
+    # disagreement and blocking movej feedback that misses its command.
+    planned_start_tolerance_deg: float = 0.8
+    planned_tracking_tolerance_deg: float = 1.2
+    # A collision scene is a planning snapshot, not a timeless fact.  A plan
+    # that took too long to produce is refused before any global motion.
+    scene_max_age_s: float = 45.0
+    moveit_endpoint_position_tolerance_m: float = 0.012
+    moveit_endpoint_orientation_tolerance_deg: float = 4.0
     # 每轮从头部点云拟合真实桌面并在容差内自适应 table_top 围栏。
     # 容差是"底盘每轮停靠位置的正常波动"量级；超出说明物理布置真的变了，
     # 必须重新走 runbook 测量流程而不是让软件猜。
@@ -72,8 +94,21 @@ class DemoParams:
     # Global MoveIt transfer: try several endpoint candidates and feed an
     # independently detected fence violation back as a temporary collision
     # box. The bounds keep failure deterministic instead of retrying forever.
-    global_plan_max_candidates: int = 8
-    global_plan_attempts_per_candidate: int = 2
+    # Exhaust the complete 4x4x3 observation lattice (48 poses) subject to a
+    # wall-clock budget.  Each endpoint is tried with several genuinely
+    # different OMPL planners; "two random calls failed" is not evidence that
+    # no route exists.
+    global_plan_max_candidates: int = 48
+    global_plan_attempts_per_candidate: int = 4
+    global_plan_search_budget_s: float = 120.0
+    moveit_allowed_planning_time_s: float = 6.0
+    moveit_num_planning_attempts: int = 12
+    moveit_planner_ids: tuple[str, ...] = (
+        "RRTConnectkConfigDefault",
+        "LBKPIECEkConfigDefault",
+        "RRTstarkConfigDefault",
+        "PRMstarkConfigDefault",
+    )
     # 选观察位时预演后续抓取接近段用的软限位余量。2026-07-18 真机 observe：
     # 端点只按 3° 硬余量过关，选出 J2=129.2°（距限位 3.3°）的观察位，到位
     # 后 5 个抓取 roll 全部死于"J2 距限位过近"。预检余量必须显著大于硬
@@ -88,6 +123,14 @@ class DemoParams:
     # bottle is still close to the locked base-frame point.  It never silently
     # rewrites the target; a larger shift stops the motion.
     head_confirmation_tolerance_m: float = 0.05
+    # Gripper feedback alone cannot prove the bottle moved.  Independent fixed
+    # head RGB-D must observe a meaningful departure from the table lock and a
+    # point close to the commanded +5 cm lift before the task may become HELD.
+    lift_confirmation_min_displacement_m: float = 0.025
+    lift_confirmation_tolerance_m: float = 0.030
+    # Release likewise requires a fresh 3-D measurement at the original lock;
+    # it may never be synthesized from the lock's prior depth.
+    release_confirmation_tolerance_m: float = 0.035
     # 抓取点高度：检测框顶部向下的比例（0=瓶盖, 1=瓶底）。取偏低的固定
     # 比例而不是深度像素中位数——中位数随每帧有效深度像素分布漂移，导致
     # 每轮抓取高度不一致；太高时腕部相机在近距会丢失目标。

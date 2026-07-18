@@ -96,6 +96,69 @@ def test_scene_builds_generic_rgbd_voxels():
     assert voxels
 
 
+def test_global_scene_never_erases_obstacle_beside_target_or_inside_box():
+    """Regression for the removed 14 cm target hole.
+
+    Observation transfer is non-contact motion.  A point 5 cm beside the
+    bottle must stay occupied even when it projects inside the detector box;
+    otherwise MoveIt is given fabricated free space at exactly the task site.
+    """
+    params = DemoParams(
+        head_min_depth_m=0.25,
+        head_max_depth_m=1.0,
+        scene_voxel_m=0.01,
+        scene_target_clearance_m=0.14,
+        scene_image_bottom_crop=100,
+    )
+    depth = np.full((100, 100), 0.60, np.float32)
+    K = np.array([[100, 0, 50], [0, 100, 50], [0, 0, 1]], float)
+    localization = Localization(
+        point_camera=[0.0, 0.0, 0.60],
+        point_base=[0.0, 0.0, 0.60],
+        pixel=[50.0, 50.0],
+        depth_m=0.60,
+        depth_mad_m=0.001,
+        position_spread_m=0.002,
+        box=[35, 20, 65, 80],
+        confidence=0.9,
+        frame_count=7,
+    )
+
+    voxels = np.asarray(
+        build_scene_voxels(depth, K, np.eye(4), localization, params)
+    )
+
+    # Sample u=60, v=48 is 6.7 cm from the target and lies inside the box.
+    expected = np.array([0.065, -0.015, 0.605])
+    assert np.min(np.linalg.norm(voxels - expected, axis=1)) < 1e-9
+
+
+def test_scene_budget_overflow_aborts_instead_of_dropping_far_obstacles():
+    params = DemoParams(
+        head_min_depth_m=0.25,
+        head_max_depth_m=1.0,
+        scene_voxel_m=0.01,
+        scene_image_bottom_crop=100,
+        scene_max_voxels=5,
+    )
+    depth = np.full((100, 100), 0.60, np.float32)
+    K = np.array([[100, 0, 50], [0, 100, 50], [0, 0, 1]], float)
+    localization = Localization(
+        point_camera=[0.0, 0.0, 0.60],
+        point_base=[0.0, 0.0, 0.60],
+        pixel=[50.0, 50.0],
+        depth_m=0.60,
+        depth_mad_m=0.001,
+        position_spread_m=0.002,
+        box=[35, 20, 65, 80],
+        confidence=0.9,
+        frame_count=7,
+    )
+
+    with pytest.raises(SafetyAbort, match="拒绝丢弃远处障碍"):
+        build_scene_voxels(depth, K, np.eye(4), localization, params)
+
+
 def test_observation_direction_normalization_does_not_mutate_target():
     target = np.array([-0.01, 0.65, -0.04])
     original = target.copy()

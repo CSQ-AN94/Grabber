@@ -84,6 +84,91 @@ def test_movel_minus_6_reports_external_stop_context():
     assert "stale_table_fence" in message
 
 
+class _FeedbackArm:
+    def __init__(self, actual_pose):
+        self.actual_pose = actual_pose
+        self.slow_stop_calls = 0
+
+    def rm_movel(self, pose, speed, radius, connect, block):
+        return 0
+
+    def rm_set_arm_slow_stop(self):
+        self.slow_stop_calls += 1
+        return 0
+
+
+def _feedback_session(actual_pose):
+    session = RobotSession.__new__(RobotSession)
+    session.arm = _FeedbackArm(actual_pose)
+    session.stop_event = threading.Event()
+    session.closed = False
+    session.take_control = True
+    session.assert_arm_healthy = lambda: {}
+    session.current_tcp = lambda: np.asarray(actual_pose, dtype=float)
+    return session
+
+
+def test_movel_rejects_success_code_when_measured_tcp_missed_target():
+    actual = np.eye(4)
+    actual[0, 3] = 0.025
+    session = _feedback_session(actual)
+
+    with pytest.raises(SafetyAbort, match="执行反馈偏差过大"):
+        session.move_linear([0.0] * 6, 3)
+
+    assert session.arm.slow_stop_calls == 1
+
+
+def test_movel_accepts_fresh_feedback_within_pose_tolerance():
+    actual = np.eye(4)
+    actual[0, 3] = 0.002
+    session = _feedback_session(actual)
+
+    session.move_linear([0.0] * 6, 3)
+
+    assert session.arm.slow_stop_calls == 0
+
+
+def test_stop_monitor_interrupts_a_blocking_sdk_move():
+    entered = threading.Event()
+    stopped = threading.Event()
+
+    class BlockingArm(_StoppedMoveArm):
+        def rm_movel(self, pose, speed, radius, connect, block):
+            entered.set()
+            assert stopped.wait(1.0), "slow-stop monitor did not interrupt movel"
+            return -6
+
+        def rm_set_arm_slow_stop(self):
+            stopped.set()
+            return 0
+
+    session = RobotSession.__new__(RobotSession)
+    session.arm = BlockingArm()
+    session.stop_event = threading.Event()
+    session.closed = False
+    monitor = threading.Thread(target=session._monitor_stop, daemon=True)
+    monitor.start()
+    failures = []
+
+    def run_move():
+        try:
+            session.move_linear([0.0] * 6, 3)
+        except SafetyAbort as exc:
+            failures.append(str(exc))
+
+    mover = threading.Thread(target=run_move, daemon=True)
+    mover.start()
+    assert entered.wait(1.0)
+    session.stop_event.set()
+    mover.join(1.0)
+    monitor.join(1.0)
+
+    assert stopped.is_set()
+    assert not mover.is_alive()
+    assert failures and "外部停止" in failures[0]
+
+
 def test_preflight_rejects_enabled_controller_native_fence():
     class FakeRobot:
         def assert_arm_healthy(self):

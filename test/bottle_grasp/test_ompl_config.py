@@ -1,6 +1,7 @@
 """OMPL collision-check discretization override; no ROS required."""
 
 from bottle_grasp.ompl_config import (
+    DIVERSE_PLANNER_CONFIGS,
     OMPL_LONGEST_VALID_SEGMENT_FRACTION,
     apply_collision_check_resolution,
 )
@@ -20,6 +21,11 @@ def test_every_group_section_gets_the_denser_resolution():
         )
     # 平台配置里的 planner_configs 定义不能被当成规划组覆盖。
     assert "longest_valid_segment_fraction" not in result["planner_configs"]
+    assert set(DIVERSE_PLANNER_CONFIGS).issubset(
+        result["right_arm"]["planner_configs"]
+    )
+    for planner_id in DIVERSE_PLANNER_CONFIGS:
+        assert planner_id in result["planner_configs"]
 
 
 def test_planned_arms_are_forced_even_if_yaml_omits_them():

@@ -108,6 +108,10 @@ def test_fence_rejected_moveit_plan_is_replanned_before_execution():
             return [0.0] * 7
 
         @staticmethod
+        def controller_flange_from_joints(_joints):
+            return np.eye(4)
+
+        @staticmethod
         def validate_planned_joints(
             points, max_step, safety, start_joints_deg=None
         ):
@@ -225,6 +229,7 @@ def test_graspable_candidates_survive_and_keep_transfer_cost_order():
     demo.robot = HealthyRobot()
     targets = demo._observation_plan_targets(np.array([0.0, 0.52, -0.11]))
     assert targets
+    assert all(target.goal_constraint == "joints" for target in targets)
     scores = [target.score for target in targets]
     assert scores == sorted(scores)
     assert any(

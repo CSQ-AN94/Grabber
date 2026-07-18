@@ -50,3 +50,139 @@ def test_moveit_malformed_output_becomes_safety_abort(tmp_path, monkeypatch):
 
     with pytest.raises(SafetyAbort, match="结果无法解析"):
         _plan(_planner(tmp_path))
+
+
+def test_moveit_success_requires_live_tool_guard_and_fk_evidence(
+    tmp_path, monkeypatch
+):
+    planner = _planner(tmp_path)
+    payload = {
+        "success": True,
+        "error_code": 1,
+        "planning_time": 0.1,
+        "joint_names": [f"r_joint{i}" for i in range(1, 8)],
+        "points_deg": [[1.0] * 7],
+        "start_link7_fk": {
+            "position": [0, 0, 0],
+            "quaternion_xyzw": [0, 0, 0, 1],
+        },
+        "endpoint_link7_fk": {
+            "position": [0, 0, 0],
+            "quaternion_xyzw": [0, 0, 0, 1],
+        },
+        "attached_object_ids": [],
+        "world_collision_ids": [],
+    }
+    monkeypatch.setattr(planner, "_run_json_helper", lambda **_: payload)
+
+    with pytest.raises(SafetyAbort, match="bottle_tool_guard"):
+        _plan(planner)
+
+
+def test_moveit_request_records_explicit_goal_constraint(tmp_path, monkeypatch):
+    planner = _planner(tmp_path)
+    payload = {
+        "success": True,
+        "error_code": 1,
+        "planning_time": 0.1,
+        "joint_names": [f"r_joint{i}" for i in range(1, 8)],
+        "points_deg": [[1.0] * 7],
+        "start_link7_fk": {
+            "position": [0, 0, 0],
+            "quaternion_xyzw": [0, 0, 0, 1],
+        },
+        "endpoint_link7_fk": {
+            "position": [0, 0, 0],
+            "quaternion_xyzw": [0, 0, 0, 1],
+        },
+        "attached_object_ids": ["bottle_tool_guard"],
+        "world_collision_ids": [],
+    }
+    monkeypatch.setattr(planner, "_run_json_helper", lambda **_: payload)
+
+    _plan(planner)
+
+    request = __import__("json").loads(
+        (tmp_path / "probe_request.json").read_text(encoding="utf-8")
+    )
+    assert request["goal_constraint"] == "pose"
+
+
+def test_moveit_trajectory_columns_are_reordered_by_joint_names(
+    tmp_path, monkeypatch
+):
+    planner = _planner(tmp_path)
+    names = [f"r_joint{i}" for i in (7, 2, 5, 1, 4, 6, 3)]
+    payload = {
+        "success": True,
+        "error_code": 1,
+        "planning_time": 0.1,
+        "joint_names": names,
+        "points_deg": [[float(name.removeprefix("r_joint")) for name in names]],
+        "start_link7_fk": {
+            "position": [0, 0, 0],
+            "quaternion_xyzw": [0, 0, 0, 1],
+        },
+        "endpoint_link7_fk": {
+            "position": [0, 0, 0],
+            "quaternion_xyzw": [0, 0, 0, 1],
+        },
+        "attached_object_ids": ["bottle_tool_guard"],
+        "world_collision_ids": [],
+    }
+    monkeypatch.setattr(planner, "_run_json_helper", lambda **_: payload)
+
+    plan = _plan(planner)
+
+    assert plan["joint_names"] == [f"r_joint{i}" for i in range(1, 8)]
+    assert plan["points_deg"] == [[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]]
+
+
+@pytest.mark.parametrize(
+    "names",
+    [
+        [f"r_joint{i}" for i in range(1, 7)],
+        ["r_joint1"] * 7,
+        [*[f"r_joint{i}" for i in range(1, 7)], "torso_joint"],
+    ],
+)
+def test_moveit_trajectory_rejects_missing_duplicate_or_extra_joint(
+    tmp_path, monkeypatch, names
+):
+    planner = _planner(tmp_path)
+    payload = {
+        "success": True,
+        "error_code": 1,
+        "planning_time": 0.1,
+        "joint_names": names,
+        "points_deg": [[0.0] * len(names)],
+        "start_link7_fk": {
+            "position": [0, 0, 0],
+            "quaternion_xyzw": [0, 0, 0, 1],
+        },
+        "endpoint_link7_fk": {
+            "position": [0, 0, 0],
+            "quaternion_xyzw": [0, 0, 0, 1],
+        },
+        "attached_object_ids": ["bottle_tool_guard"],
+        "world_collision_ids": [],
+    }
+    monkeypatch.setattr(planner, "_run_json_helper", lambda **_: payload)
+
+    with pytest.raises(SafetyAbort, match="轨迹关节集合"):
+        _plan(planner)
+
+
+def test_live_scene_contract_requires_dynamic_rgbd_voxels():
+    result = {
+        "attached_object_ids": ["bottle_tool_guard"],
+        "world_collision_ids": ["fence_table_top"],
+    }
+
+    with pytest.raises(SafetyAbort, match="rgbd_voxels"):
+        MoveItPlanner._assert_live_scene_contract(
+            result,
+            obstacles=[[0.1, 0.2, 0.3]],
+            boxes=[{"id": "fence_table_top"}],
+            tool_guard={"xy": 0.1},
+        )

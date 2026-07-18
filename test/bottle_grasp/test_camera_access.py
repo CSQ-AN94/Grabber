@@ -13,6 +13,7 @@ from bottle_grasp.camera_access import (
     release_known_preview_owners,
 )
 from bottle_grasp.demo import BottleDemo
+from bottle_grasp.core import SafetyAbort
 import bottle_grasp.demo as demo_module
 
 
@@ -182,3 +183,79 @@ def test_demo_rebuilds_pipeline_and_resets_hardware_only_after_two_failures(
     assert cameras[0].stopped
     assert demo.camera is cameras[-1]
     assert resets == ["405622073249"] * expected_resets
+
+
+def test_camera_switch_fails_closed_when_previous_thread_does_not_stop(
+    monkeypatch, tmp_path
+):
+    constructed = []
+
+    class StuckCamera:
+        stopped = False
+
+        def stop(self):
+            self.stopped = True
+
+        @staticmethod
+        def is_alive():
+            return True
+
+        @staticmethod
+        def join(timeout=None):
+            return None
+
+    class NewCamera:
+        def __init__(self, **_kwargs):
+            constructed.append(self)
+            self.initialization_successful = True
+
+        @staticmethod
+        def start():
+            return None
+
+        @staticmethod
+        def get_latest_frames():
+            return object(), object()
+
+        @staticmethod
+        def is_alive():
+            return False
+
+        @staticmethod
+        def stop():
+            return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sensors.camera_thread",
+        SimpleNamespace(CameraThread=NewCamera),
+    )
+    monkeypatch.setattr(demo_module, "prepare_camera_access", lambda _serial: [])
+    monkeypatch.setattr(
+        demo_module,
+        "PreviewWorker",
+        lambda *_args, **_kwargs: SimpleNamespace(start=lambda: None),
+    )
+
+    demo = BottleDemo.__new__(BottleDemo)
+    demo.preview = None
+    demo.camera = StuckCamera()
+    demo.camera_name = "head"
+    demo.wrist_detector = object()
+    demo.project_root = tmp_path
+    demo.params = SimpleNamespace(head_width=848, head_height=480)
+    demo.cfg = SimpleNamespace(
+        camera=SimpleNamespace(
+            serial_for=lambda _: "405622073249",
+            width=640,
+            height=480,
+            fps=30,
+        )
+    )
+    demo.state = SimpleNamespace(update=lambda **_kwargs: None)
+
+    with pytest.raises(SafetyAbort, match="相机线程停止超时"):
+        demo._start_camera("right_wrist")
+
+    assert demo.camera.stopped
+    assert constructed == []

@@ -1,5 +1,11 @@
 # 抓水瓶Demo — 现状交接（更新于 2026-07-17）
 
+> **2026-07-18 当前入口：** 水瓶实机任务只允许
+> `scripts/run_bottle_grasp.sh from-observation` 和
+> `scripts/run_bottle_grasp.sh from-start`。本文中的 `resume/watch/cycle/finish`
+> 是故障演进记录，**禁止复制执行**；旧 launcher 会退出 2。现场命令、正常终点与
+> 验收状态只以 `docs/bottle_grasp_demo_runbook.md` 为准。
+
 分支 `dual-arm-sdk`。这份文档是给"换个窗口继续写代码"用的，目标是让你不用
 重新翻聊天记录就能接上上下文。
 
@@ -210,13 +216,13 @@
 
 | 场景 | 用哪个脚本 | 转移方式 |
 |---|---|---|
-| 右臂已经在观察位，只测抓取 | `scripts/run_bottle_grasp_resume.sh` | 无（已在位） |
-| 从头部定位开始完整跑 | `scripts/run_bottle_grasp_autonomous.sh` | MoveIt自主规划（默认，唯一） |
+| 右臂已经在观察位，完成抓放 | `scripts/run_bottle_grasp.sh from-observation` | 不做全局转移；新鲜头/腕锁定后走共享抓放流程 |
+| 从头部定位开始完整跑 | `scripts/run_bottle_grasp.sh from-start` | MoveIt 自主规划到观察位，再走同一共享抓放流程并返回 home |
 
-具体命令、参数含义看 [demos_overview.md](demos_overview.md) 第三节，那里列得
-很全，这里不重复。
+具体命令、参数含义看 [当前实机运行手册](../bottle_grasp_demo_runbook.md)，这里不重复。
 
-**2026-07-18 追加 `watch` 子命令**（`run_bottle_grasp_autonomous.sh watch`）：
+**以下是历史故障记录，不是命令：** 2026-07-18 曾追加 `watch` 子命令
+（`run_bottle_grasp_autonomous.sh watch`）：
 在同一次运行里完成"到观察位确认+抓取"，不用像之前那样跑完 `observe`
 再切到 `run_bottle_grasp_resume.sh cycle`——那种拼接走的是完全不同的
 代码路径（resume 跳过头部相机/抓取预检），2026-07-18 当天就是这么拼出
@@ -312,11 +318,11 @@ bottle_grasp/
                       "验证状态"表逐功能点核对，不要通读代码就当成已验证）
 
 scripts/
-  bottle_grasp_demo.py       — 入口，argparse
-  run_bottle_grasp_resume.sh — 续抓模式launcher；先单独调camera_access CLI释放
-                      相机所有权，再跑demo
-  run_bottle_grasp_autonomous.sh — 全自主流程launcher（plan/observe/grasp/cycle/finish/selftest）
-  start_bottle_demo.sh       — 最早的launcher（带dashboard，无新参数）
+  run_bottle_grasp.sh        — 当前唯一公开 launcher；只接受 from-observation/from-start
+  bottle_grasp_demo.py       — 机器人端入口；默认拒绝 legacy 阶段参数
+  run_bottle_grasp_resume.sh — 已停用；退出 2 并指向 from-observation
+  run_bottle_grasp_autonomous.sh — 已停用；退出 2 并指向 from-start
+  start_bottle_demo.sh       — 已停用；退出 2 并列出两个新入口
   head_position_lock.py      — bottle_grasp/head_lock.py的人工诊断命令行封装（check/restore）
 
 test/bottle_grasp/（共69个测试，纯逻辑+mock，不连真机/ROS，全部通过不代表真机能跑）
@@ -358,18 +364,19 @@ ArmController都没有，硬塞会把那套也搞乱。
 2. **按"验证状态"表逐项补真机记录**，不要跳过表里标"完全没有真机运行记录"的
    项直接当成能用：`_return_home`、`LockedTargetGuard`/头部补充确认路径、
    `_plan_ik_avoiding_singularity`真正执行成功一次。低速、有人守。
-3. **能连上机器人后第一件事：同步代码跑一次 `observe`，验证 narrow-band
-   拒绝循环是否真的解决了**（这条已经不是"改了没测过"的悬案：根因——
+3. **能连上机器人后先按运行手册低速跑一次 `from-observation`，随后再跑一次
+   `from-start`，验证 narrow-band 拒绝循环及完整任务终点**（历史根因——
    MoveIt 路径采样分辨率过粗——已经在仓库里通过 `bottle_grasp/ompl_config.py`
    直接改 `longest_valid_segment_fraction=0.0025` 从源头收紧，`moveit_headless.py`
    加载时对每个规划组生效，不再需要登录机器人改本地 `ompl_planning.yaml`；
    同时 `safety.py` 的 padding 从 `+5cm` 回调到了 `+2cm`。这两个改动组合
    起来还没有真机测过——如果又反复被拒，先把 padding 临时改回 `+0.05`
    看是否是余量问题）。
-4. **完整跑通一次"头定位→观察位→抓→放回→回初始姿态"**，产出这一版代码下
+4. **让 `from-start` 完整跑通一次"头定位→观察位→抓→放回→回初始姿态"**，产出这一版代码下
    第一次成功的完整记录，不要拿2026-07-16那次（旧代码）的成功背书新代码。
-5. 为货架测量并建模所有板件/立柱，启用前跑 selftest、plan、observe 分级验证
-6. 多验证几次现有流程的稳定性（不同瓶子摆位、不同光照），积累"能不能复现"
+5. 为货架测量并建模所有板件/立柱；启用前按独立诊断流程审计模型，再用
+   `from-start` 做完整现场验收，不能重新启用旧阶段 launcher。
+6. 用两个新入口多验证几次稳定性（不同瓶子摆位、不同光照），积累"能不能复现"
    的证据，而不是只信一次成功
 7. 货架部署：量出货架真实尺寸，填 `safety_profiles.json` 的 `shelf_template`，
    现场验证后把 `verified_for_execution` 改 `true`

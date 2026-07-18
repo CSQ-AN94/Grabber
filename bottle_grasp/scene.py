@@ -96,7 +96,7 @@ def build_scene_voxels(
     """
     if depth is None or K is None:
         raise SafetyAbort("头部点云缺少深度或内参")
-    points, u, v = _base_points(
+    points, _, _ = _base_points(
         depth,
         K,
         T_base_camera,
@@ -105,22 +105,17 @@ def build_scene_voxels(
         max_depth_m=max_depth_m,
         bottom_crop=bottom_crop,
     )
-    x1, y1, x2, y2 = localization.box
-    keep = ~(
-        (u >= x1 - 12)
-        & (u <= x2 + 12)
-        & (v >= y1 - 12)
-        & (v <= y2 + 12)
-    )
-    points = points[keep]
     target = np.asarray(localization.point_base, dtype=float)
 
-    # Keep the local arm work volume, not the entire room.
+    # Keep the local arm work volume, not the entire room.  Do not delete the
+    # detector box or a target-centred sphere here.  The global leg stops at a
+    # wrist observation pose and has no reason to contact the bottle; the old
+    # 14 cm target hole could silently erase a real obstacle beside it.  Local
+    # grasp contact is handled later by the wrist corridor and grasp recipe.
     relative = points - target
     valid_workspace = (
         (np.linalg.norm(relative[:, :2], axis=1) < 0.95)
         & (np.abs(relative[:, 2]) < 0.75)
-        & (np.linalg.norm(relative, axis=1) > params.scene_target_clearance_m)
     )
     points = points[valid_workspace]
     if points.size == 0:
@@ -132,6 +127,12 @@ def build_scene_voxels(
     centers = (unique.astype(float) + 0.5) * voxel
     max_voxels = params.scene_max_voxels if max_voxels is None else max_voxels
     if len(centers) > max_voxels:
-        distance = np.linalg.norm(centers - target, axis=1)
-        centers = centers[np.argsort(distance)[:max_voxels]]
+        # Never manufacture free space to meet a performance budget.  The
+        # previous "nearest to bottle" truncation could drop an obstacle near
+        # the path start while retaining hundreds of table voxels.  The scene
+        # must either be represented in full or the robot must not move.
+        raise SafetyAbort(
+            "头部障碍体素超出安全场景预算，拒绝丢弃远处障碍: "
+            f"{len(centers)} > {max_voxels}。清理视野或调大体素尺寸后重跑"
+        )
     return centers.tolist()
