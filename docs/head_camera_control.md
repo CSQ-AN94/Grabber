@@ -47,11 +47,17 @@ cd ~/Grabber/test
 ./run_head_camera_shared.sh
 ```
 
-direct 模式会直接打开一路相机，适合单独调摆放、调头部角度：
+direct 模式会直接打开相机设备，适合单独调摆放、调头部角度。默认只开头部：
 
 ```bash
 cd ~/Grabber/test
 ./run_head_camera_direct.sh head
+```
+
+也可以一次打开三路：
+
+```bash
+./run_head_camera_direct.sh all
 ```
 
 等价写法：
@@ -97,12 +103,11 @@ python3 head_camera_control.py --camera head --host 0.0.0.0 --port 8765
 - `●`：回中
 - `Read Angles`：刷新角度读数
 - `Mode`：在网页端切换 `Shared` / `Direct`
-- `Direct`：选择 direct 模式要直连的相机
 - `View`：可以同时勾选 `头部相机`、`右腕相机`、`左腕相机`
 
 打开网页本身不会移动头部，只有点击方向按钮或回中按钮才会发控制指令。
 
-网页切到 `Shared` 会释放 direct 打开的相机；网页切到 `Direct` 会打开 `Direct` 下拉框里选中的那一路相机。Direct 模式一次只直连一路，其他勾选的画面会显示等待提示。
+网页切到 `Shared` 会释放 direct 打开的相机；网页切到 `Direct` 会打开 `View` 里勾选的相机。Direct 模式可以同时直连头部、右腕、左腕三路，但会占用这些相机设备，也更吃 USB 带宽。
 
 ## 控制方式
 
@@ -135,7 +140,7 @@ python3 head_camera_control.py --camera head --host 0.0.0.0 --port 8765
 | 右腕相机 | `right_wrist`，共享帧 `right_wrist.jpg` |
 | 左腕相机 | `left_wrist`，共享帧 `left_wrist.jpg` |
 
-只有在 `FRAME_SOURCE=direct` 直连模式下，才会用到底层设备号。设备顺序变化时可以启动前用环境变量覆盖：
+只有在 `direct` 直连模式下，才会用到底层设备号。设备顺序变化时可以启动前用环境变量覆盖：
 
 ```bash
 HEAD_CAMERA=/dev/video4 RIGHT_WRIST_CAMERA=/dev/video20 LEFT_WRIST_CAMERA=/dev/video14 FRAME_SOURCE=direct ./run_head_camera_control.sh
@@ -186,6 +191,12 @@ Ctrl+C
 
 ```bash
 ./run_head_camera_direct.sh head
+```
+
+如果要三路一起看：
+
+```bash
+./run_head_camera_direct.sh all
 ```
 
 ### 网页打不开

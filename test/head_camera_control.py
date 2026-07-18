@@ -165,6 +165,12 @@ def camera_id_for_value(value: str, options: list[dict[str, Any]]) -> str:
     return "head"
 
 
+def camera_ids_for_value(value: str, options: list[dict[str, Any]]) -> list[str]:
+    if value in ("all", "multi", "*"):
+        return [option["id"] for option in options]
+    return [camera_id_for_value(value, options)]
+
+
 class SharedFrameStore:
     def __init__(self, directory: str = DEFAULT_SHARED_DIR):
         self.directory = directory
@@ -495,19 +501,14 @@ HTML = r"""<!doctype html>
           <button id="modeShared" onclick="setMode('shared')" aria-pressed="false">Shared</button>
           <button id="modeDirect" onclick="setMode('direct')" aria-pressed="false">Direct</button>
         </div></div>
-        <div class="row"><span class="label">Direct</span><select id="directCamera" onchange="directCameraChanged()"></select></div>
-      </div>
-
-      <div class="section">
         <div class="row"><span class="label">View</span><span class="value">选择一路或多路画面</span></div>
         <div id="cameraChecks" class="camera-options"></div>
-        <p class="small">Default mode reads shared frames from /tmp/grabber_camera_frames, so this page does not open camera devices while demos are running.</p>
+        <p class="small">Shared reads /tmp/grabber_camera_frames without opening cameras. Direct opens the checked camera devices.</p>
       </div>
     </aside>
   </main>
   <script>
     let lastCameraKey = '';
-    let lastDirectKey = '';
     let latestCameras = [];
     let latestStatus = null;
 
@@ -515,7 +516,7 @@ HTML = r"""<!doctype html>
       return Array.from(document.querySelectorAll('.camera-check:checked')).map(el => el.value);
     }
 
-    function renderCameraChecks(cameras) {
+    function renderCameraChecks(cameras, activeIds = null) {
       const box = document.getElementById('cameraChecks');
       const key = cameras.map(c => c.id + ':' + c.label).join('|');
       if (key === lastCameraKey && box.children.length > 0) return;
@@ -528,31 +529,18 @@ HTML = r"""<!doctype html>
         input.type = 'checkbox';
         input.className = 'camera-check';
         input.value = camera.id;
-        input.checked = camera.id === 'head';
-        input.onchange = () => renderStreamTiles(latestCameras);
+        input.checked = activeIds ? activeIds.includes(camera.id) : camera.id === 'head';
+        input.onchange = () => {
+          renderStreamTiles(latestCameras);
+          if (latestStatus && latestStatus.frame_source === 'direct') {
+            setMode('direct');
+          }
+        };
         const text = document.createElement('span');
         text.textContent = camera.label;
         label.appendChild(input);
         label.appendChild(text);
         box.appendChild(label);
-      }
-    }
-
-    function renderDirectOptions(cameras, directId) {
-      const select = document.getElementById('directCamera');
-      const key = cameras.map(c => c.id + ':' + c.label + ':' + c.source).join('|');
-      if (key !== lastDirectKey) {
-        lastDirectKey = key;
-        select.innerHTML = '';
-        for (const camera of cameras) {
-          const option = document.createElement('option');
-          option.value = camera.id;
-          option.textContent = camera.label;
-          select.appendChild(option);
-        }
-      }
-      if (directId && Array.from(select.options).some(opt => opt.value === directId)) {
-        select.value = directId;
       }
     }
 
@@ -585,8 +573,9 @@ HTML = r"""<!doctype html>
     }
 
     function cameraStatusText(camera, data) {
-      const direct = data.direct_camera || {};
-      if (data.frame_source === 'direct' && direct.id === camera.id) {
+      const directById = Object.fromEntries((data.direct_cameras || []).map(item => [item.id, item]));
+      const direct = directById[camera.id] || null;
+      if (data.frame_source === 'direct' && direct) {
         return direct.frame_age_s != null ? `direct ${direct.frame_age_s}s` : 'direct';
       }
       return sharedStatusText(camera.shared);
@@ -595,9 +584,9 @@ HTML = r"""<!doctype html>
     function updateCameraStatus(cameras, data) {
       const selected = selectedCameraIds();
       const active = cameras.filter(c => selected.includes(c.id));
-      const direct = data.direct_camera || null;
+      const directCount = (data.direct_cameras || []).length;
       const ages = active.map(c => `${c.label}:${cameraStatusText(c, data)}`);
-      document.getElementById('frameCount').textContent = direct ? `frame ${direct.frame_count}` : (active.length ? `${active.length} view(s)` : '-');
+      document.getElementById('frameCount').textContent = directCount ? `${directCount} direct view(s)` : (active.length ? `${active.length} view(s)` : '-');
       document.getElementById('frameAge').textContent = ages.length ? ages.join(' | ') : '-';
       for (const camera of cameras) {
         const tile = document.querySelector(`.tile[data-camera="${camera.id}"]`);
@@ -619,33 +608,30 @@ HTML = r"""<!doctype html>
       document.getElementById('status').textContent = data.ok ? 'online' : 'offline';
       document.getElementById('cameraStatus').textContent = data.frame_source;
       const sourceEl = document.getElementById('cameraSource');
-      const sourceText = data.direct_camera ? data.direct_camera.source : data.shared_dir;
+      const sourceText = (data.direct_cameras || []).length
+        ? (data.direct_cameras || []).map(item => item.source).join(' | ')
+        : data.shared_dir;
       sourceEl.textContent = sourceText || '-';
       sourceEl.title = sourceText || '';
       document.getElementById('angle1').textContent = data.angle ? data.angle.angle1 : '-';
       document.getElementById('angle2').textContent = data.angle ? data.angle.angle2 : '-';
-      renderCameraChecks(latestCameras);
-      renderDirectOptions(latestCameras, data.direct_camera ? data.direct_camera.id : 'head');
+      const directIds = (data.direct_cameras || []).map(item => item.id);
+      renderCameraChecks(latestCameras, directIds.length ? directIds : null);
       renderStreamTiles(latestCameras);
       updateCameraStatus(latestCameras, data);
       updateModeControls(data);
     }
 
     async function setMode(mode) {
-      const directCamera = document.getElementById('directCamera').value || 'head';
+      const cameras = selectedCameraIds();
+      const cameraParam = cameras.length ? cameras.join(',') : 'head';
       document.getElementById('status').textContent = 'switching';
-      const res = await fetch(`/api/mode?source=${encodeURIComponent(mode)}&camera=${encodeURIComponent(directCamera)}`);
+      const res = await fetch(`/api/mode?source=${encodeURIComponent(mode)}&cameras=${encodeURIComponent(cameraParam)}`);
       const data = await res.json();
       if (!data.ok) {
         document.getElementById('status').textContent = data.error || 'error';
       }
       setTimeout(refreshStatus, 350);
-    }
-
-    function directCameraChanged() {
-      if (latestStatus && latestStatus.frame_source === 'direct') {
-        setMode('direct');
-      }
     }
 
     async function act(action) {
@@ -781,9 +767,14 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def _handle_mode(self, query: dict[str, list[str]]) -> None:
         source = query.get("source", query.get("mode", [""]))[0]
-        camera_id = query.get("camera", ["head"])[0]
+        camera_values = query.get("cameras", [])
+        camera_ids: list[str] = []
+        for value in camera_values:
+            camera_ids.extend(item for item in value.split(",") if item)
+        if not camera_ids:
+            camera_ids = query.get("camera", ["head"])
         try:
-            result = self.server.set_frame_source(source, camera_id)
+            result = self.server.set_frame_source(source, camera_ids)
         except Exception as exc:  # noqa: BLE001 - return the error to the web UI.
             self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
             return
@@ -794,26 +785,23 @@ class AppHandler(BaseHTTPRequestHandler):
         if not source:
             self._send_json({"ok": False, "error": "missing source"}, HTTPStatus.BAD_REQUEST)
             return
-        if self.server.camera is None:
+        camera_id = camera_id_for_value(source, self.server.camera_options)
+        if self.server.frame_source != "direct":
             self._send_json(
                 {"ok": False, "error": "direct camera is disabled in shared mode"},
                 HTTPStatus.BAD_REQUEST,
             )
             return
-        if source not in self.server.allowed_camera_sources:
-            self._send_json({"ok": False, "error": f"camera not allowed: {source}"}, HTTPStatus.BAD_REQUEST)
-            return
-        self.server.camera.set_source(source)
-        self._send_json({"ok": True, "source": source})
+        self._send_json(self.server.set_frame_source("direct", [camera_id]))
 
 
 class HeadCameraServer(ThreadingHTTPServer):
     def __init__(self, addr: tuple[str, int], handler: type[BaseHTTPRequestHandler],
-                 camera: CameraStream | None, angles: AngleReceiver, head: HeadUdpController,
+                 direct_cameras: dict[str, CameraStream], angles: AngleReceiver, head: HeadUdpController,
                  camera_options: list[dict[str, Any]], shared: SharedFrameStore,
                  frame_source: str, width: int, height: int, fps: int, quality: int):
         super().__init__(addr, handler)
-        self.camera = camera
+        self.direct_cameras = direct_cameras
         self.angles = angles
         self.head = head
         self.shared = shared
@@ -833,11 +821,6 @@ class HeadCameraServer(ThreadingHTTPServer):
         value = query.get("camera", ["head"])[0]
         return camera_id_for_value(value, self.camera_options)
 
-    def _direct_camera_id(self) -> str:
-        if self.camera is None:
-            return ""
-        return camera_id_for_value(self.camera.source, self.camera_options)
-
     def _source_for_camera_id(self, camera_id: str) -> str:
         self.camera_options = list_camera_options(self.shared)
         self.allowed_camera_sources = {item["source"] for item in self.camera_options}
@@ -846,44 +829,63 @@ class HeadCameraServer(ThreadingHTTPServer):
                 return option["source"]
         return choose_camera_source(camera_id, self.camera_options)
 
-    def set_frame_source(self, frame_source: str, camera_id: str = "head") -> dict[str, Any]:
+    def set_frame_source(self, frame_source: str, camera_ids: list[str] | str = "head") -> dict[str, Any]:
         if frame_source not in ("shared", "direct"):
             raise ValueError("source must be shared or direct")
+        if isinstance(camera_ids, str):
+            camera_ids = [camera_ids]
+        camera_ids = camera_ids or ["head"]
 
         with self._mode_lock:
             if frame_source == "shared":
-                old_camera = self.camera
-                self.camera = None
+                old_cameras = self.direct_cameras
+                self.direct_cameras = {}
                 self.frame_source = "shared"
-                if old_camera is not None:
-                    old_camera.stop()
-                    old_camera.join()
+                for camera in old_cameras.values():
+                    camera.stop()
+                for camera in old_cameras.values():
+                    camera.join()
                 return {"ok": True, "frame_source": self.frame_source}
 
-            source = self._source_for_camera_id(camera_id)
-            if source not in self.allowed_camera_sources:
-                raise ValueError(f"camera not allowed: {source}")
-            if self.camera is None:
-                self.camera = CameraStream(source, self.width, self.height, self.fps, self.quality)
-                self.camera.start()
-            else:
-                self.camera.set_source(source)
+            targets: dict[str, str] = {}
+            for camera_id in camera_ids:
+                source = self._source_for_camera_id(camera_id)
+                if source not in self.allowed_camera_sources:
+                    raise ValueError(f"camera not allowed: {source}")
+                targets[camera_id] = source
+
+            for camera_id, camera in list(self.direct_cameras.items()):
+                if camera_id not in targets:
+                    camera.stop()
+                    camera.join()
+                    del self.direct_cameras[camera_id]
+
+            for camera_id, source in targets.items():
+                camera = self.direct_cameras.get(camera_id)
+                if camera is None:
+                    camera = CameraStream(source, self.width, self.height, self.fps, self.quality)
+                    self.direct_cameras[camera_id] = camera
+                    camera.start()
+                elif camera.source != source:
+                    camera.set_source(source)
             self.frame_source = "direct"
-            return {"ok": True, "frame_source": self.frame_source, "camera": camera_id, "source": source}
+            return {
+                "ok": True,
+                "frame_source": self.frame_source,
+                "cameras": [{"id": camera_id, "source": source} for camera_id, source in targets.items()],
+            }
 
     def get_jpeg(self, camera_id: str) -> bytes | None:
         with self._mode_lock:
             frame_source = self.frame_source
-            camera = self.camera
-            direct_id = camera_id_for_value(camera.source, self.camera_options) if camera is not None else ""
+            camera = self.direct_cameras.get(camera_id)
 
         if frame_source in ("shared", "auto"):
             jpeg = self.shared.read_jpeg(camera_id, require_fresh=True)
             if jpeg:
                 return jpeg
         if frame_source in ("direct", "auto") and camera is not None:
-            if camera_id == direct_id:
-                return camera.get_jpeg()
+            return camera.get_jpeg()
         return None
 
     def placeholder_svg(self, camera_id: str) -> bytes:
@@ -898,7 +900,7 @@ class HeadCameraServer(ThreadingHTTPServer):
             detail = f"last shared frame is {info['age_s']}s old"
         else:
             detail = "no shared frame file yet"
-        mode = "shared mode waits for CameraThread frames" if self.frame_source == "shared" else "direct camera has no frame"
+        mode = "shared mode waits for CameraThread frames" if self.frame_source == "shared" else "direct camera is not checked or has no frame"
         lines = [
             "Waiting for fresh camera frame",
             f"{label} ({camera_id})",
@@ -924,18 +926,22 @@ class HeadCameraServer(ThreadingHTTPServer):
         self.allowed_camera_sources = {item["source"] for item in self.camera_options}
         with self._mode_lock:
             frame_source = self.frame_source
-            camera = self.camera
-        direct = None
-        if camera is not None:
+            cameras = dict(self.direct_cameras)
+        direct_cameras = []
+        for camera_id, camera in cameras.items():
             direct = camera.snapshot()
             direct["label"] = self.camera_label(direct["source"])
-            direct["id"] = camera_id_for_value(direct["source"], self.camera_options)
+            direct["id"] = camera_id
+            direct_cameras.append(direct)
+        direct_cameras.sort(key=lambda item: [spec["id"] for spec in CAMERA_SPECS].index(item["id"]))
+        primary_direct = direct_cameras[0] if direct_cameras else None
         return {
             "ok": True,
             "frame_source": frame_source,
             "shared_dir": self.shared.directory,
-            "direct_camera": direct,
-            "camera": direct or {
+            "direct_cameras": direct_cameras,
+            "direct_camera": primary_direct,
+            "camera": primary_direct or {
                 "status": "shared",
                 "source": self.shared.directory,
                 "frame_count": None,
@@ -976,19 +982,21 @@ def main() -> None:
     head = HeadUdpController(angles)
     shared = SharedFrameStore(args.shared_dir)
     camera_options = list_camera_options(shared)
-    camera_source = choose_camera_source(args.camera, camera_options)
-    camera = None
+    initial_camera_ids = camera_ids_for_value(args.camera, camera_options)
+    direct_cameras: dict[str, CameraStream] = {}
     if args.frame_source == "direct":
-        camera = CameraStream(camera_source, args.width, args.height, args.fps, args.quality)
+        for camera_id in initial_camera_ids:
+            camera_source = choose_camera_source(camera_id, camera_options)
+            direct_cameras[camera_id] = CameraStream(camera_source, args.width, args.height, args.fps, args.quality)
 
     angles.start()
-    if camera is not None:
+    for camera in direct_cameras.values():
         camera.start()
     try:
         server = HeadCameraServer(
             (args.host, args.port),
             AppHandler,
-            camera,
+            direct_cameras,
             angles,
             head,
             camera_options,
@@ -1016,18 +1024,21 @@ def main() -> None:
         raise
     print(f"Head camera control: http://{args.host}:{args.port}")
     print(f"Frame source: {args.frame_source}")
-    if camera is None:
+    if not direct_cameras:
         print(f"Shared frame dir: {shared.directory}")
     else:
-        print(f"Camera source: {camera_source}")
+        for camera_id, camera in direct_cameras.items():
+            print(f"Camera source ({camera_id}): {camera.source}")
     print("Use Ctrl+C to stop.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        if camera is not None:
+        for camera in list(server.direct_cameras.values()):
             camera.stop()
+        for camera in list(server.direct_cameras.values()):
+            camera.join()
         angles.stop()
         server.server_close()
 
