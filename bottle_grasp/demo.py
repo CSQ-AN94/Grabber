@@ -537,24 +537,52 @@ class BottleDemo:
                     )
         return candidates
 
-    def _grasp_precheck_ok(
+    def _grasp_precheck_margin(
         self, target: PlanTarget, target_base: np.ndarray
+    ) -> float | None:
+        """返回该观察位通过抓取预演的最宽限位余量档位。
+
+        分级而不是一刀切：2026-07-18 晚真机 watch 实测，10° 软余量的二元
+        筛选把 11 个端点砍到只剩 1 个（瓶子位置本身处在手臂舒适区边缘，
+        多数观察姿态天然贴限位），而唯一幸存者又恰好是 MoveIt 规划不出
+        路径的端点（error=99999），没有备胎直接中止。现在按
+        宽(10°)→中(6.5°)→执行余量(3°) 三档降级预演：宽余量候选优先，
+        窄余量的保留但排后。None = 连执行余量都过不了，真正不可行。
+        """
+        margins = (
+            self.params.observation_grasp_margin_deg,
+            (
+                self.params.observation_grasp_margin_deg
+                + self.params.joint_limit_margin_deg
+            )
+            / 2,
+            self.params.joint_limit_margin_deg,
+        )
+        for margin in margins:
+            if self._grasp_precheck_ok(target, target_base, margin):
+                return float(margin)
+        return None
+
+    def _grasp_precheck_ok(
+        self,
+        target: PlanTarget,
+        target_base: np.ndarray,
+        limit_margin_deg: float,
     ) -> bool:
-        """预演从该观察位出发的抓取接近段，抓不动的观察位直接淘汰。
+        """预演从该观察位出发的抓取接近段是否在给定限位余量下可行。
 
         2026-07-18 真机 observe 实测的教训：观察位只按"转移代价+3°硬限位
         余量"选，选出了 J2 距限位 3.3° 的端点——人到了，抓取阶段 5 个 roll
         全部死于"J2 距限位过近"。观察位和抓取不是两个独立问题：这里用
         candidate_path() 完全相同的几何（观察姿态朝向作为抓取朝向、同一组
-        roll 候选、同样的围栏+IK+奇异检查），从候选关节角出发做纯离线预演，
-        限位余量用更宽的 observation_grasp_margin_deg——头部定位和腕部精
-        定位之间目标会漂移约 3cm，软余量给这段漂移留关节空间。
+        roll 候选、同样的围栏+IK+奇异检查），从候选关节角出发做纯离线预演。
+        更宽的余量档位吸收头部定位和腕部精定位之间约 3cm 的目标漂移。
         """
         tcp = target.flange @ self.T_flange_tcp
         base_rotation = tcp[:3, :3]
         precheck_params = replace(
             self.params,
-            joint_limit_margin_deg=self.params.observation_grasp_margin_deg,
+            joint_limit_margin_deg=limit_margin_deg,
         )
         for roll_deg in (0, 15, -15, 30, -30):
             rotation = base_rotation @ Rotation.from_euler(
@@ -628,29 +656,43 @@ class BottleDemo:
                 LOG.debug("观察位候选 %d 被拒绝: %s", index, exc)
         if not accepted:
             raise SafetyAbort("所有右腕观察位候选均越界、近限位或逆解失败")
-        graspable = []
+        graded: list[tuple[float, PlanTarget]] = []
         for target in accepted:
-            if self._grasp_precheck_ok(target, np.asarray(target_base)):
-                graspable.append(target)
+            margin = self._grasp_precheck_margin(
+                target, np.asarray(target_base)
+            )
+            if margin is None:
+                LOG.info(
+                    "%s 连执行余量也未通过抓取预演，淘汰", target.label
+                )
             else:
                 LOG.info(
-                    "%s 通过端点检查但抓取预检不可行，淘汰", target.label
+                    "%s 抓取预演可行，限位余量档位 %.1f°",
+                    target.label,
+                    margin,
                 )
-        if not graspable:
+                graded.append((margin, target))
+        if not graded:
             raise SafetyAbort(
-                f"{len(accepted)} 个观察位端点全部未通过抓取预检"
+                f"{len(accepted)} 个观察位端点全部未通过抓取预演"
                 "（从这些姿态出发的接近段会撞限位/奇异/围栏）——"
                 "目标可能位于可达边缘，考虑调整瓶子位置或移动底盘"
             )
-        graspable.sort(key=lambda target: target.score)
+        graded.sort(key=lambda item: (-item[0], item[1].score))
+        roomy = sum(
+            1
+            for margin, _ in graded
+            if margin >= self.params.observation_grasp_margin_deg
+        )
         self.stage(
             "生成右腕观察位候选",
             (
-                f"端点通过 {len(accepted)} 个，抓取预检通过 {len(graspable)} 个；"
+                f"端点通过 {len(accepted)} 个；抓取预演可行 {len(graded)} 个"
+                f"（宽余量 {roomy} 个，优先尝试）；"
                 f"最多尝试前 {self.params.global_plan_max_candidates} 个"
             ),
         )
-        return graspable
+        return [target for _, target in graded]
 
     def _select_observation_flange(
         self, target_base: np.ndarray

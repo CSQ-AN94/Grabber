@@ -175,11 +175,12 @@ def _precheck_demo(calls):
     return demo
 
 
-def test_observation_candidates_near_joint_limit_are_rejected_by_precheck():
-    """2026-07-18 真机复现：端点 J2=129.2° 过了 3° 硬余量，但从那里出发的
-    抓取接近段全部死于限位——预检必须在选观察位时就把它淘汰。"""
+def test_candidates_failing_even_the_hard_margin_are_rejected():
+    """2026-07-18 真机复现：从端点出发的抓取接近段死于限位（任何余量档位
+    都过不了）——预演必须在选观察位时就把它淘汰，档位要一路降到执行余量。"""
     calls = []
     demo = _precheck_demo(calls)
+    margins_seen = []
 
     class NearLimitRobot:
         def joints_deg(self):
@@ -190,14 +191,16 @@ def test_observation_candidates_near_joint_limit_are_rejected_by_precheck():
 
         def plan_ik(self, poses, params, *, allow_first_jump=False,
                     seed_joints_deg=None):
-            # 预检用软余量：J2=129.2 距限位不足 observation_grasp_margin_deg
             assert seed_joints_deg is not None
-            assert params.joint_limit_margin_deg == demo.params.observation_grasp_margin_deg
+            margins_seen.append(params.joint_limit_margin_deg)
             raise SafetyAbort("路径点 1 关节 J2 距限位过近: 129.2°")
 
     demo.robot = NearLimitRobot()
-    with pytest.raises(SafetyAbort, match="全部未通过抓取预检"):
+    with pytest.raises(SafetyAbort, match="全部未通过抓取预演"):
         demo._observation_plan_targets(np.array([0.0, 0.52, -0.11]))
+    # 降级尝试必须覆盖从软余量到执行余量的全部档位，最宽的先试
+    assert max(margins_seen) == demo.params.observation_grasp_margin_deg
+    assert min(margins_seen) == demo.params.joint_limit_margin_deg
 
 
 def test_graspable_candidates_survive_and_keep_transfer_cost_order():
@@ -225,5 +228,48 @@ def test_graspable_candidates_survive_and_keep_transfer_cost_order():
     scores = [target.score for target in targets]
     assert scores == sorted(scores)
     assert any(
-        "抓取预检通过" in msg for _, name, msg in calls if name == "生成右腕观察位候选"
+        "抓取预演可行" in msg for _, name, msg in calls if name == "生成右腕观察位候选"
+    )
+
+
+def test_tight_margin_candidates_are_kept_but_ranked_after_roomy_ones():
+    """2026-07-18 晚真机 watch 复现：10° 二元筛选把 11 个端点砍到 1 个，
+    唯一幸存者 MoveIt 规划失败（error=99999）后没有任何备胎直接中止。
+    分级录取必须保住窄余量候选作为后备，同时让宽余量的排前面。"""
+    calls = []
+    demo = _precheck_demo(calls)
+    wide = demo.params.observation_grasp_margin_deg
+
+    class MixedRobot:
+        def __init__(self):
+            self.solve_count = 0
+
+        def joints_deg(self):
+            return [0.0] * 7
+
+        def solve_flange_ik(self, flange, params):
+            self.solve_count += 1
+            # 第一个候选给最大的转移代价，其余递减——用来验证排序不只看代价
+            return [float(50 - self.solve_count % 5)] * 7
+
+        def plan_ik(self, poses, params, *, allow_first_jump=False,
+                    seed_joints_deg=None):
+            # 只有第一个解出的候选（转移代价最大）通过宽余量；
+            # 其余候选只在执行余量（3°）下可行。
+            first_candidate = seed_joints_deg[0] == 49.0
+            if first_candidate:
+                return [[0.0] * 7 for _ in poses]
+            if params.joint_limit_margin_deg > demo.params.joint_limit_margin_deg:
+                raise SafetyAbort("路径点 1 关节 J2 距限位过近")
+            return [[0.0] * 7 for _ in poses]
+
+    demo.robot = MixedRobot()
+    targets = demo._observation_plan_targets(np.array([0.0, 0.52, -0.11]))
+    # 窄余量候选全部保留（没有被一刀切淘汰）
+    assert len(targets) > 1
+    # 宽余量候选排第一；其后存在转移代价更小的窄余量候选——证明排序是
+    # "余量档位优先于转移代价"，而不是单纯按代价排
+    assert targets[0].goal_joints[0] == 49.0
+    assert any(
+        target.score < targets[0].score for target in targets[1:]
     )
