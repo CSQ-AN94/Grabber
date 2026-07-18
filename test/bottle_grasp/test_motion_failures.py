@@ -3,7 +3,7 @@ import threading
 import numpy as np
 import pytest
 
-from bottle_grasp.core import SafetyAbort
+from bottle_grasp.core import DemoParams, SafetyAbort
 from bottle_grasp.demo import BottleDemo
 from bottle_grasp.robot import RobotSession
 
@@ -135,6 +135,107 @@ def test_read_only_session_computes_flange_from_joints_without_active_tcp():
     actual = session.current_flange()
 
     np.testing.assert_allclose(actual, expected)
+
+
+def _healthy_preflight_robot(gripper_pos, calls):
+    class HealthyRobot:
+        def assert_arm_healthy(self):
+            return {
+                "joints": {},
+                "controller": {"return_code": 0, "system_error": 0},
+            }
+
+        def current_tcp(self):
+            return None
+
+        def controller_fence_status(self):
+            return {
+                "state": {"enable_state": False},
+                "current": (0, {}),
+                "saved": {"len": 0},
+            }
+
+        def gripper_state(self):
+            return {"enable_state": True, "pos": [gripper_pos]}
+
+        def close_empty_gripper(self, params):
+            calls.append(("close_empty", gripper_pos))
+            return {"dof_state": 3, "pos": [0]}
+
+    return HealthyRobot()
+
+
+def test_preflight_closes_an_open_gripper_before_transit():
+    calls = []
+    demo = BottleDemo.__new__(BottleDemo)
+    demo.args = type(
+        "Args", (), {"execute": True, "finish_from_current": False}
+    )()
+    demo.params = DemoParams()
+    demo.robot = _healthy_preflight_robot(902, calls)
+    demo.stage = lambda name, msg="": calls.append(("stage", name))
+
+    demo._preflight()
+
+    assert ("close_empty", 902) in calls
+    assert any(name == "夹爪预备闭合" for kind, name in calls if kind == "stage")
+
+
+def test_preflight_leaves_an_already_closed_gripper_alone():
+    calls = []
+    demo = BottleDemo.__new__(BottleDemo)
+    demo.args = type(
+        "Args", (), {"execute": True, "finish_from_current": False}
+    )()
+    demo.params = DemoParams()
+    demo.robot = _healthy_preflight_robot(0, calls)
+    demo.stage = lambda name, msg="": calls.append(("stage", name))
+
+    demo._preflight()
+
+    assert not any(kind == "close_empty" for kind, *_ in calls)
+
+
+def test_preflight_skips_gripper_close_when_finishing_from_current():
+    """--finish-from-current 假设夹爪已抓着水瓶，绝不能在这里被合上。"""
+    calls = []
+
+    class MustNotCloseRobot:
+        def assert_arm_healthy(self):
+            return {
+                "joints": {},
+                "controller": {"return_code": 0, "system_error": 0},
+            }
+
+        def current_tcp(self):
+            return None
+
+        def controller_fence_status(self):
+            return {
+                "state": {"enable_state": False},
+                "current": (0, {}),
+                "saved": {"len": 0},
+            }
+
+        def gripper_state(self):
+            return {"enable_state": True, "pos": [902]}
+
+        def close_empty_gripper(self, params):
+            raise AssertionError(
+                "must not close the gripper when a bottle may already be held"
+            )
+
+    demo = BottleDemo.__new__(BottleDemo)
+    demo.args = type(
+        "Args", (), {"execute": True, "finish_from_current": True}
+    )()
+    demo.params = DemoParams()
+    demo.robot = MustNotCloseRobot()
+    demo.stage = lambda name, msg="": calls.append(name)
+
+    demo._preflight()
+
+    assert "夹爪预备闭合" not in calls
 
 
 def test_read_only_resume_check_skips_motion_preflight_even_with_execute_flag():

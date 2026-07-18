@@ -1405,7 +1405,7 @@ class BottleDemo:
         self.stage("已返回初始姿态", f"距目标关节角最大偏差 {error:.2f}°")
 
     def _preflight(self):
-        """真机运动前只读自检：机械臂在线、无错误码、夹爪使能。plan-only 跳过。"""
+        """真机运动前自检：机械臂在线、无错误码、夹爪使能+收拢。plan-only 跳过。"""
         if not self.args.execute or self._is_read_only_vision_check():
             return
         recover = getattr(self.robot, "recover_transient_joint_frame_loss", None)
@@ -1442,6 +1442,27 @@ class BottleDemo:
                 f"controller={health['controller']}"
             ),
         )
+        if not getattr(self.args, "finish_from_current", False):
+            self._close_gripper_if_open(state)
+
+    def _close_gripper_if_open(self, state: dict):
+        """转移开始前把张开的夹爪收拢到空载基线。
+
+        张开的手指是比 tool_guard 固定防撞盒更宽、更不可预测的碰撞形状，
+        闭合是已知、更小的包络，也不会在长距离转移途中勾挂到东西。用
+        close_empty_gripper（无抓取判定的收拢语义）而不是 close_gripper——
+        这里不是在抓取，强行套用抓取判定只会把"本来就是空的"误判成失败。
+        只有 --finish-from-current（假设夹爪已抓着水瓶）跳过这一步，由
+        `_preflight` 的调用方保证。
+        """
+        pos = int(state["pos"][0])
+        if pos <= self.params.gripper_pretransit_open_threshold:
+            return
+        self.stage(
+            "夹爪预备闭合",
+            f"运动前检测到夹爪未闭合 (pos={pos})，先收拢到空载基线再继续",
+        )
+        self.robot.close_empty_gripper(self.params)
 
     def _restore_teleop(self):
         """best-effort 恢复官方遥操（--restore-teleop）。找不到脚本就只打印提示。"""
