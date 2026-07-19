@@ -280,6 +280,27 @@ def test_lift_confirmation_requires_fresh_depth_and_keeps_head_active():
     assert localize_call[3] is False
 
 
+def test_lift_confirmation_accepts_occlusion_shift_in_shared_workflow():
+    """A lower-box occlusion may move the sampled point above the +5 cm pose."""
+    locked = Localization(
+        point_camera=[0.0985713576, 0.5760282138, -0.1366713492],
+        point_base=[0.0985713576, 0.5760282138, -0.1366713492],
+        pixel=[399.0, 394.6],
+        depth_m=0.3388,
+        depth_mad_m=0.0,
+        position_spread_m=0.0003,
+        box=[335, 138, 462, 480],
+        confidence=0.85,
+        frame_count=7,
+    )
+    measured_point = [0.0751089843, 0.5737326619, -0.0346832164]
+    demo, _calls = _demo_with_independent_head_measurement(measured_point)
+
+    measured = demo._confirm_lifted_target(locked)
+
+    np.testing.assert_allclose(measured.point_base, measured_point)
+
+
 def test_release_confirmation_uses_fresh_3d_measurement_at_locked_point():
     locked = Localization(
         point_camera=[0.0, 0.0, 0.5],

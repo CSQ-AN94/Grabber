@@ -35,6 +35,7 @@ class TaskPhase(str, Enum):
     PREFLIGHT = "preflight"
     HEAD_LOCK = "head_lock"
     SCENE_SYNC = "scene_sync"
+    MOVE_TO_OBSERVATION_STAGING = "move_to_observation_staging"
     MOVE_TO_OBSERVATION = "move_to_observation"
     WRIST_LOCK = "wrist_lock"
     GRASP_AND_LIFT = "grasp_and_lift"
@@ -167,6 +168,42 @@ class BottlePickPlaceTask:
             self.demo._build_head_scene(head_target)
 
             if mode is StartMode.FROM_START:
+                staging_joints = getattr(
+                    self.demo.safety,
+                    "observation_staging_joints_deg",
+                    None,
+                )
+                if staging_joints is not None:
+                    self._record(
+                        TaskPhase.MOVE_TO_OBSERVATION_STAGING,
+                        "先规划并执行抬高展开准备位，解除自然下垂起点的奇异/内收负担",
+                    )
+                    staging_plan = self.demo._plan_observation_staging()
+                    if staging_plan is not None:
+                        self.demo._refresh_and_revalidate_plan(
+                            name="moveit_observation_staging",
+                            plan=staging_plan,
+                            locked_target=head_target,
+                        )
+                        self.demo._execute_plan(
+                            "抬高展开到观察准备位", staging_plan
+                        )
+
+                        # The arm has moved through the head camera's scene
+                        # and planning may have taken tens of seconds.  Do not
+                        # reuse either the target lock or world snapshot for
+                        # the target-dependent observation transfer.
+                        self._record(
+                            TaskPhase.HEAD_LOCK,
+                            "准备位到达后重新采集固定头部目标",
+                        )
+                        head_target = self.demo._fresh_head_target()
+                        self._record(
+                            TaskPhase.SCENE_SYNC,
+                            "准备位到达后重建场景，再规划观察位",
+                        )
+                        self.demo._build_head_scene(head_target)
+
                 self._record(
                     TaskPhase.MOVE_TO_OBSERVATION,
                     "规划、复核并执行到右腕观察位",
@@ -197,6 +234,16 @@ class BottlePickPlaceTask:
             )
             wrist_target = self.demo._fresh_wrist_target(head_target)
             self.demo._verify_wrist_observation_start(wrist_target)
+
+            if getattr(self.demo.args, "stop_after_observation", False):
+                environment_guard.close()
+                environment_guard = None
+                self.status = RunStatus.DONE
+                self._record(
+                    TaskPhase.DONE,
+                    "已真实移动到观察位并完成右腕定位/抓放预演；按要求不抓取",
+                )
+                return self._finish()
 
             # Entering a grasp command makes the physical object state
             # conservative UNKNOWN until gripper feedback and lift both pass.

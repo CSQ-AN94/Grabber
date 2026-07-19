@@ -212,7 +212,7 @@ ROS 2 `FollowJointTrajectory` 的统一执行链。成熟的后续方向是使�
 ```
 
 成熟方案调研和为何没有直接引入 cuRobo、NeRF 或大规模主动感知栈，见
-`docs/research_bottle_grasp_mature_approaches_2026-07-18.md`。
+`docs/水瓶抓取成熟方案调研_2026-07-18.md`。
 
 已经踩过的坑、现在还没解决的风险点，见
 `docs/handoff/bottle_grasp_known_risks.md`——上机前过一遍第二部分，改代码

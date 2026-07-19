@@ -216,9 +216,14 @@ class SafeMotionPlanner:
         targets: Sequence[PlanTarget],
         obstacle_points: Sequence[Sequence[float]],
         collision_boxes: Sequence[dict],
+        start_right_joints_deg: Optional[Sequence[float]] = None,
         continuation_validator: Optional[
             Callable[[PlanTarget, dict], None]
         ] = None,
+        trajectory_validator: Optional[
+            Callable[[PlanTarget, dict], None]
+        ] = None,
+        enforce_endpoint_vertical_floor: bool = False,
     ) -> VerifiedPlan:
         candidates = list(targets)
         if not candidates:
@@ -239,7 +244,22 @@ class SafeMotionPlanner:
         # raw score here used to silently undo that safety ranking.
         ranked = candidates[: self.params.global_plan_max_candidates]
 
-        start_right = self.robot.joints_deg()
+        # A supplied start is used only for chained, no-motion rehearsal (for
+        # example staging -> observation).  Executable plans retain this exact
+        # start in their credential, and _execute_plan still rejects them if
+        # the physical arm is elsewhere.
+        start_right_raw = (
+            self.robot.joints_deg()
+            if start_right_joints_deg is None
+            else start_right_joints_deg
+        )
+        start_right_array = np.asarray(start_right_raw, dtype=float)
+        if (
+            start_right_array.shape != (7,)
+            or not np.all(np.isfinite(start_right_array))
+        ):
+            raise SafetyAbort("全局规划右臂起点必须是 7 个有限关节角")
+        start_right = list(map(float, start_right_array))
         start_left = self.left_robot.joints_deg()
         moveit_obstacles = self.safety.points_to_moveit(obstacle_points)
         base_boxes = list(collision_boxes)
@@ -265,6 +285,28 @@ class SafeMotionPlanner:
                 if candidate_index in eliminated_candidates:
                     continue
                 target_moveit = self._target_link7_in_moveit(target)
+                minimum_link7_z = None
+                if enforce_endpoint_vertical_floor:
+                    T_link7_controller_flange = np.eye(4)
+                    T_link7_controller_flange[2, 3] = (
+                        self.params.moveit_link7_to_controller_flange_m
+                    )
+                    start_flange = self.robot.controller_flange_from_joints(
+                        start_right
+                    )
+                    start_link7 = start_flange @ np.linalg.inv(
+                        T_link7_controller_flange
+                    )
+                    start_link7_moveit = self.safety.pose_to_moveit(
+                        start_link7
+                    )
+                    minimum_link7_z = float(
+                        min(
+                            start_link7_moveit[2, 3],
+                            target_moveit[2, 3],
+                        )
+                        - self.params.observation_vertical_undershoot_tolerance_m
+                    )
                 remaining_budget_s = deadline - time.monotonic()
                 if remaining_budget_s <= 0:
                     budget_exhausted = True
@@ -316,6 +358,7 @@ class SafeMotionPlanner:
                             "center_z": self.params.tool_guard_center_z_m,
                         },
                         voxel_size=self.params.scene_voxel_m,
+                        minimum_link7_z=minimum_link7_z,
                     )
                 except SafetyAbort as exc:
                     reason = f"{target.label}/路线{route_index} 规划失败: {exc}"
@@ -348,6 +391,20 @@ class SafeMotionPlanner:
                     self.report("规划模型不一致，自动换目标", reason)
                     eliminated_candidates.add(candidate_index)
                     continue
+
+                if trajectory_validator is not None:
+                    try:
+                        trajectory_validator(target, trajectory)
+                    except SafetyAbort as exc:
+                        reason = (
+                            f"{target.label}/路线{route_index} "
+                            f"轨迹形状拒绝: {exc}"
+                        )
+                        rejections.append(reason)
+                        self.report("轨迹形状不合要求，自动换路", reason)
+                        # Shape is route-specific.  Keep the endpoint so a
+                        # different planner/seed may approach it cleanly.
+                        continue
 
                 if continuation_validator is not None:
                     try:

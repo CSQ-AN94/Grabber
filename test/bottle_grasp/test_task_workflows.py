@@ -37,6 +37,9 @@ class FakeDemo:
     def __init__(self, tmp_path, mode):
         self.args = SimpleNamespace(task_mode=mode.value)
         self.params = DemoParams()
+        self.safety = SimpleNamespace(
+            observation_staging_joints_deg=None,
+        )
         self.stop_event = threading.Event()
         self.run_dir = tmp_path
         self.calls = []
@@ -66,14 +69,24 @@ class FakeDemo:
         self.calls.append(("plan_observation",))
         return {"points_deg": [[1.0] * 7]}
 
+    def _plan_observation_staging(self):
+        self.calls.append(("plan_observation_staging",))
+        return {"points_deg": [[2.0] * 7]}
+
     def _refresh_and_revalidate_plan(self, *, name, plan, locked_target):
-        assert name == "moveit_observation"
         assert plan["points_deg"]
         assert locked_target is self.head
-        self.calls.append(("refresh_validate_observation",))
+        if name == "moveit_observation_staging":
+            self.calls.append(("refresh_validate_staging",))
+        else:
+            assert name == "moveit_observation"
+            self.calls.append(("refresh_validate_observation",))
 
     def _execute_plan(self, name, plan):
-        self.calls.append(("execute_observation", name))
+        if name == "抬高展开到观察准备位":
+            self.calls.append(("execute_staging", name))
+        else:
+            self.calls.append(("execute_observation", name))
 
     def _fresh_wrist_target(self, head_target):
         assert head_target is self.head
@@ -144,6 +157,58 @@ def test_from_start_adds_only_transfer_prefix_and_home_suffix(tmp_path):
         "place_release_retreat",
         "refresh_return_scene",
         "return_home",
+    ]
+    assert result.status == RunStatus.DONE.value
+    assert result.object_state == ObjectState.EMPTY.value
+
+
+def test_from_natural_hang_uses_staging_then_reacquires_scene(tmp_path):
+    demo = FakeDemo(tmp_path, StartMode.FROM_START)
+    demo.safety.observation_staging_joints_deg = tuple([10.0] * 7)
+
+    result = BottlePickPlaceTask(demo).run(StartMode.FROM_START)
+
+    assert _hardware_calls(demo) == [
+        "initialize",
+        "preflight",
+        "fresh_head",
+        "scene",
+        "plan_observation_staging",
+        "refresh_validate_staging",
+        "execute_staging",
+        # The arm occupied a different part of the camera scene after the
+        # departure motion, so observation planning must use a fresh lock.
+        "fresh_head",
+        "scene",
+        "plan_observation",
+        "refresh_validate_observation",
+        "execute_observation",
+        "fresh_wrist",
+        "verify_wrist_start",
+        "grasp_lift",
+        "place_release_retreat",
+        "refresh_return_scene",
+        "return_home",
+    ]
+    assert result.status == RunStatus.DONE.value
+
+
+def test_from_start_can_stop_after_real_observation_without_grasp(tmp_path):
+    demo = FakeDemo(tmp_path, StartMode.FROM_START)
+    demo.args.stop_after_observation = True
+
+    result = BottlePickPlaceTask(demo).run(StartMode.FROM_START)
+
+    assert _hardware_calls(demo) == [
+        "initialize",
+        "preflight",
+        "fresh_head",
+        "scene",
+        "plan_observation",
+        "refresh_validate_observation",
+        "execute_observation",
+        "fresh_wrist",
+        "verify_wrist_start",
     ]
     assert result.status == RunStatus.DONE.value
     assert result.object_state == ObjectState.EMPTY.value

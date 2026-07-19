@@ -234,9 +234,11 @@ def test_moveit_keepout_padding_covers_top_and_all_four_sides():
         require_verified=False,
     )
     item = profile.moveit_collision_boxes()[0]
-    center_profile = np.asarray(item["center"]) - profile.T_moveit_from_profile[
-        :3, 3
-    ]
+    # 变换含 yaw 180° 旋转，转回 profile 系必须用完整刚体逆，不能只减平移
+    T_profile_from_moveit = np.linalg.inv(profile.T_moveit_from_profile)
+    center_profile = (
+        T_profile_from_moveit @ np.r_[np.asarray(item["center"]), 1.0]
+    )[:3]
     half_size = np.asarray(item["size"]) / 2
 
     # The offline fence expands the physical table by clearance_m. MoveIt gets

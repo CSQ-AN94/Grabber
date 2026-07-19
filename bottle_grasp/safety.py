@@ -92,6 +92,12 @@ class SafetyProfile:
     keepout_boxes: tuple[FenceBox, ...]
     use_dynamic_rgbd: bool
     home_joints_deg: tuple[float, ...] | None
+    # Optional open/high posture used to leave a low natural-hang start before
+    # solving the target-dependent observation transfer.  This is distinct
+    # from ``home_joints_deg``: home is where the task parks; staging is a
+    # proven planning seed that avoids asking one global search to both unfold
+    # a near-singular arm and arrive at the bottle-facing wrist pose.
+    observation_staging_joints_deg: tuple[float, ...] | None = None
 
     def assert_tcp_point(
         self,
@@ -246,9 +252,18 @@ def load_safety_profile(
     transform = np.asarray(raw.get("T_moveit_from_profile"), dtype=float)
     if transform.shape != (4, 4) or not np.all(np.isfinite(transform)):
         raise SafetyAbort("T_moveit_from_profile 必须是有效 4x4 矩阵")
-    if not np.allclose(transform[:3, :3], np.eye(3), atol=1e-6):
+    # 允许各轴 ±1 的对角旋转（每个轴仍映射到自身，只翻符号）：盒子的
+    # size 语义与 min/max 重排在这种变换下保持成立。实测 right_controller_base
+    # 相对 platform_base_link 是 yaw 180°（diag(-1,-1,1)），纯平移是错的。
+    rotation = transform[:3, :3]
+    if not np.allclose(np.abs(rotation), np.eye(3), atol=1e-6):
         raise SafetyAbort(
-            "当前长方体围栏只支持与 platform_base_link 轴对齐的坐标变换"
+            "当前长方体围栏只支持与 platform_base_link 轴对齐"
+            "（各轴仅允许±翻转）的坐标变换"
+        )
+    if not np.isclose(np.linalg.det(rotation), 1.0, atol=1e-6):
+        raise SafetyAbort(
+            "T_moveit_from_profile 旋转部分行列式必须为 +1（不允许镜像反射）"
         )
     workspace = FenceBox.from_dict(
         raw.get("tcp_workspace", {}), prefix="tcp_workspace"
@@ -272,6 +287,16 @@ def load_safety_profile(
                 f"电子围栏 profile {profile_name} 的 home_joints_deg 必须是 7 个有限数"
             )
         home_joints_deg = tuple(map(float, home))
+    staging_raw = raw.get("observation_staging_joints_deg")
+    observation_staging_joints_deg = None
+    if staging_raw is not None:
+        staging = np.asarray(staging_raw, dtype=float)
+        if staging.shape != (7,) or not np.all(np.isfinite(staging)):
+            raise SafetyAbort(
+                f"电子围栏 profile {profile_name} 的 "
+                "observation_staging_joints_deg 必须是 7 个有限数"
+            )
+        observation_staging_joints_deg = tuple(map(float, staging))
     profile = SafetyProfile(
         name=profile_name,
         description=str(raw.get("description", "")),
@@ -285,6 +310,7 @@ def load_safety_profile(
         keepout_boxes=keepouts,
         use_dynamic_rgbd=bool(raw.get("use_dynamic_rgbd", True)),
         home_joints_deg=home_joints_deg,
+        observation_staging_joints_deg=observation_staging_joints_deg,
     )
     # Validate that each allowed zone is itself inside the global workspace.
     for zone in profile.allowed_tcp_zones:

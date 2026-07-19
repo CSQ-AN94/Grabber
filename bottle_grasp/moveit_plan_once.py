@@ -68,30 +68,85 @@ def quaternion_from_matrix(matrix):
     ]
 
 
-def compute_link7_fk(node, client, state, planning_frame):
-    request = GetPositionFK.Request()
-    request.header.frame_id = planning_frame
-    request.fk_link_names = ["r_link7"]
-    request.robot_state = state
-    future = client.call_async(request)
-    rclpy.spin_until_future_complete(node, future, timeout_sec=10)
-    response = future.result()
-    if (
-        response is None
-        or response.error_code.val != 1
-        or not response.pose_stamped
-    ):
-        code = None if response is None else response.error_code.val
-        raise RuntimeError(f"compute_fk failed: {code}")
-    pose = response.pose_stamped[0].pose
-    return {
-        "position": [pose.position.x, pose.position.y, pose.position.z],
-        "quaternion_xyzw": [
+def quaternion_to_matrix(quaternion):
+    x, y, z, w = quaternion
+    norm = math.sqrt(x * x + y * y + z * z + w * w)
+    if norm < 1e-9:
+        raise RuntimeError("compute_fk returned a zero quaternion")
+    x, y, z, w = x / norm, y / norm, z / norm, w / norm
+    return [
+        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+        [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+        [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+    ]
+
+
+def pose_to_rotation_translation(pose):
+    rotation = quaternion_to_matrix(
+        [
             pose.orientation.x,
             pose.orientation.y,
             pose.orientation.z,
             pose.orientation.w,
-        ],
+        ]
+    )
+    translation = [pose.position.x, pose.position.y, pose.position.z]
+    return rotation, translation
+
+
+def compute_link7_fk(node, client, state, planning_frame):
+    """Return the r_link7 pose expressed in planning_frame.
+
+    /compute_fk 只有在 frame_id 为模型根坐标系时才不查 TF。headless 启动没
+    有任何 /joint_states 发布者，platform_joint（prismatic，body_base_link
+    -> platform_base_link）的 TF 永远缺失，任何非根 frame_id 都会确定性返
+    回 FRAME_TRANSFORM_FAILURE(-21)。因此这里在根坐标系下同时求 r_link7
+    和 planning_frame 两个 link 的 FK，再在本地合成相对位姿；两者出自同一
+    份规划场景机器人状态，与规划器解释目标约束的坐标一致。
+    """
+    request = GetPositionFK.Request()
+    request.header.frame_id = ""  # 空 frame_id = 模型根坐标系，不触发 TF
+    request.fk_link_names = ["r_link7", planning_frame]
+    request.robot_state = state
+    future = client.call_async(request)
+    rclpy.spin_until_future_complete(node, future, timeout_sec=10)
+    response = future.result()
+    if response is None or response.error_code.val != 1:
+        code = None if response is None else response.error_code.val
+        raise RuntimeError(f"compute_fk failed: {code}")
+    poses = dict(zip(response.fk_link_names, response.pose_stamped))
+    missing = [
+        name for name in ("r_link7", planning_frame) if name not in poses
+    ]
+    if missing:
+        raise RuntimeError(f"compute_fk missing link poses: {missing}")
+    frame_rotation, frame_translation = pose_to_rotation_translation(
+        poses[planning_frame].pose
+    )
+    link_rotation, link_translation = pose_to_rotation_translation(
+        poses["r_link7"].pose
+    )
+    # T_rel = inv(T_frame) @ T_link7；刚体逆直接用旋转转置
+    relative_rotation = [
+        [
+            sum(
+                frame_rotation[k][i] * link_rotation[k][j]
+                for k in range(3)
+            )
+            for j in range(3)
+        ]
+        for i in range(3)
+    ]
+    delta = [
+        link_translation[i] - frame_translation[i] for i in range(3)
+    ]
+    relative_position = [
+        sum(frame_rotation[k][i] * delta[k] for k in range(3))
+        for i in range(3)
+    ]
+    return {
+        "position": relative_position,
+        "quaternion_xyzw": quaternion_from_matrix(relative_rotation),
     }
 
 
@@ -169,6 +224,36 @@ def main():
             motion.workspace_parameters.max_corner.y,
             motion.workspace_parameters.max_corner.z,
         ) = map(float, workspace["max"])
+        minimum_link7_z = data.get("minimum_link7_z")
+        if minimum_link7_z is not None:
+            minimum_link7_z = float(minimum_link7_z)
+            workspace_min = list(map(float, workspace["min"]))
+            workspace_max = list(map(float, workspace["max"]))
+            if (
+                not math.isfinite(minimum_link7_z)
+                or minimum_link7_z < workspace_min[2]
+                or minimum_link7_z >= workspace_max[2]
+            ):
+                raise RuntimeError("minimum_link7_z is outside workspace")
+            path_position = PositionConstraint()
+            path_position.header.frame_id = planning_frame
+            path_position.link_name = "r_link7"
+            path_box = SolidPrimitive()
+            path_box.type = SolidPrimitive.BOX
+            path_box.dimensions = [
+                workspace_max[0] - workspace_min[0],
+                workspace_max[1] - workspace_min[1],
+                workspace_max[2] - minimum_link7_z,
+            ]
+            path_pose = Pose()
+            path_pose.position.x = (workspace_min[0] + workspace_max[0]) / 2
+            path_pose.position.y = (workspace_min[1] + workspace_max[1]) / 2
+            path_pose.position.z = (minimum_link7_z + workspace_max[2]) / 2
+            path_pose.orientation.w = 1.0
+            path_position.constraint_region.primitives = [path_box]
+            path_position.constraint_region.primitive_poses = [path_pose]
+            path_position.weight = 1.0
+            motion.path_constraints.position_constraints = [path_position]
         state = RobotState()
         # 关键：必须是diff状态。非diff的start_state会整体替换场景里的机器人
         # 状态，把上面刚附着的bottle_tool_guard防撞体清掉，规划时夹爪等于

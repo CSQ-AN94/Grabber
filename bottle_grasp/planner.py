@@ -180,6 +180,7 @@ class MoveItPlanner:
         planner_id: str = "RRTConnectkConfigDefault",
         allowed_planning_time_s: float = 6.0,
         num_planning_attempts: int = 12,
+        minimum_link7_z: float | None = None,
     ) -> dict:
         if goal_constraint not in {"pose", "joints"}:
             raise SafetyAbort(
@@ -192,30 +193,35 @@ class MoveItPlanner:
             or int(num_planning_attempts) < 1
         ):
             raise SafetyAbort("MoveIt 搜索策略或时间/尝试预算无效")
+        if minimum_link7_z is not None and not np.isfinite(minimum_link7_z):
+            raise SafetyAbort("MoveIt r_link7 最低高度约束无效")
         request_path = self.run_dir / f"{name}_request.json"
         output_path = self.run_dir / f"{name}_plan.json"
+        request_payload = {
+            "start_joints_deg": list(map(float, start_joints_deg)),
+            "start_left_joints_deg": (
+                None
+                if start_left_joints_deg is None
+                else list(map(float, start_left_joints_deg))
+            ),
+            "goal_joints_deg": list(map(float, goal_joints_deg)),
+            "target_flange": np.asarray(target_flange, dtype=float).tolist(),
+            "goal_constraint": goal_constraint,
+            "planner_id": str(planner_id),
+            "allowed_planning_time_s": float(allowed_planning_time_s),
+            "num_planning_attempts": int(num_planning_attempts),
+            "obstacles": [list(map(float, item)) for item in obstacles],
+            "boxes": list(boxes),
+            "workspace": workspace,
+            "planning_frame": planning_frame,
+            "tool_guard": tool_guard,
+            "voxel_size": float(voxel_size),
+        }
+        if minimum_link7_z is not None:
+            request_payload["minimum_link7_z"] = float(minimum_link7_z)
         request_path.write_text(
             json.dumps(
-                {
-                    "start_joints_deg": list(map(float, start_joints_deg)),
-                    "start_left_joints_deg": (
-                        None
-                        if start_left_joints_deg is None
-                        else list(map(float, start_left_joints_deg))
-                    ),
-                    "goal_joints_deg": list(map(float, goal_joints_deg)),
-                    "target_flange": np.asarray(target_flange, dtype=float).tolist(),
-                    "goal_constraint": goal_constraint,
-                    "planner_id": str(planner_id),
-                    "allowed_planning_time_s": float(allowed_planning_time_s),
-                    "num_planning_attempts": int(num_planning_attempts),
-                    "obstacles": [list(map(float, item)) for item in obstacles],
-                    "boxes": list(boxes),
-                    "workspace": workspace,
-                    "planning_frame": planning_frame,
-                    "tool_guard": tool_guard,
-                    "voxel_size": float(voxel_size),
-                },
+                request_payload,
                 indent=2,
             ),
             encoding="utf-8",

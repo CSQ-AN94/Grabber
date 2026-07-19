@@ -177,9 +177,7 @@ class RobotSession:
         rc = self.arm.rm_change_tool_frame("bottleTCP")
         if rc != 0:
             raise SafetyAbort(f"切换真实 TCP 失败: {rc}")
-        self._set_algo_tool_z(
-            self.model_flange_offset_m + self.tcp_z_m
-        )
+        self._set_algo_tool_z(self.tcp_z_m)
 
     def _set_algo_tool_z(self, z_m: float):
         frame = self.rm_frame_t(
@@ -190,7 +188,12 @@ class RobotSession:
     def controller_flange_from_joints(
         self, joints_deg: Sequence[float]
     ) -> np.ndarray:
-        self._set_algo_tool_z(self.model_flange_offset_m)
+        # RealMan Algo's zero tool is the controller flange.  The separate
+        # moveit_link7_to_controller_flange offset belongs only at the
+        # MoveIt r_link7 boundary; adding it here used to shift every SDK
+        # FK/IK target and produced a configuration-dependent 29--39 mm
+        # disagreement after the two models were compared.
+        self._set_algo_tool_z(0.0)
         pose = self.algo.rm_algo_forward_kinematics(
             list(map(float, joints_deg)), 1
         )
@@ -363,9 +366,7 @@ class RobotSession:
         observation candidate before ever moving there). No motion happens
         here either way.
         """
-        self._set_algo_tool_z(
-            self.model_flange_offset_m + self.tcp_z_m
-        )
+        self._set_algo_tool_z(self.tcp_z_m)
         q = (
             list(map(float, seed_joints_deg))
             if seed_joints_deg is not None
@@ -476,12 +477,22 @@ class RobotSession:
         self,
         target_controller_flange: np.ndarray,
         params: DemoParams,
+        seed_joints_deg: Sequence[float] | None = None,
     ) -> list[float]:
-        self._set_algo_tool_z(self.model_flange_offset_m)
-        seed = self.joints_deg()
+        self._set_algo_tool_z(0.0)
+        seed = np.asarray(
+            (
+                self.joints_deg()
+                if seed_joints_deg is None
+                else seed_joints_deg
+            ),
+            dtype=float,
+        )
+        if seed.shape != (7,) or not np.all(np.isfinite(seed)):
+            raise SafetyAbort("控制器同源法兰逆解种子必须是 7 个有限关节角")
         rc, solution = self.algo.rm_algo_inverse_kinematics(
             self.ik_params(
-                seed,
+                list(map(float, seed)),
                 matrix_pose(np.asarray(target_controller_flange, dtype=float)),
                 1,
             )
@@ -521,9 +532,7 @@ class RobotSession:
         )
 
     def tcp_from_joints(self, joints_deg: Sequence[float]) -> np.ndarray:
-        self._set_algo_tool_z(
-            self.model_flange_offset_m + self.tcp_z_m
-        )
+        self._set_algo_tool_z(self.tcp_z_m)
         tcp_pose = self.algo.rm_algo_forward_kinematics(
             list(map(float, joints_deg)), 1
         )

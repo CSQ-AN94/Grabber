@@ -190,7 +190,7 @@ def test_candidates_failing_even_the_hard_margin_are_rejected():
         def joints_deg(self):
             return [0.0] * 7
 
-        def solve_flange_ik(self, flange, params):
+        def solve_flange_ik(self, flange, params, seed_joints_deg=None):
             return [0.0, 129.2, 0.0, 30.0, 0.0, 0.0, 0.0]
 
         def plan_ik(self, poses, params, *, allow_first_jump=False,
@@ -207,6 +207,53 @@ def test_candidates_failing_even_the_hard_margin_are_rejected():
     assert min(margins_seen) == demo.params.joint_limit_margin_deg
 
 
+def test_observation_candidates_keep_wrist_camera_pitch_moderate():
+    demo = _precheck_demo([])
+    target = np.array([0.0, 0.52, -0.11])
+
+    candidates = demo._observation_flange_candidates(target)
+
+    assert candidates
+    pitches = [
+        np.degrees(np.arcsin(np.clip(flange[2, 2], -1.0, 1.0)))
+        for flange in candidates
+    ]
+    assert min(pitches) >= demo.params.observation_camera_min_pitch_deg
+    assert max(pitches) <= demo.params.observation_camera_max_pitch_deg
+    # The old 0.26 m standoff / +0.08 m height candidate looked down 17.1°.
+    assert all(not np.isclose(pitch, -17.1027, atol=0.1) for pitch in pitches)
+
+
+def test_observation_transfer_rejects_dive_below_endpoint_then_rise():
+    demo = _precheck_demo([])
+
+    class HeightRobot:
+        @staticmethod
+        def joints_deg():
+            return [0.0] * 7
+
+        @staticmethod
+        def tcp_from_joints(joints):
+            pose = np.eye(4)
+            pose[2, 3] = float(joints[0])
+            return pose
+
+    demo.robot = HeightRobot()
+    captured = {}
+
+    def verified(_name, _targets, **kwargs):
+        captured.update(kwargs)
+        trajectory = {"points_deg": [[-0.20] * 7, [-0.10] * 7]}
+        kwargs["trajectory_validator"](None, trajectory)
+        raise AssertionError("expected vertical undershoot rejection")
+
+    demo._verified_plan_targets = verified
+    demo._observation_plan_targets = lambda _target, **_kwargs: []
+
+    with pytest.raises(SafetyAbort, match="先下探再回升"):
+        demo._plan_observation(np.array([0.0, 0.52, -0.11]))
+
+
 def test_graspable_candidates_survive_and_keep_transfer_cost_order():
     calls = []
     demo = _precheck_demo(calls)
@@ -218,7 +265,7 @@ def test_graspable_candidates_survive_and_keep_transfer_cost_order():
         def joints_deg(self):
             return [0.0] * 7
 
-        def solve_flange_ik(self, flange, params):
+        def solve_flange_ik(self, flange, params, seed_joints_deg=None):
             self.solve_count += 1
             return [float(self.solve_count % 5)] * 7
 
@@ -237,6 +284,46 @@ def test_graspable_candidates_survive_and_keep_transfer_cost_order():
     )
 
 
+def test_staging_start_is_the_ik_seed_not_the_physical_hang_state():
+    """The no-motion chained rehearsal must reproduce the post-stage branch.
+
+    The 2026-07-19 failure was caused by seeding redundant observation IK
+    from the natural hang (J2=121.6, J4=7.3).  Merely scoring candidates as if
+    the arm were staged would still generate that same tucked branch.
+    """
+    demo = _precheck_demo([])
+    demo._observation_flange_candidates = lambda _target: [np.eye(4)]
+    demo._grasp_precheck_margin = lambda _target, _point: 10.0
+    natural_hang = np.array(
+        [-10.4, 121.6, 55.4, 7.3, 22.6, 5.8, -147.3]
+    )
+    staging = np.array(
+        [25.21, 54.74, 21.496, 62.516, -40.634, -36.028, -23.643]
+    )
+    seeds = []
+
+    class SeedAwareRobot:
+        @staticmethod
+        def joints_deg():
+            return natural_hang.tolist()
+
+        @staticmethod
+        def solve_flange_ik(_flange, _params, seed_joints_deg=None):
+            seeds.append(np.asarray(seed_joints_deg, dtype=float))
+            return list(map(float, seed_joints_deg))
+
+    demo.robot = SeedAwareRobot()
+
+    targets = demo._observation_plan_targets(
+        np.array([0.0, 0.52, -0.11]),
+        current_joints_deg=staging,
+    )
+
+    assert len(targets) == 1
+    np.testing.assert_allclose(seeds[0], staging)
+    assert targets[0].score == pytest.approx(0.0)
+
+
 def test_tight_margin_candidates_are_kept_but_ranked_after_roomy_ones():
     """2026-07-18 晚真机 watch 复现：10° 二元筛选把 11 个端点砍到 1 个，
     唯一幸存者 MoveIt 规划失败（error=99999）后没有任何备胎直接中止。
@@ -252,7 +339,7 @@ def test_tight_margin_candidates_are_kept_but_ranked_after_roomy_ones():
         def joints_deg(self):
             return [0.0] * 7
 
-        def solve_flange_ik(self, flange, params):
+        def solve_flange_ik(self, flange, params, seed_joints_deg=None):
             self.solve_count += 1
             # 第一个候选给最大的转移代价，其余递减——用来验证排序不只看代价
             return [float(50 - self.solve_count % 5)] * 7

@@ -13,7 +13,7 @@ def _planner(tmp_path):
     return MoveItPlanner(tmp_path, tmp_path)
 
 
-def _plan(planner):
+def _plan(planner, *, minimum_link7_z=None):
     return planner.plan(
         name="probe",
         start_joints_deg=[0.0] * 7,
@@ -26,6 +26,7 @@ def _plan(planner):
         planning_frame="platform_base_link",
         tool_guard={"xy": 0.1, "length": 0.2, "center_z": 0.1},
         voxel_size=0.05,
+        minimum_link7_z=minimum_link7_z,
     )
 
 
@@ -106,6 +107,37 @@ def test_moveit_request_records_explicit_goal_constraint(tmp_path, monkeypatch):
         (tmp_path / "probe_request.json").read_text(encoding="utf-8")
     )
     assert request["goal_constraint"] == "pose"
+
+
+def test_moveit_request_records_link7_vertical_path_floor(
+    tmp_path, monkeypatch
+):
+    planner = _planner(tmp_path)
+    payload = {
+        "success": True,
+        "error_code": 1,
+        "planning_time": 0.1,
+        "joint_names": [f"r_joint{i}" for i in range(1, 8)],
+        "points_deg": [[1.0] * 7],
+        "start_link7_fk": {
+            "position": [0, 0, 0],
+            "quaternion_xyzw": [0, 0, 0, 1],
+        },
+        "endpoint_link7_fk": {
+            "position": [0, 0, 0],
+            "quaternion_xyzw": [0, 0, 0, 1],
+        },
+        "attached_object_ids": ["bottle_tool_guard"],
+        "world_collision_ids": [],
+    }
+    monkeypatch.setattr(planner, "_run_json_helper", lambda **_: payload)
+
+    _plan(planner, minimum_link7_z=-0.25)
+
+    request = __import__("json").loads(
+        (tmp_path / "probe_request.json").read_text(encoding="utf-8")
+    )
+    assert request["minimum_link7_z"] == -0.25
 
 
 def test_moveit_trajectory_columns_are_reordered_by_joint_names(

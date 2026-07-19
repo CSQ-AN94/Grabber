@@ -264,6 +264,60 @@ def test_candidate_priority_from_caller_is_preserved():
     assert result.target.label == "roomy-first"
 
 
+def test_plan_only_chain_can_use_an_explicit_hypothetical_start():
+    safety = _profile()
+
+    class FakeMoveIt:
+        def __init__(self):
+            self.start = None
+
+        def plan(self, **kwargs):
+            self.start = kwargs["start_joints_deg"]
+            return {"points_deg": [[0.0] * 7]}
+
+        @staticmethod
+        def validate_exact_path(**kwargs):
+            return {"checked_states": len(kwargs["points_deg"])}
+
+    class FakeRobot:
+        @staticmethod
+        def joints_deg():
+            return [99.0] * 7
+
+        @staticmethod
+        def controller_flange_from_joints(_joints):
+            return np.eye(4)
+
+        @staticmethod
+        def validate_planned_joints(
+            _points, _max_step, _profile, start_joints_deg=None
+        ):
+            assert start_joints_deg == pytest.approx([10.0] * 7)
+            return 10
+
+    moveit = FakeMoveIt()
+    planner = SafeMotionPlanner(
+        moveit=moveit,
+        robot=FakeRobot(),
+        left_robot=FakeLeftRobot(),
+        safety=safety,
+        params=DemoParams(global_plan_attempts_per_candidate=1),
+    )
+
+    result = planner.plan(
+        name="observe_after_staging",
+        targets=[_target("candidate", 0.0, 0.0)],
+        obstacle_points=[],
+        collision_boxes=[],
+        start_right_joints_deg=[10.0] * 7,
+    )
+
+    assert moveit.start == pytest.approx([10.0] * 7)
+    assert result.trajectory["start_joints_deg"] == pytest.approx(
+        [10.0] * 7
+    )
+
+
 def test_replanning_is_bounded_and_reports_aggregate_rejections():
     safety = _profile()
 

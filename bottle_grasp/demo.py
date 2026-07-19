@@ -636,6 +636,19 @@ class BottleDemo:
                     T_base_camera = look_at_camera_pose(
                         target_base, camera_position
                     )
+                    optical_pitch_deg = float(
+                        np.degrees(
+                            np.arcsin(
+                                np.clip(T_base_camera[2, 2], -1.0, 1.0)
+                            )
+                        )
+                    )
+                    if not (
+                        self.params.observation_camera_min_pitch_deg
+                        <= optical_pitch_deg
+                        <= self.params.observation_camera_max_pitch_deg
+                    ):
+                        continue
                     candidates.append(
                         T_base_camera
                         @ np.linalg.inv(self.T_flange_wrist_camera)
@@ -728,9 +741,20 @@ class BottleDemo:
         return False
 
     def _observation_plan_targets(
-        self, target_base: np.ndarray
+        self,
+        target_base: np.ndarray,
+        current_joints_deg: Optional[Sequence[float]] = None,
     ) -> list[PlanTarget]:
-        current = np.asarray(self.robot.joints_deg(), dtype=float)
+        current = np.asarray(
+            (
+                self.robot.joints_deg()
+                if current_joints_deg is None
+                else current_joints_deg
+            ),
+            dtype=float,
+        )
+        if current.shape != (7,) or not np.all(np.isfinite(current)):
+            raise SafetyAbort("观察位候选评分起点必须是 7 个有限关节角")
         accepted = []
         for index, flange in enumerate(
             self._observation_flange_candidates(target_base), 1
@@ -741,7 +765,11 @@ class BottleDemo:
                     tcp[:3, 3],
                     label=f"右腕观察位候选 {index}",
                 )
-                joints = self.robot.solve_flange_ik(flange, self.params)
+                joints = self.robot.solve_flange_ik(
+                    flange,
+                    self.params,
+                    seed_joints_deg=current,
+                )
                 score = float(
                     np.linalg.norm(
                         np.asarray(joints, dtype=float) - current
@@ -973,9 +1001,14 @@ class BottleDemo:
         self,
         name: str,
         targets: list[PlanTarget],
+        start_right_joints_deg: Optional[Sequence[float]] = None,
         continuation_validator: Optional[
             Callable[[PlanTarget, dict], None]
         ] = None,
+        trajectory_validator: Optional[
+            Callable[[PlanTarget, dict], None]
+        ] = None,
+        enforce_endpoint_vertical_floor: bool = False,
     ) -> VerifiedPlan:
         safe_planner = SafeMotionPlanner(
             moveit=self.planner,
@@ -990,7 +1023,10 @@ class BottleDemo:
             targets=targets,
             obstacle_points=self.scene_voxels,
             collision_boxes=self.scene_boxes,
+            start_right_joints_deg=start_right_joints_deg,
             continuation_validator=continuation_validator,
+            trajectory_validator=trajectory_validator,
+            enforce_endpoint_vertical_floor=enforce_endpoint_vertical_floor,
         )
         captured = getattr(self, "head_scene_captured_monotonic", None)
         if captured is not None:
@@ -1023,8 +1059,151 @@ class BottleDemo:
         )
         return verified.trajectory
 
-    def _plan_observation(self, target_base: np.ndarray) -> dict:
+    def _assert_no_vertical_undershoot(
+        self,
+        *,
+        label: str,
+        start_joints_deg: Sequence[float],
+        trajectory: dict,
+    ) -> None:
+        """Reject a transfer that drops below both endpoints before rising."""
+        points = trajectory.get("points_deg") or []
+        if not points:
+            raise SafetyAbort(f"{label}轨迹为空，无法检查垂直路线")
+        start = np.asarray(start_joints_deg, dtype=float)
+        if start.shape != (7,) or not np.all(np.isfinite(start)):
+            raise SafetyAbort(f"{label}规划起点不是 7 个有限关节角")
+        dense = interpolate_joint_path(
+            start, points, self.params.planned_joint_step_deg
+        )
+        tcp_z = [
+            float(self.robot.tcp_from_joints(start)[2, 3]),
+            *[
+                float(self.robot.tcp_from_joints(joints)[2, 3])
+                for joints in dense
+            ],
+        ]
+        if not np.all(np.isfinite(tcp_z)):
+            raise SafetyAbort(f"{label}轨迹 TCP 高度含非有限值")
+        lower_endpoint = min(tcp_z[0], tcp_z[-1])
+        lowest = min(tcp_z)
+        undershoot = lower_endpoint - lowest
+        if (
+            undershoot
+            > self.params.observation_vertical_undershoot_tolerance_m
+        ):
+            raise SafetyAbort(
+                f"{label}路线会先下探再回升: "
+                f"最低点低于较低端点 {undershoot * 1000:.1f} mm "
+                f"(上限 {self.params.observation_vertical_undershoot_tolerance_m * 1000:.0f} mm)"
+            )
+
+    def _plan_observation_staging(
+        self,
+        start_right_joints_deg: Optional[Sequence[float]] = None,
+    ) -> Optional[dict]:
+        """Plan the open/high departure leg configured for a low parked arm."""
+        staging = self.safety.observation_staging_joints_deg
+        if staging is None:
+            return None
+        start = np.asarray(
+            (
+                self.robot.joints_deg()
+                if start_right_joints_deg is None
+                else start_right_joints_deg
+            ),
+            dtype=float,
+        )
+        goal = np.asarray(staging, dtype=float)
+        if (
+            start.shape != (7,)
+            or goal.shape != (7,)
+            or not np.all(np.isfinite(start))
+            or not np.all(np.isfinite(goal))
+        ):
+            raise SafetyAbort("观察准备位的起点/终点关节角无效")
+        max_delta = float(np.max(np.abs(goal - start)))
+        if max_delta <= self.params.planned_start_tolerance_deg:
+            self.stage(
+                "观察准备位",
+                f"当前姿态已在准备位容差内（最大差 {max_delta:.2f}°），无需移动",
+            )
+            return None
+
+        target_flange = self.robot.controller_flange_from_joints(goal)
+        target_tcp = self.robot.tcp_from_joints(goal)
+        if (
+            np.asarray(target_flange).shape != (4, 4)
+            or np.asarray(target_tcp).shape != (4, 4)
+            or not np.all(np.isfinite(target_flange))
+            or not np.all(np.isfinite(target_tcp))
+        ):
+            raise SafetyAbort("观察准备位 SDK FK 无效")
+        self.safety.assert_tcp_point(
+            np.asarray(target_tcp)[:3, 3], label="抬高展开观察准备位"
+        )
+
+        def validate_transfer_shape(
+            _target: PlanTarget, trajectory: dict
+        ) -> None:
+            self._assert_no_vertical_undershoot(
+                label="到观察准备位",
+                start_joints_deg=start,
+                trajectory=trajectory,
+            )
+
+        verified = self._verified_plan_targets(
+            "moveit_observation_staging",
+            [
+                PlanTarget(
+                    label="抬高展开观察准备位",
+                    flange=np.asarray(target_flange, dtype=float),
+                    goal_joints=tuple(map(float, goal)),
+                    score=float(np.linalg.norm(goal - start)),
+                    goal_constraint="joints",
+                )
+            ],
+            start_right_joints_deg=start,
+            trajectory_validator=validate_transfer_shape,
+            enforce_endpoint_vertical_floor=True,
+        )
+        self.stage(
+            "选择观察准备位路线",
+            (
+                f"从当前姿态先抬高并展开；最大关节变化 {max_delta:.1f}°，"
+                f"规划尝试 {verified.attempts} 次"
+            ),
+        )
+        return verified.trajectory
+
+    def _plan_observation(
+        self,
+        target_base: np.ndarray,
+        start_right_joints_deg: Optional[Sequence[float]] = None,
+    ) -> dict:
         target_point = np.asarray(target_base, dtype=float)
+        planning_start = np.asarray(
+            (
+                self.robot.joints_deg()
+                if start_right_joints_deg is None
+                else start_right_joints_deg
+            ),
+            dtype=float,
+        )
+        if (
+            planning_start.shape != (7,)
+            or not np.all(np.isfinite(planning_start))
+        ):
+            raise SafetyAbort("观察位规划起点必须是 7 个有限关节角")
+
+        def validate_transfer_shape(
+            _target: PlanTarget, trajectory: dict
+        ) -> None:
+            self._assert_no_vertical_undershoot(
+                label="观察位",
+                start_joints_deg=planning_start,
+                trajectory=trajectory,
+            )
 
         def validate_actual_endpoint(
             target: PlanTarget, trajectory: dict
@@ -1050,8 +1229,14 @@ class BottleDemo:
 
         verified = self._verified_plan_targets(
             "moveit_observation",
-            self._observation_plan_targets(target_point),
+            self._observation_plan_targets(
+                target_point,
+                current_joints_deg=planning_start,
+            ),
+            start_right_joints_deg=planning_start,
             continuation_validator=validate_actual_endpoint,
+            trajectory_validator=validate_transfer_shape,
+            enforce_endpoint_vertical_floor=True,
         )
         self.stage(
             "选择右腕观察位",
@@ -1466,7 +1651,9 @@ class BottleDemo:
                 f"{name}: 起点在奇异带内，已弯肘至 J4={escaped[3]:.1f}° 后重建路径",
             )
         return self._plan_ik_avoiding_singularity(
-            build_path(), params, allow_first_jump=allow_first_jump
+            build_path(),
+            params,
+            allow_first_jump=allow_first_jump,
         )
 
     def _plan_ik_avoiding_singularity(
@@ -1475,6 +1662,7 @@ class BottleDemo:
         params: DemoParams,
         *,
         allow_first_jump: bool = False,
+        roll_degrees: Sequence[float] = (0, 8, -8, 15, -15, 25, -25),
     ) -> list[list[float]]:
         """如 plan_ik，被拒绝时尝试绕接近轴（工具 z 轴）小角度重试。
 
@@ -1484,7 +1672,7 @@ class BottleDemo:
         不要指望这里的 roll。返回值替换调用方原来的 poses 列表，因为真正
         被执行的姿态必须和通过逆解检查的姿态一致。
         """
-        for roll_deg in (0, 8, -8, 15, -15, 25, -25):
+        for roll_deg in roll_degrees:
             if roll_deg:
                 roll = Rotation.from_euler(
                     "z", roll_deg, degrees=True
@@ -1596,13 +1784,11 @@ class BottleDemo:
         axis = rotation[:, 2]
         grasp = np.eye(4)
         grasp[:3, :3] = rotation
-        grasp[:3, 3] = target
+        grasp[:3, 3] = target - axis * self.params.grasp_stop_short_m
         pregrasp = grasp.copy()
         pregrasp[:3, 3] = target - axis * self.params.pregrasp_standoff_m
         lift = grasp.copy()
         lift[2, 3] += self.params.lift_m
-        retreat = grasp.copy()
-        retreat[:3, 3] -= axis * self.params.pregrasp_standoff_m
 
         pregrasp_pose = matrix_pose(pregrasp)
         grasp_pose = matrix_pose(grasp)
@@ -1618,6 +1804,8 @@ class BottleDemo:
         lower_path = interpolate_poses(
             matrix_pose(lift), grasp_pose, self.params.segment_m
         )
+        retreat = grasp.copy()
+        retreat[:3, 3] -= axis * self.params.retreat_standoff_m
         retreat_path = interpolate_poses(
             grasp_pose, matrix_pose(retreat), self.params.segment_m
         )
@@ -1789,27 +1977,36 @@ class BottleDemo:
         )
 
     def _confirm_lifted_target(self, locked: Localization) -> Localization:
-        """Prove with fixed-head 3-D that the bottle followed the +Z lift."""
+        """Prove upward departure despite post-grasp box occlusion.
+
+        The fingers hide the lower bottle after grasping, shortening YOLO's
+        box.  Its 66%-of-box depth sample therefore moves upward on the bottle
+        itself and is not the same semantic point as before the lift.  Require
+        reliable evidence that the target moved upward without jumping to a
+        horizontally different object; do not require that unstable point to
+        equal exactly ``locked + lift_m``.
+        """
         original = np.asarray(locked.point_base, dtype=float)
         expected = original.copy()
         expected[2] += self.params.lift_m
         measured = self._measure_target_from_head_3d("抬升三维确认", expected)
         point = np.asarray(measured.point_base, dtype=float)
-        displacement = float(np.linalg.norm(point - original))
-        expected_error = float(np.linalg.norm(point - expected))
+        delta = point - original
+        upward = float(delta[2])
+        horizontal = float(np.linalg.norm(delta[:2]))
         if (
-            displacement < self.params.lift_confirmation_min_displacement_m
-            or expected_error > self.params.lift_confirmation_tolerance_m
+            upward < self.params.lift_confirmation_min_displacement_m
+            or horizontal > self.params.lift_confirmation_max_horizontal_m
         ):
             raise SafetyAbort(
-                "抬升三维确认失败: "
-                f"离开原位={displacement * 1000:.1f}mm "
-                f"期望点误差={expected_error * 1000:.1f}mm"
+                "抬升三维确认失败（方向判定）: "
+                f"向上位移={upward * 1000:.1f}mm "
+                f"水平漂移={horizontal * 1000:.1f}mm"
             )
         self.stage(
             "抬升三维确认通过",
-            f"离开原位 {displacement * 1000:.1f} mm；期望点误差 "
-            f"{expected_error * 1000:.1f} mm；保持固定头部观察",
+            f"向上位移 {upward * 1000:.1f} mm；水平漂移 "
+            f"{horizontal * 1000:.1f} mm；保持固定头部观察",
         )
         return measured
 
@@ -2085,7 +2282,11 @@ class BottleDemo:
             current_wrist_box,
             np.asarray(wrist_target.point_base),
         )
-        self.stage("低速最后接近", f"速度 {self.params.final_speed}%")
+        self.stage(
+            "低速最后接近",
+            f"速度 {self.params.final_speed}%；相对视觉目标提前停止 "
+            f"{self.params.grasp_stop_short_m * 100:.0f} cm",
+        )
         for pose in final_path:
             # 最后10cm夹爪手指必然逐渐挡住瓶子，检测丢失是预期现象：
             # 画面中断仍然致命，检测丢失降级为警告（目标已锁定+人守急停）。
@@ -2146,12 +2347,13 @@ class BottleDemo:
         self.stage("松开夹爪")
         self.robot.open_gripper(self.params)
 
-        # 沿抓取接近轴反向退开一个预抓取距离，避免手指刮倒瓶子
+        # 沿抓取接近轴反向退开独立配置的释放后距离，避免手指刮倒瓶子。
+        # 这里不能复用 pregrasp_standoff：观察悬停和释放后净空是两个需求。
         def build_retreat_path() -> list[list[float]]:
             tcp = self.robot.current_tcp()
             axis = tcp[:3, 2]
             retreat = tcp.copy()
-            retreat[:3, 3] -= axis * self.params.pregrasp_standoff_m
+            retreat[:3, 3] -= axis * self.params.retreat_standoff_m
             self.safety.assert_tcp_point(retreat[:3, 3], label="放回后退开点")
             return interpolate_poses(
                 matrix_pose(tcp),
@@ -2162,9 +2364,12 @@ class BottleDemo:
         retreat_path = self._plan_local_leg(
             "退开", build_retreat_path, self.params
         )
-        self.stage("退开", f"沿接近轴反向 {self.params.pregrasp_standoff_m * 100:.0f} cm")
+        self.stage(
+            "退开",
+            f"沿接近轴反向 {self.params.retreat_standoff_m * 100:.0f} cm",
+        )
         for pose in retreat_path:
-            self.robot.move_linear(pose, self.params.final_speed)
+            self.robot.move_linear(pose, self.params.travel_speed)
         if locked_target is not None:
             self._confirm_released_target(locked_target)
         self.stage("收拢夹爪", "手臂已退开，空载闭合夹爪")

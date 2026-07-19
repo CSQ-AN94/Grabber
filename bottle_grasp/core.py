@@ -39,7 +39,18 @@ class DemoParams:
     tool_guard_xy_m: float = 0.10
     tool_guard_length_m: float = 0.19
     tool_guard_center_z_m: float = 0.095
+    # RGB-D returns a point on the visible bottle surface, while the TCP is a
+    # gripper reference point.  Stopping exactly at the visual point inserted
+    # the fingers/palm too deeply in the 2026-07-19 supervised run.  Keep the
+    # final TCP this far back along the approach axis.
+    # 2026-07-19 supervised adjustment: 4 cm was slightly too shallow; move
+    # 1 cm farther toward the bottle while retaining 3 cm against over-insertion.
+    grasp_stop_short_m: float = 0.030
     pregrasp_standoff_m: float = 0.085
+    # Post-release clearance is a different requirement from the pregrasp
+    # hover.  It used to reuse 8.5 cm and left the open fingers too close to
+    # the bottle; retreat farther after release without moving the pregrasp.
+    retreat_standoff_m: float = 0.150
     segment_m: float = 0.045
     lift_m: float = 0.05
     # Three motion regimes with genuinely different risk, so they get
@@ -49,17 +60,18 @@ class DemoParams:
     #     is the leg that dominates cycle time (2026-07-18: 146 blocking
     #     movej points took ~90 s at 3%).
     #   travel_speed  — local straight-line approach toward the pregrasp
-    #     hover point; close to the object, keep conservative.
-    #   final_speed   — final approach, lift, lower, retreat; contact-adjacent.
+    #     hover point and the post-release retreat.  Both stay away from
+    #     contact and can use the same 15% transit speed.
+    #   final_speed   — final approach, lift and lower; contact-adjacent.
     # 2026-07-19, operator-approved: transit raised 3% -> 15% after the
     # 2026-07-18 run spent ~90 s stepping 146 blocking movej points through
-    # free space.  The two contact-adjacent regimes below stay at 3%.
+    # free space.  Contact-adjacent final motion stays at 3%.
     # Still executed as discrete blocking points (走一步停一下); switching to
     # SDK connect=1 continuous trajectories would remove the remaining
     # start/stop overhead but would also rewrite the per-point feedback
     # contract, so it waits for real measured execution residuals.
     transit_speed: int = 15
-    travel_speed: int = 3
+    travel_speed: int = 15
     final_speed: int = 3
     j4_singularity_deg: float = 8.0
     # 起点已在 J4≈0 奇异带内时，先用关节空间 movej 把肘弯到这个角度再做
@@ -102,7 +114,11 @@ class DemoParams:
     # A collision scene is a planning snapshot, not a timeless fact.  A plan
     # that took too long to produce is refused before any global motion.
     scene_max_age_s: float = 45.0
-    moveit_endpoint_position_tolerance_m: float = 0.012
+    # 2026-07-19 实测：SDK rm_algo 与 URDF 在 5 组关节角上的同状态 FK 位置差
+    # 随构型变化 1.8~17.4mm（旋转一致到 0.01°），是两套运动学模型的固有几何
+    # 差异。容差必须盖过 17.4mm 才不会误杀；25mm 仍足以抓住坐标系级错误
+    # （修复前的镜像变换差了 530mm/180°）。
+    moveit_endpoint_position_tolerance_m: float = 0.025
     moveit_endpoint_orientation_tolerance_deg: float = 4.0
     # 每轮从头部点云拟合真实桌面并在容差内自适应 table_top 围栏。
     # 容差是"底盘每轮停靠位置的正常波动"量级；超出说明物理布置真的变了，
@@ -137,6 +153,13 @@ class DemoParams:
     # 后 5 个抓取 roll 全部死于"J2 距限位过近"。预检余量必须显著大于硬
     # 余量，给"头部定位→腕部精定位"之间约 3cm 的目标漂移留出关节空间。
     observation_grasp_margin_deg: float = 10.0
+    # Keep the wrist camera visually near level at the observation endpoint.
+    # Negative optical-axis pitch looks down in the controller base frame.
+    observation_camera_min_pitch_deg: float = -15.0
+    observation_camera_max_pitch_deg: float = 10.0
+    # A transfer may descend when the observation endpoint is physically
+    # lower, but it must not dive below both endpoints and then come back up.
+    observation_vertical_undershoot_tolerance_m: float = 0.008
     replan_exclusion_size_m: float = 0.10
     head_width: int = 848
     head_height: int = 480
@@ -148,9 +171,12 @@ class DemoParams:
     head_confirmation_tolerance_m: float = 0.05
     # Gripper feedback alone cannot prove the bottle moved.  Independent fixed
     # head RGB-D must observe a meaningful departure from the table lock and a
-    # point close to the commanded +5 cm lift before the task may become HELD.
+    # target meaningfully above the table lock before the task may become HELD.
+    # The gripper hides the lower bottle after grasping, so the box-relative
+    # depth sample can move upward on the bottle itself; compare direction and
+    # horizontal association, not exact distance to locked+5cm.
     lift_confirmation_min_displacement_m: float = 0.025
-    lift_confirmation_tolerance_m: float = 0.030
+    lift_confirmation_max_horizontal_m: float = 0.050
     # Release likewise requires a fresh 3-D measurement at the original lock;
     # it may never be synthesized from the lock's prior depth.
     release_confirmation_tolerance_m: float = 0.035
@@ -216,22 +242,33 @@ def matrix_pose(T: np.ndarray) -> list[float]:
 
 
 def interpolate_poses(
-    start: Sequence[float], end: Sequence[float], max_step: float
+    start: Sequence[float],
+    end: Sequence[float],
+    max_step: float,
+    max_rotation_step_deg: float = 10.0,
 ) -> list[list[float]]:
-    """Interpolate a Cartesian path with a hard translation step bound."""
+    """Interpolate a Cartesian path with translation and rotation step bounds."""
     a, b = pose_matrix(start), pose_matrix(end)
     distance = float(np.linalg.norm(b[:3, 3] - a[:3, 3]))
-    count = max(1, int(math.ceil(distance / max_step)))
-    rv0 = Rotation.from_matrix(a[:3, :3]).as_rotvec()
-    rv1 = Rotation.from_matrix(b[:3, :3]).as_rotvec()
+    if max_step <= 0 or max_rotation_step_deg <= 0:
+        raise SafetyAbort("位姿插值步长必须为正数")
+    relative = Rotation.from_matrix(a[:3, :3].T @ b[:3, :3])
+    rotation_deg = float(np.degrees(relative.magnitude()))
+    count = max(
+        1,
+        int(math.ceil(distance / max_step)),
+        int(math.ceil(rotation_deg / max_rotation_step_deg)),
+    )
+    relative_rotvec = relative.as_rotvec()
     result = []
     for i in range(1, count + 1):
         alpha = i / count
         T = np.eye(4)
         T[:3, 3] = (1 - alpha) * a[:3, 3] + alpha * b[:3, 3]
-        T[:3, :3] = Rotation.from_rotvec(
-            (1 - alpha) * rv0 + alpha * rv1
-        ).as_matrix()
+        T[:3, :3] = (
+            a[:3, :3]
+            @ Rotation.from_rotvec(alpha * relative_rotvec).as_matrix()
+        )
         result.append(matrix_pose(T))
     return result
 

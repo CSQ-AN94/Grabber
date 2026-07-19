@@ -205,6 +205,11 @@ def build_site_checks(demo) -> list[Check]:
         )
 
     def check_arm(_context: dict) -> str:
+        # Match the real task preflight.  A released green drag button can
+        # leave only 0xF000 latched even though all joints/controller are
+        # healthy; RobotSession clears exactly that narrow case and demands
+        # two clean rereads.  This changes no joint position.
+        recovered = demo.robot.recover_transient_joint_frame_loss()
         demo.robot.assert_arm_healthy()
         joints = np.asarray(demo.robot.joints_deg(), dtype=float)
         if joints.shape != (7,) or not np.all(np.isfinite(joints)):
@@ -212,7 +217,14 @@ def build_site_checks(demo) -> list[Check]:
         flange = demo.robot.current_flange()
         if not np.all(np.isfinite(flange)):
             raise SafetyAbort("FK 结果含非有限数")
-        return f"无错误码；J={np.round(joints, 1).tolist()}"
+        recovery_note = (
+            f"已清除并双读复核 {','.join(f'J{joint}' for joint in recovered)} 的 0xF000；"
+            if recovered
+            else ""
+        )
+        return (
+            f"{recovery_note}无错误码；J={np.round(joints, 1).tolist()}"
+        )
 
     def check_gripper(_context: dict) -> str:
         state = demo.robot.gripper_state()
@@ -259,14 +271,30 @@ def build_site_checks(demo) -> list[Check]:
     def check_plan_rehearsal(context: dict) -> str:
         # 真实候选生成 + 分级抓取预演 + SafeMotionPlanner 全套契约
         #（FK 契约、live 场景契约、独立围栏、MoveIt 密集后验、终点续演）。
-        # 通过 = from-start 真跑会执行的就是这条同款轨迹。
+        # 配置准备位时先从真实当前姿态规划第一段，再把其终点作为第二段的
+        # 显式起点。全程只生成/复核轨迹，不发送任何机械臂运动命令。
         target = context["head_target"]
+        staging_plan = demo._plan_observation_staging()
+        planning_start = None
+        staging_points = 0
+        if staging_plan is not None:
+            staging_trajectory = staging_plan.get("points_deg") or []
+            if not staging_trajectory:
+                raise SafetyAbort("观察准备位规划返回空轨迹")
+            planning_start = staging_trajectory[-1]
+            staging_points = len(staging_trajectory)
         plan = demo._plan_observation(
-            np.asarray(target.point_base, dtype=float)
+            np.asarray(target.point_base, dtype=float),
+            start_right_joints_deg=planning_start,
         )
         coverage = plan.get("search_coverage", {})
         return (
-            f"可执行轨迹 {len(plan.get('points_deg', []))} 点；"
+            (
+                f"准备位轨迹 {staging_points} 点；"
+                if staging_plan is not None
+                else "无需准备位；"
+            )
+            + f"观察位轨迹 {len(plan.get('points_deg', []))} 点；"
             f"搜索覆盖 {coverage.get('attempted_candidates')}"
             f"/{coverage.get('total_candidates')} 候选，"
             f"planners={coverage.get('planner_ids')}"
