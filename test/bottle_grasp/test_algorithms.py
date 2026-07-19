@@ -2,17 +2,40 @@ import numpy as np
 import pytest
 from pathlib import Path
 
+import threading
+
 from bottle_grasp.core import (
     DemoParams,
     Detection,
     Localization,
     SafetyAbort,
     interpolate_poses,
+    stop_reason,
 )
 from bottle_grasp.collision import classify_moveit_collision_probe
 from bottle_grasp.perception import depth_point_for_detection, robust_near_cluster
 from bottle_grasp.safety import load_safety_profile
 from bottle_grasp.scene import build_scene_voxels, union_scene_voxels
+
+
+def test_stop_reason_is_generic_without_a_recorded_source():
+    event = threading.Event()
+    event.set()
+    assert stop_reason(event) == "用户停止"
+
+
+def test_stop_reason_surfaces_a_guard_source_instead_of_the_generic_message():
+    # 2026-07-19: a bare stop_event.is_set() check raised an indistinguishable
+    # "用户停止" whether a person hit Ctrl+C or LeftArmStabilityGuard tripped
+    # on left-arm drift mid-task — the guard's real, informative error was
+    # separately swallowed by task.py's exception handler, so the operator
+    # only ever saw the generic message and had no way to tell them apart.
+    event = threading.Event()
+    setattr(event, "source", "left_arm_drift")
+    event.set()
+    reason = stop_reason(event)
+    assert reason != "用户停止"
+    assert "left_arm_drift" in reason
 
 
 def test_interpolate_respects_max_translation_step():

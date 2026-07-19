@@ -36,6 +36,7 @@ from .core import (
     look_at_camera_pose,
     matrix_pose,
     pose_matrix,
+    stop_reason,
 )
 from .dashboard import Dashboard, PreviewWorker, SharedState
 from . import head_lock
@@ -401,7 +402,7 @@ class BottleDemo:
         deadline = time.time() + max(10, depth_params.samples * 2.5)
         while len(camera_points) < depth_params.samples and time.time() < deadline:
             if self.stop_event.is_set():
-                raise SafetyAbort("用户停止")
+                raise SafetyAbort(stop_reason(self.stop_event))
             timestamp = self.camera.get_frame_timestamp()
             if timestamp <= last_timestamp:
                 time.sleep(0.03)
@@ -915,7 +916,7 @@ class BottleDemo:
         deadline = time.time() + max(6.0, count * 2.0)
         while len(frames) < count and time.time() < deadline:
             if self.stop_event.is_set():
-                raise SafetyAbort("用户停止")
+                raise SafetyAbort(stop_reason(self.stop_event))
             timestamp = self.camera.get_frame_timestamp()
             if timestamp <= last_timestamp:
                 time.sleep(0.03)

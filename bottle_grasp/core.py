@@ -22,6 +22,23 @@ class BottleDetectionLost(SafetyAbort):
     """A live frame no longer contains a detector-approved bottle."""
 
 
+def stop_reason(stop_event) -> str:
+    """Describe why a shared stop_event fired, distinguishing operator stop
+    from an automatic guard trip.
+
+    Guards that stop the task from a background thread (LeftArmStabilityGuard,
+    _execute_plan's left-arm snapshot monitor) tag the event with a `.source`
+    attribute before calling `.set()`.  Every caller that merely polls
+    `stop_event.is_set()` used to raise an indistinguishable generic
+    "用户停止", which reads as an operator Ctrl+C/STOP even when the real
+    cause was an automatic safety guard tripping mid-task (2026-07-19: this
+    made a left-arm-drift trip during post-place gripper close look like an
+    unexplained hardware failure).
+    """
+    source = getattr(stop_event, "source", None)
+    return "用户停止" if not source else f"自动安全停止（{source}）"
+
+
 @dataclass
 class DemoParams:
     samples: int = 7

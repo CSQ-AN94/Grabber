@@ -20,6 +20,7 @@ from .core import (
     interpolate_joint_path,
     matrix_pose,
     pose_matrix,
+    stop_reason,
 )
 
 LOG = logging.getLogger("bottle_demo")
@@ -576,7 +577,7 @@ class RobotSession:
         state before the next waypoint is allowed to run.
         """
         if self.stop_event.is_set():
-            raise SafetyAbort("用户停止")
+            raise SafetyAbort(stop_reason(self.stop_event))
         target = list(map(float, pose))
         LOG.info(
             "SDK movel 下发: target=%s speed=%d%%",
@@ -750,8 +751,9 @@ class RobotSession:
         )
         for index, joints in enumerate(dense, 1):
             if self.stop_event.is_set():
-                progress.close("用户停止")
-                raise SafetyAbort("用户停止")
+                reason = stop_reason(self.stop_event)
+                progress.close(reason)
+                raise SafetyAbort(reason)
             progress.update(index - 1)
             rc = self.arm.rm_movej(joints, speed, 0, 0, 1)
             if rc != 0:
@@ -821,7 +823,7 @@ class RobotSession:
         latest = before
         while time.monotonic() < deadline:
             if self.stop_event.is_set():
-                raise SafetyAbort("用户停止")
+                raise SafetyAbort(stop_reason(self.stop_event))
             latest = self.gripper_state()
             state = int(latest["dof_state"][0])
             pos = int(latest["pos"][0])
