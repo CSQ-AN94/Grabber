@@ -12,7 +12,7 @@ from bottle_grasp.core import (
 from bottle_grasp.collision import classify_moveit_collision_probe
 from bottle_grasp.perception import depth_point_for_detection, robust_near_cluster
 from bottle_grasp.safety import load_safety_profile
-from bottle_grasp.scene import build_scene_voxels
+from bottle_grasp.scene import build_scene_voxels, union_scene_voxels
 
 
 def test_interpolate_respects_max_translation_step():
@@ -157,6 +157,49 @@ def test_scene_budget_overflow_aborts_instead_of_dropping_far_obstacles():
 
     with pytest.raises(SafetyAbort, match="拒绝丢弃远处障碍"):
         build_scene_voxels(depth, K, np.eye(4), localization, params)
+
+
+def test_union_scene_voxels_keeps_a_voxel_seen_in_only_one_frame():
+    """A surface that flickers in and out (dark/specular/grazing angle) is
+    still a real obstacle. Union, not majority vote: 1-of-3 frames must be
+    enough to keep it occupied."""
+    params = DemoParams(scene_max_voxels=50)
+    frame_a = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]
+    frame_b = [[0.0, 0.0, 0.0]]
+    frame_c = [[0.0, 0.0, 0.0]]
+    merged = union_scene_voxels([frame_a, frame_b, frame_c], params)
+    assert [1.0, 0.0, 0.0] in merged
+    assert [0.0, 0.0, 0.0] in merged
+    assert len(merged) == 2
+
+
+def test_union_scene_voxels_dedupes_identical_grid_cells():
+    params = DemoParams(scene_max_voxels=50)
+    merged = union_scene_voxels(
+        [[[0.1, 0.2, 0.3]], [[0.1, 0.2, 0.3]], [[0.1, 0.2, 0.3]]], params
+    )
+    assert merged == [[0.1, 0.2, 0.3]]
+
+
+def test_union_scene_voxels_budget_applies_to_the_union_not_one_frame():
+    """A budget check that only looked at the smallest single frame would
+    let the merged scene (what MoveIt actually receives) silently exceed
+    the safety cap."""
+    params = DemoParams(scene_max_voxels=3)
+    frame_a = [[float(i), 0.0, 0.0] for i in range(2)]
+    frame_b = [[float(i), 1.0, 0.0] for i in range(2)]
+    with pytest.raises(SafetyAbort, match="拒绝丢弃远处障碍"):
+        union_scene_voxels([frame_a, frame_b], params)
+
+
+def test_union_scene_voxels_rejects_empty_frame_list():
+    with pytest.raises(SafetyAbort, match="空的帧列表"):
+        union_scene_voxels([], DemoParams())
+
+
+def test_union_scene_voxels_rejects_malformed_point():
+    with pytest.raises(SafetyAbort, match="第 2 帧"):
+        union_scene_voxels([[[0.0, 0.0, 0.0]], [[float("nan"), 0.0, 0.0]]], DemoParams())
 
 
 def test_observation_direction_normalization_does_not_mutate_target():

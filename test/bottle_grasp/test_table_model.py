@@ -7,7 +7,9 @@ from bottle_grasp.core import DemoParams, SafetyAbort
 from bottle_grasp.safety import FenceBox, SafetyProfile
 from bottle_grasp.table_model import (
     TABLE_KEEPOUT_ID,
+    TableFit,
     adapt_profile_to_table,
+    combine_table_fits,
     fit_table_top,
 )
 
@@ -160,3 +162,71 @@ def test_profile_without_table_keepout_is_untouched():
         )
     )
     assert adapt_profile_to_table(profile, None, DemoParams()) is profile
+
+
+def _fit(*, height_m, top_m=None, x_range=(-0.4, 0.4), y_front=0.3, inliers=100):
+    return TableFit(
+        height_m=height_m,
+        top_m=height_m + 0.01 if top_m is None else top_m,
+        x_range=x_range,
+        y_front=y_front,
+        inliers=inliers,
+    )
+
+
+def test_combine_table_fits_uses_median_height_across_frames():
+    params = DemoParams()
+    combined = combine_table_fits(
+        [_fit(height_m=-0.204), _fit(height_m=-0.205), _fit(height_m=-0.206)],
+        params,
+    )
+    assert combined.height_m == pytest.approx(-0.205)
+
+
+def test_combine_table_fits_grows_the_protected_volume_never_shrinks_it():
+    """Height is median (robust to one outlier), but everything that sizes
+    the keepout box takes the most protective value seen across frames."""
+    params = DemoParams()
+    combined = combine_table_fits(
+        [
+            _fit(height_m=-0.205, top_m=-0.195, x_range=(-0.4, 0.3), y_front=0.32, inliers=120),
+            _fit(height_m=-0.204, top_m=-0.190, x_range=(-0.3, 0.5), y_front=0.28, inliers=90),
+        ],
+        params,
+    )
+    assert combined.top_m == pytest.approx(-0.190)  # highest surface wins
+    assert combined.x_range == (-0.4, 0.5)  # widest extent wins
+    assert combined.y_front == pytest.approx(0.28)  # nearest front edge wins
+    assert combined.inliers == 90  # weakest evidence reported, not flattered
+
+
+def test_combine_table_fits_rejects_frames_that_disagree():
+    """A real table does not move between consecutive frames. A spread this
+    large means the scene changed mid-capture (hand crossing the view,
+    exposure switch) — trusting either frame would silently shift the fence."""
+    params = DemoParams(table_fit_agreement_m=0.015)
+    with pytest.raises(SafetyAbort, match="帧实测桌面高度不一致"):
+        combine_table_fits(
+            [_fit(height_m=-0.205), _fit(height_m=-0.240)], params
+        )
+
+
+def test_combine_table_fits_tolerates_spread_within_the_agreement_band():
+    params = DemoParams(table_fit_agreement_m=0.015)
+    combined = combine_table_fits(
+        [_fit(height_m=-0.205), _fit(height_m=-0.212)], params
+    )
+    assert combined.height_m == pytest.approx((-0.205 + -0.212) / 2)
+
+
+def test_combine_table_fits_aborts_if_any_frame_found_no_plane():
+    """One bad frame in the batch must not be silently dropped and averaged
+    around — it is evidence the capture window was not stable."""
+    params = DemoParams()
+    with pytest.raises(SafetyAbort, match="1 帧找不到桌面平面"):
+        combine_table_fits([_fit(height_m=-0.205), None], params)
+
+
+def test_combine_table_fits_rejects_empty_list():
+    with pytest.raises(SafetyAbort, match="空的帧列表"):
+        combine_table_fits([], DemoParams())

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass
+from typing import Sequence
 
 import numpy as np
 
@@ -82,6 +83,55 @@ def fit_table_top(
         x_range=(float(x_lo), float(x_hi)),
         y_front=y_front,
         inliers=int(len(inliers)),
+    )
+
+
+def combine_table_fits(
+    fits: Sequence[TableFit | None],
+    params: DemoParams,
+) -> TableFit:
+    """Require the sampled frames to agree, then combine conservatively.
+
+    A table surface does not move between consecutive frames, so a spread
+    larger than ``table_fit_agreement_m`` is evidence that something else
+    changed during capture — a hand crossing the view, an exposure switch,
+    a burst of IR interference.  That is exactly the case where trusting a
+    single frame would silently shift the fence, so it aborts instead.
+
+    Height (which gates the ±tolerance check against the configured
+    profile) uses the median: robust to one outlier frame.  Every field
+    that sizes the *keepout box* takes the most protective value seen, so
+    multi-frame sampling can only grow the protected volume.
+    """
+    if not fits:
+        raise SafetyAbort("桌面拟合收到空的帧列表")
+    if any(fit is None for fit in fits):
+        missing = sum(1 for fit in fits if fit is None)
+        raise SafetyAbort(
+            f"{len(fits)} 帧中有 {missing} 帧找不到桌面平面，"
+            "采集期间视野不稳定——检查是否有人/物体经过头部相机视野后重跑"
+        )
+    measured = [fit for fit in fits if fit is not None]
+    heights = np.asarray([fit.height_m for fit in measured], dtype=float)
+    spread = float(np.max(heights) - np.min(heights))
+    if spread > params.table_fit_agreement_m:
+        raise SafetyAbort(
+            f"{len(measured)} 帧实测桌面高度不一致，跨度 {spread * 1000:.1f} mm "
+            f"超过上限 {params.table_fit_agreement_m * 1000:.0f} mm："
+            "采集期间场景在动，拒绝用不稳定的测量调整电子围栏"
+        )
+    return TableFit(
+        height_m=float(np.median(heights)),
+        # Highest surface, furthest-forward edge and widest extent seen:
+        # the keepout box only ever grows across frames.
+        top_m=max(fit.top_m for fit in measured),
+        x_range=(
+            min(fit.x_range[0] for fit in measured),
+            max(fit.x_range[1] for fit in measured),
+        ),
+        y_front=min(fit.y_front for fit in measured),
+        # Report the weakest supporting evidence, not the most flattering.
+        inliers=min(fit.inliers for fit in measured),
     )
 
 

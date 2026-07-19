@@ -126,13 +126,55 @@ def build_scene_voxels(
     unique = np.unique(keys, axis=0)
     centers = (unique.astype(float) + 0.5) * voxel
     max_voxels = params.scene_max_voxels if max_voxels is None else max_voxels
-    if len(centers) > max_voxels:
-        # Never manufacture free space to meet a performance budget.  The
-        # previous "nearest to bottle" truncation could drop an obstacle near
-        # the path start while retaining hundreds of table voxels.  The scene
-        # must either be represented in full or the robot must not move.
+    _assert_within_budget(len(centers), max_voxels)
+    return centers.tolist()
+
+
+def _assert_within_budget(count: int, max_voxels: int) -> None:
+    # Never manufacture free space to meet a performance budget.  The
+    # previous "nearest to bottle" truncation could drop an obstacle near
+    # the path start while retaining hundreds of table voxels.  The scene
+    # must either be represented in full or the robot must not move.
+    if count > max_voxels:
         raise SafetyAbort(
             "头部障碍体素超出安全场景预算，拒绝丢弃远处障碍: "
-            f"{len(centers)} > {max_voxels}。清理视野或调大体素尺寸后重跑"
+            f"{count} > {max_voxels}。清理视野或调大体素尺寸后重跑"
         )
-    return centers.tolist()
+
+
+def union_scene_voxels(
+    voxel_lists: Sequence[Sequence[Sequence[float]]],
+    params: DemoParams,
+    *,
+    max_voxels: int | None = None,
+) -> list[list[float]]:
+    """Merge per-frame occupancy into one conservative scene.
+
+    Occupancy is combined by union, never by majority vote.  A surface that
+    only registers in some frames (dark, specular, or grazing-angle
+    geometry) is still a real obstacle; dropping it because it failed a
+    per-voxel vote would delete obstacles the camera did see — the same
+    "manufactured free space" failure the budget check above exists to
+    prevent.  Erring toward too many obstacles can only cost a refused
+    plan; erring toward too few costs a collision.
+
+    Centres come from the same integer voxel grid in every frame, so equal
+    cells produce bit-identical coordinates and set semantics are exact.
+    """
+    if not voxel_lists:
+        raise SafetyAbort("障碍体素合并收到空的帧列表")
+    merged: dict[tuple[float, float, float], list[float]] = {}
+    for index, centers in enumerate(voxel_lists, 1):
+        for center in centers:
+            point = np.asarray(center, dtype=float)
+            if point.shape != (3,) or not np.all(np.isfinite(point)):
+                raise SafetyAbort(f"第 {index} 帧障碍体素坐标无效")
+            merged.setdefault(
+                (float(point[0]), float(point[1]), float(point[2])),
+                point.tolist(),
+            )
+    max_voxels = params.scene_max_voxels if max_voxels is None else max_voxels
+    # The union is what the planner will actually see, so the budget applies
+    # to it — not just to whichever single frame happened to be smallest.
+    _assert_within_budget(len(merged), max_voxels)
+    return [merged[key] for key in sorted(merged)]

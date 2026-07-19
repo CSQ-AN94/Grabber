@@ -44,10 +44,11 @@ from .planner import MoveItPlanner
 from .robot import ArmJointReader, RobotSession
 from .safe_planner import PlanTarget, SafeMotionPlanner, VerifiedPlan
 from .safety import SafetyProfile, load_safety_profile
-from .scene import build_scene_voxels, head_scene_points
+from .scene import build_scene_voxels, head_scene_points, union_scene_voxels
 from .table_model import (
     TABLE_KEEPOUT_ID,
     adapt_profile_to_table,
+    combine_table_fits,
     fit_table_top,
 )
 from .target_guard import GuardResult, LockedTargetGuard, ProjectedTargetAssociation
@@ -817,21 +818,33 @@ class BottleDemo:
                 f"使用 {len(self.scene_boxes)} 个静态电子围栏禁入区",
             )
             return
-        _, depth = self.camera.get_latest_frames()
         K, _ = self.camera.get_camera_intrinsics()
+        if K is None:
+            raise SafetyAbort("头部相机内参不可用")
         captured_monotonic = time.monotonic()
-        self.head_scene_voxels = build_scene_voxels(
-            depth,
-            K,
-            self.T_base_head_camera,
-            localization,
-            self.params,
-            min_depth_m=self.params.head_min_depth_m,
-            max_depth_m=self.params.head_max_depth_m,
-            bottom_crop=self.params.scene_image_bottom_crop,
+        depth_frames = self._collect_fresh_depth_frames(
+            self.params.scene_samples, label="头部障碍场景"
+        )
+        per_frame_voxels = [
+            build_scene_voxels(
+                depth,
+                K,
+                self.T_base_head_camera,
+                localization,
+                self.params,
+                min_depth_m=self.params.head_min_depth_m,
+                max_depth_m=self.params.head_max_depth_m,
+                bottom_crop=self.params.scene_image_bottom_crop,
+            )
+            for depth in depth_frames
+        ]
+        self.head_scene_voxels = union_scene_voxels(
+            per_frame_voxels, self.params
         )
         self.scene_voxels = list(self.head_scene_voxels)
-        table_fit = self._adapt_fence_to_measured_table(depth, K, localization)
+        table_fit = self._adapt_fence_to_measured_table(
+            depth_frames, K, localization
+        )
         self.head_scene_captured_monotonic = captured_monotonic
         (self.run_dir / "head_scene.json").write_text(
             json.dumps(
@@ -848,16 +861,51 @@ class BottleDemo:
             ),
             encoding="utf-8",
         )
+        per_frame_counts = [len(item) for item in per_frame_voxels]
         self.stage(
             "构建障碍场景",
             (
                 f"{len(self.scene_boxes)} 个电子围栏禁入区；"
                 f"{len(self.scene_voxels)} 个动态 RGB-D 体素"
+                f"（{len(depth_frames)} 帧并集，单帧 {per_frame_counts}）"
             ),
         )
 
+    def _collect_fresh_depth_frames(
+        self, count: int, *, label: str
+    ) -> list[np.ndarray]:
+        """Collect `count` distinct fresh depth frames, or refuse to proceed.
+
+        Frames are keyed on the camera timestamp so this cannot silently
+        return the same buffer N times — which would look like consensus
+        while providing none.
+        """
+        if count < 1:
+            raise SafetyAbort(f"{label} 的采样帧数必须至少为 1")
+        frames: list[np.ndarray] = []
+        last_timestamp = 0.0
+        deadline = time.time() + max(6.0, count * 2.0)
+        while len(frames) < count and time.time() < deadline:
+            if self.stop_event.is_set():
+                raise SafetyAbort("用户停止")
+            timestamp = self.camera.get_frame_timestamp()
+            if timestamp <= last_timestamp:
+                time.sleep(0.03)
+                continue
+            last_timestamp = timestamp
+            _, depth = self.camera.get_latest_frames()
+            if depth is None:
+                continue
+            frames.append(depth)
+        if len(frames) < count:
+            raise SafetyAbort(
+                f"{label} 只取到 {len(frames)}/{count} 个新鲜深度帧，"
+                "RGB-D 流不稳定，拒绝用不足的采样构建避障场景"
+            )
+        return frames
+
     def _adapt_fence_to_measured_table(
-        self, depth, K, localization: Localization
+        self, depth_frames: Sequence[np.ndarray], K, localization: Localization
     ):
         """每轮实测桌面，让电子围栏跟着真实桌子走（容差外拒跑）。
 
@@ -866,20 +914,36 @@ class BottleDemo:
         旧盒子会挡住真实桌面上方明明可用的空间（虚假拒绝）；比配置高/近时
         围栏漏保护。这里在 table_fit_height_tolerance_m 的信封内自适应，
         超出信封说明布置真的变了，fail-closed 拒跑并提示重新测量。
+
+        高度来自多帧：单帧的统计学去噪（分箱众数+中位数）扛得住散点噪声，
+        但扛不住整帧状态不对（有人手经过、曝光刚切换）。帧间不一致就拒跑，
+        因为这个测量结果会直接决定本轮围栏怎么调。
         """
-        table_fit = fit_table_top(
-            head_scene_points(
-                depth,
-                K,
-                self.T_base_head_camera,
+        # A profile without a table keepout never needed the measurement, so
+        # skip the RGB-D work entirely and do not let frame disagreement
+        # abort a run it cannot affect.
+        if not any(
+            box.id == TABLE_KEEPOUT_ID for box in self.safety.keepout_boxes
+        ):
+            return None
+        target = np.asarray(localization.point_base, dtype=float)
+        fits = [
+            fit_table_top(
+                head_scene_points(
+                    depth,
+                    K,
+                    self.T_base_head_camera,
+                    self.params,
+                    min_depth_m=self.params.head_min_depth_m,
+                    max_depth_m=self.params.head_max_depth_m,
+                    bottom_crop=self.params.scene_image_bottom_crop,
+                ),
+                target,
                 self.params,
-                min_depth_m=self.params.head_min_depth_m,
-                max_depth_m=self.params.head_max_depth_m,
-                bottom_crop=self.params.scene_image_bottom_crop,
-            ),
-            np.asarray(localization.point_base, dtype=float),
-            self.params,
-        )
+            )
+            for depth in depth_frames
+        ]
+        table_fit = combine_table_fits(fits, self.params)
         adapted = adapt_profile_to_table(self.safety, table_fit, self.params)
         if adapted is self.safety:
             return table_fit
@@ -898,8 +962,8 @@ class BottleDemo:
         self.stage(
             "桌面围栏自适应",
             (
-                f"实测桌面 z={table_fit.height_m:.3f}"
-                f"（{table_fit.inliers} 内点），禁区顶面 "
+                f"{len(fits)} 帧一致，实测桌面 z={table_fit.height_m:.3f}"
+                f"（最少 {table_fit.inliers} 内点），禁区顶面 "
                 f"{old_top:.3f} -> {new_top:.3f}"
             ),
         )

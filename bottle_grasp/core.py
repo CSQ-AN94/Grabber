@@ -81,6 +81,12 @@ class DemoParams:
     head_max_depth_m: float = 2.2
     scene_voxel_m: float = 0.065
     scene_max_voxels: int = 550
+    # 目标定位要 7 帧共识才敢信，环境点云却只用一帧——同一次运行里两套
+    # 可靠性标准不一致，而"障碍物在哪/桌子多高"出错的后果同样是真实的。
+    # 障碍体素取多帧并集（任一帧看到即占据，绝不投票删除闪烁的障碍物），
+    # 桌面高度取多帧中位数且要求帧间一致，不一致说明采集期间场景在动。
+    scene_samples: int = 3
+    table_fit_agreement_m: float = 0.015
     # Kept for config compatibility only.  Global scene construction must not
     # erase a clearance sphere around the target: the 2026-07-18 value (14 cm)
     # could delete real obstacles beside the bottle.  Contact semantics belong
