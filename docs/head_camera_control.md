@@ -8,6 +8,10 @@
 
 注意：`shared` 模式本身不采图。只有夹水瓶 demo 或其他使用 `sensors.CameraThread` 的程序正在运行并发布共享帧时，网页画面才会实时刷新。如果共享帧超过 3 秒没有更新，网页会显示 `stale` 或等待提示图，而不是继续显示旧照片。
 
+默认运行在 `shared` 模式：网页只读取其他机器人程序发布出来的最新 JPEG 帧，不直接打开 `/dev/video*` 或 RealSense pipeline，因此可以和夹水瓶 demo 同时运行。
+
+注意：`shared` 模式本身不采图。只有夹水瓶 demo 或其他使用 `sensors.CameraThread` 的程序正在运行并发布共享帧时，网页画面才会实时刷新。如果共享帧超过 3 秒没有更新，网页会显示 `stale` 或等待提示图，而不是继续显示旧照片。
+
 ## 文件
 
 - `test/head_camera_control.py`：网页服务和实时画面刷新，默认不占用相机设备
