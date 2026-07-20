@@ -32,6 +32,15 @@ BROADCAST_IP = "169.254.128.255"
 CONTROL_PORT = 19999
 ANGLE_PORT = 9996
 
+LIFT_IP = "169.254.128.18"
+LIFT_PORT = 8080
+LIFT_MIN_HEIGHT_MM = 0
+LIFT_MAX_HEIGHT_MM = 2600
+LIFT_DEFAULT_STEP_MM = 50
+LIFT_MAX_STEP_MM = 200
+LIFT_SPEED = 30
+LIFT_TIMEOUT_SECONDS = 20.0
+
 HEAD_CTRL_IO = 5
 UP_IO = 6
 DOWN_IO = 7
@@ -316,6 +325,127 @@ class HeadUdpController:
         return {"ok": True, "done": False, "error": "max_steps reached", "steps": steps}
 
 
+class LiftController:
+    """Serialize bounded, incremental lift commands over the lift TCP API."""
+
+    def __init__(self, host: str = LIFT_IP, port: int = LIFT_PORT):
+        self.host = host
+        self.port = port
+        self._command_lock = threading.Lock()
+        self._state_lock = threading.Lock()
+        self._latest: dict[str, Any] | None = None
+        self._last_error: str | None = None
+        self._last_update_time = 0.0
+
+    @staticmethod
+    def target_height(current: int, direction: str, step_mm: int) -> int:
+        if direction not in ("up", "down"):
+            raise ValueError("direction must be up or down")
+        if not 1 <= step_mm <= LIFT_MAX_STEP_MM:
+            raise ValueError(f"step must be between 1 and {LIFT_MAX_STEP_MM} mm")
+        delta = step_mm if direction == "up" else -step_mm
+        return max(LIFT_MIN_HEIGHT_MM, min(LIFT_MAX_HEIGHT_MM, current + delta))
+
+    @staticmethod
+    def validate_state_for_motion(state: dict[str, Any]) -> int:
+        current = state.get("height")
+        if type(current) is not int:
+            raise RuntimeError("lift state did not contain an integer height")
+        if state.get("en_flag") not in (None, 1):
+            raise RuntimeError(f"lift controller is not enabled (en_flag={state.get('en_flag')})")
+        if state.get("err_flag") not in (None, 0):
+            raise RuntimeError(f"lift controller reports a fault (err_flag={state.get('err_flag')})")
+        return current
+
+    @staticmethod
+    def _send_cmd(sock: socket.socket, command: dict[str, Any]) -> dict[str, Any]:
+        sock.sendall((json.dumps(command) + "\r\n").encode("utf-8"))
+        buf = b""
+        while len(buf) <= 65536:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+            try:
+                response = json.loads(buf.decode("utf-8").strip())
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if not isinstance(response, dict):
+                raise RuntimeError("lift controller returned a non-object response")
+            return response
+        raise RuntimeError("lift controller closed without a complete response")
+
+    def _remember(self, state: dict[str, Any] | None, error: str | None = None) -> None:
+        with self._state_lock:
+            if state is not None:
+                self._latest = dict(state)
+            self._last_error = error
+            self._last_update_time = time.time()
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._state_lock:
+            state = dict(self._latest) if self._latest is not None else None
+            age = None if not self._last_update_time else round(time.time() - self._last_update_time, 3)
+            return {
+                "ok": state is not None and self._last_error is None,
+                "state": state,
+                "error": self._last_error,
+                "age_s": age,
+                "min_height_mm": LIFT_MIN_HEIGHT_MM,
+                "max_height_mm": LIFT_MAX_HEIGHT_MM,
+                "max_step_mm": LIFT_MAX_STEP_MM,
+            }
+
+    def refresh(self) -> dict[str, Any]:
+        with self._command_lock:
+            try:
+                with socket.create_connection((self.host, self.port), timeout=LIFT_TIMEOUT_SECONDS) as sock:
+                    sock.settimeout(LIFT_TIMEOUT_SECONDS)
+                    state = self._send_cmd(sock, {"command": "get_lift_state"})
+                self._remember(state)
+            except (OSError, RuntimeError) as exc:
+                self._remember(None, str(exc))
+        return self.snapshot()
+
+    def move(self, direction: str, step_mm: int = LIFT_DEFAULT_STEP_MM) -> dict[str, Any]:
+        with self._command_lock:
+            try:
+                with socket.create_connection((self.host, self.port), timeout=LIFT_TIMEOUT_SECONDS) as sock:
+                    sock.settimeout(LIFT_TIMEOUT_SECONDS)
+                    before = self._send_cmd(sock, {"command": "get_lift_state"})
+                    current = self.validate_state_for_motion(before)
+                    target = self.target_height(current, direction, step_mm)
+                    if target == current:
+                        self._remember(before)
+                        return {
+                            "ok": True,
+                            "direction": direction,
+                            "before_height_mm": current,
+                            "target_height_mm": target,
+                            "at_limit": True,
+                            "lift": self.snapshot(),
+                        }
+                    response = self._send_cmd(sock, {
+                        "command": "set_lift_height",
+                        "speed": LIFT_SPEED,
+                        "height": target,
+                        "block": 1,
+                    })
+                    after = self._send_cmd(sock, {"command": "get_lift_state"})
+                self._remember(after)
+                return {
+                    "ok": True,
+                    "direction": direction,
+                    "before_height_mm": current,
+                    "target_height_mm": target,
+                    "response": response,
+                    "lift": self.snapshot(),
+                }
+            except (OSError, RuntimeError, ValueError) as exc:
+                self._remember(None, str(exc))
+                return {"ok": False, "error": str(exc), "lift": self.snapshot()}
+
+
 class CameraStream:
     def __init__(self, source: str, width: int, height: int, fps: int, quality: int):
         self.source = source
@@ -449,6 +579,8 @@ HTML = r"""<!doctype html>
     .value { font-variant-numeric: tabular-nums; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .pill { display:inline-flex; align-items:center; min-height:26px; padding:3px 8px; border:1px solid var(--line); border-radius:6px; font-size:12px; color:var(--muted); }
     .controls { display:grid; grid-template-columns:72px 72px 72px; gap:8px; justify-content:center; margin:18px 0; }
+    .lift-controls { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .lift-controls button { font-size:14px; }
     button { height:44px; border:1px solid var(--line); border-radius:7px; background:#252b35; color:var(--text); font-size:18px; cursor:pointer; }
     button:hover { border-color:var(--accent); }
     button:active { transform:translateY(1px); }
@@ -494,6 +626,18 @@ HTML = r"""<!doctype html>
       <div class="section">
         <div class="row"><span class="label">Repeat</span><input id="repeat" type="number" min="1" max="20" value="6"></div>
         <div class="row"><span class="label">Interval</span><input id="interval" type="number" min="0.01" max="0.5" step="0.01" value="0.05"></div>
+      </div>
+
+      <div class="section">
+        <div class="row"><span class="label">身体高度</span><span class="value" id="liftHeight">-</span></div>
+        <div class="row"><span class="label">升降状态</span><span class="value" id="liftStatus">未读取</span></div>
+        <div class="row"><span class="label">步长 mm</span><input id="liftStep" type="number" min="1" max="200" value="50"></div>
+        <div class="lift-controls">
+          <button class="lift-button" onclick="moveLift('up')">身体上升 ↑</button>
+          <button class="lift-button" onclick="moveLift('down')">身体下降 ↓</button>
+        </div>
+        <button class="wide" style="width:100%; margin-top:8px" onclick="refreshLift()">读取身体高度</button>
+        <p class="small">每次点击移动一个步长，服务端强制限制在 0–2600 mm。移动前请确认上下方、双臂和线缆无碰撞风险。</p>
       </div>
 
       <div class="section">
@@ -640,6 +784,42 @@ HTML = r"""<!doctype html>
       await fetch(`/api/action?action=${encodeURIComponent(action)}&repeat=${repeat}&interval=${interval}`);
       setTimeout(refreshStatus, 650);
     }
+
+    function renderLift(data) {
+      const state = data.state || ((data.lift || {}).state);
+      const error = data.error || ((data.lift || {}).error);
+      document.getElementById('liftHeight').textContent = state && Number.isInteger(state.height) ? `${state.height} mm` : '-';
+      document.getElementById('liftStatus').textContent = error || (state ? (state.err_flag ? `故障 ${state.err_flag}` : '正常') : '未读取');
+    }
+
+    async function refreshLift() {
+      try {
+        const res = await fetch('/api/lift?action=status');
+        renderLift(await res.json());
+      } catch (error) {
+        document.getElementById('liftStatus').textContent = String(error);
+      }
+    }
+
+    async function moveLift(direction) {
+      const buttons = document.querySelectorAll('.lift-button');
+      buttons.forEach(button => button.disabled = true);
+      document.getElementById('liftStatus').textContent = direction === 'up' ? '上升中…' : '下降中…';
+      const step = document.getElementById('liftStep').value;
+      try {
+        const res = await fetch(`/api/lift?action=${encodeURIComponent(direction)}&step=${encodeURIComponent(step)}`, {
+          method: 'POST',
+          headers: {'X-Grabber-Control': 'lift'}
+        });
+        const data = await res.json();
+        renderLift(data.lift || data);
+        if (!data.ok) document.getElementById('liftStatus').textContent = data.error || '升降失败';
+      } catch (error) {
+        document.getElementById('liftStatus').textContent = String(error);
+      } finally {
+        buttons.forEach(button => button.disabled = false);
+      }
+    }
     let streamActive = true;
     let streamDelayMs = 180;
 
@@ -655,6 +835,7 @@ HTML = r"""<!doctype html>
       setInterval(loadNext, streamDelayMs);
     }
     refreshStatus();
+    refreshLift();
     setInterval(refreshStatus, 1000);
     startSnapshotLoop();
   </script>
@@ -682,12 +863,22 @@ class AppHandler(BaseHTTPRequestHandler):
             self._send_json(self.server.status_payload())
         elif parsed.path == "/api/action":
             self._handle_action(query)
+        elif parsed.path == "/api/lift":
+            self._handle_lift(query)
         elif parsed.path == "/api/mode":
             self._handle_mode(query)
         elif parsed.path == "/api/camera":
             self._handle_camera(query)
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
+
+    def do_POST(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+        query = urllib.parse.parse_qs(parsed.query)
+        if parsed.path != "/api/lift":
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        self._handle_lift(query, allow_motion=True)
 
     def _send_html(self, body: str) -> None:
         data = body.encode("utf-8")
@@ -780,6 +971,27 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         self._send_json(result)
 
+    def _handle_lift(self, query: dict[str, list[str]], allow_motion: bool = False) -> None:
+        action = query.get("action", ["status"])[0]
+        try:
+            if action in ("status", "read"):
+                result = self.server.lift.refresh()
+            elif action in ("up", "down"):
+                if not allow_motion or self.headers.get("X-Grabber-Control") != "lift":
+                    self._send_json(
+                        {"ok": False, "error": "lift movement requires an authorized POST request"},
+                        HTTPStatus.METHOD_NOT_ALLOWED,
+                    )
+                    return
+                step_mm = int(query.get("step", [str(LIFT_DEFAULT_STEP_MM)])[0])
+                result = self.server.lift.move(action, step_mm)
+            else:
+                raise ValueError("action must be status, up, or down")
+        except (TypeError, ValueError) as exc:
+            self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        self._send_json(result, HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_GATEWAY)
+
     def _handle_camera(self, query: dict[str, list[str]]) -> None:
         source = query.get("source", [""])[0]
         if not source:
@@ -798,12 +1010,14 @@ class AppHandler(BaseHTTPRequestHandler):
 class HeadCameraServer(ThreadingHTTPServer):
     def __init__(self, addr: tuple[str, int], handler: type[BaseHTTPRequestHandler],
                  direct_cameras: dict[str, CameraStream], angles: AngleReceiver, head: HeadUdpController,
+                 lift: LiftController,
                  camera_options: list[dict[str, Any]], shared: SharedFrameStore,
                  frame_source: str, width: int, height: int, fps: int, quality: int):
         super().__init__(addr, handler)
         self.direct_cameras = direct_cameras
         self.angles = angles
         self.head = head
+        self.lift = lift
         self.shared = shared
         self.frame_source = frame_source
         self.width = width
@@ -949,6 +1163,7 @@ class HeadCameraServer(ThreadingHTTPServer):
                 "label": "shared frames",
             },
             "angle": self.angles.snapshot(),
+            "lift": self.lift.snapshot(),
             "cameras": self.camera_options,
         }
 
@@ -980,6 +1195,7 @@ def main() -> None:
     args = parse_args()
     angles = AngleReceiver()
     head = HeadUdpController(angles)
+    lift = LiftController()
     shared = SharedFrameStore(args.shared_dir)
     camera_options = list_camera_options(shared)
     initial_camera_ids = camera_ids_for_value(args.camera, camera_options)
@@ -999,6 +1215,7 @@ def main() -> None:
             direct_cameras,
             angles,
             head,
+            lift,
             camera_options,
             shared,
             args.frame_source,

@@ -30,6 +30,20 @@ class StartMode(str, Enum):
     FROM_START = "from-start"
 
 
+class DeliverMode(str, Enum):
+    """How the shared pick/place tail disposes of a held bottle.
+
+    PLACE_BACK is table_demo's existing behaviour (put it back at the locked
+    pick point) and stays the default so no existing caller changes
+    behaviour by omission. DISPENSE carries it to the profile's configured
+    output point instead — real vending delivery, not a verify-and-replace
+    cycle.
+    """
+
+    PLACE_BACK = "place_back"
+    DISPENSE = "dispense"
+
+
 class TaskPhase(str, Enum):
     START = "start"
     PREFLIGHT = "preflight"
@@ -136,8 +150,17 @@ class BottlePickPlaceTask:
         self._write_json_atomic("task_result.json", asdict(result))
         return result
 
-    def run(self, mode: StartMode) -> RunResult:
-        """Execute the selected prefix followed by the shared pick/place tail."""
+    def run(
+        self,
+        mode: StartMode,
+        deliver_mode: DeliverMode = DeliverMode.PLACE_BACK,
+    ) -> RunResult:
+        """Execute the selected prefix followed by the shared pick/place tail.
+
+        `deliver_mode` only changes how the held bottle is disposed of after
+        a verified grasp+lift; it is not a third entry point and does not
+        change the legal `mode` values or their ordering.
+        """
 
         if StartMode(self.demo.args.task_mode) is not mode:
             raise SafetyAbort(
@@ -252,7 +275,7 @@ class BottlePickPlaceTask:
                 TaskPhase.GRASP_AND_LIFT,
                 "执行共享接近、夹取反馈判定和抬升",
             )
-            self.demo._grasp_and_lift(wrist_target)
+            lifted_target = self.demo._grasp_and_lift(wrist_target)
             self.object_state = ObjectState.HELD
             self._record(
                 TaskPhase.GRASP_VERIFIED,
@@ -262,16 +285,28 @@ class BottlePickPlaceTask:
             # Release may happen before a later retreat/vision failure, so do
             # not claim HELD or EMPTY while this compound action is in flight.
             self.object_state = ObjectState.UNKNOWN
-            self._record(
-                TaskPhase.PLACE_AND_RETREAT,
-                "放回锁定位置、松开夹爪、安全退开后由固定头部确认释放",
-            )
-            self.demo._place_back(wrist_target)
-            self.object_state = ObjectState.EMPTY
-            self._record(
-                TaskPhase.RELEASE_VERIFIED,
-                "夹爪打开、瓶子在锁定放置点得到视觉确认且机械臂已退开",
-            )
+            if deliver_mode is DeliverMode.DISPENSE:
+                self._record(
+                    TaskPhase.PLACE_AND_RETREAT,
+                    "转移到出货口、松开夹爪、安全退开",
+                )
+                self.demo._deliver_to_output()
+                self.object_state = ObjectState.EMPTY
+                self._record(
+                    TaskPhase.RELEASE_VERIFIED,
+                    "夹爪已打开、机械臂已从出货口退开",
+                )
+            else:
+                self._record(
+                    TaskPhase.PLACE_AND_RETREAT,
+                    "放回锁定位置、松开夹爪、安全退开后由固定头部确认释放",
+                )
+                self.demo._place_back(wrist_target, lifted_target)
+                self.object_state = ObjectState.EMPTY
+                self._record(
+                    TaskPhase.RELEASE_VERIFIED,
+                    "夹爪打开、瓶子在锁定放置点得到视觉确认且机械臂已退开",
+                )
 
             if mode is StartMode.FROM_START:
                 self._record(

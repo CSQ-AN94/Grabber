@@ -82,6 +82,23 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--dispense",
+        action="store_true",
+        help=(
+            "抓取抬升后送到 profile 里的 output_joints_deg 出货口（真实出货），"
+            "而不是放回原货架位置；只能跟 --task-mode 一起用，需要目标 "
+            "electronic-fence profile 配置了 output_joints_deg"
+        ),
+    )
+    parser.add_argument(
+        "--target-product",
+        default=None,
+        help=(
+            "按商品类别选择要抓的目标（YOLO 类别名，可用逗号分隔多个别名）；"
+            "不给则保持现状——detector 内置的通用瓶子类别"
+        ),
+    )
+    parser.add_argument(
         "--restore-teleop",
         action="store_true",
         help="demo 结束（STOP/Ctrl+C 退出保持）后自动运行官方 upstart_all.sh 恢复遥操",
@@ -128,6 +145,8 @@ def main() -> int:
         )
     if args.task_mode and not args.execute:
         raise SystemExit("--task-mode requires --execute")
+    if args.dispense and not args.task_mode:
+        raise SystemExit("--dispense requires --task-mode")
     if args.task_mode and any(
         (
             args.plan_only,

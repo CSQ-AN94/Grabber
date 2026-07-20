@@ -13,6 +13,8 @@ REMOTE_DIR="${REMOTE_DIR:-/home/rm/Grabber}"
 REMOTE_PY="${REMOTE_PY:-/home/rm/miniconda3/envs/tube_vision/bin/python}"
 SAFETY_PROFILE="${SAFETY_PROFILE:-table_demo}"
 PORT="${PORT:-8879}"
+DISPENSE="${DISPENSE:-0}"
+TARGET_PRODUCT="${TARGET_PRODUCT:-}"
 
 usage() {
   echo "用法: $0 {from-observation|from-start}"
@@ -47,6 +49,12 @@ if [[ ! "${SAFETY_PROFILE}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
 fi
 if [[ ! "${PORT}" =~ ^[0-9]+$ ]]; then
   fail_config "PORT 必须是 1-65535 的整数"
+fi
+if [[ "${DISPENSE}" != "0" && "${DISPENSE}" != "1" ]]; then
+  fail_config "DISPENSE 只能是 0 或 1"
+fi
+if [[ -n "${TARGET_PRODUCT}" && ! "${TARGET_PRODUCT}" =~ ^[A-Za-z0-9_,-]+$ ]]; then
+  fail_config "TARGET_PRODUCT 只允许字母、数字、逗号、下划线和连字符"
 fi
 if ((10#${PORT} < 1 || 10#${PORT} > 65535)); then
   fail_config "PORT 必须是 1-65535 的整数"
@@ -101,6 +109,14 @@ ssh "${SSH_OPTIONS[@]}" -tt "${ROBOT_HOST}" \
    '${REMOTE_PY}' -m bottle_grasp.camera_access \
      --config config.yaml --camera head --camera right_wrist --no-probe"
 
+EXTRA_ARGS=""
+if [[ "${DISPENSE}" == "1" ]]; then
+  EXTRA_ARGS="${EXTRA_ARGS} --dispense"
+fi
+if [[ -n "${TARGET_PRODUCT}" ]]; then
+  EXTRA_ARGS="${EXTRA_ARGS} --target-product '${TARGET_PRODUCT}'"
+fi
+
 echo "== 运行完整任务: ${MODE} =="
 # Python already writes latest.log plus the immutable per-run evidence bundle;
 # do not tee into latest.log a second time from the shell.
@@ -109,4 +125,4 @@ ssh "${SSH_OPTIONS[@]}" -tt "${ROBOT_HOST}" \
   "cd '${REMOTE_DIR}' && \
    '${REMOTE_PY}' scripts/bottle_grasp_demo.py \
      --execute --task-mode '${MODE}' \
-     --safety-profile '${SAFETY_PROFILE}' --port '${PORT}'"
+     --safety-profile '${SAFETY_PROFILE}' --port '${PORT}'${EXTRA_ARGS}"

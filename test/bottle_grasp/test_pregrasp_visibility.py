@@ -149,7 +149,7 @@ def test_visible_raw_bottle_is_associated_to_locked_projection_without_shape_gat
 
     class FakeDetector:
         @staticmethod
-        def detect(color, predicate=None):
+        def detect(color, predicate=None, target_classes=None):
             return candidate if predicate is None or predicate(candidate) else None
 
     demo.camera = FakeCamera()

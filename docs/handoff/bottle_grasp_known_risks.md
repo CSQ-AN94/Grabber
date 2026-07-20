@@ -238,6 +238,24 @@ OMPL 采样式规划器**永远不保证完备**——理论上存在一条真�
 height_tolerance_m=12cm` 容差，都需要重新走验收流程，不能假设现有修复
 自动泛化。
 
+**2026-07-20 更新**：多面围栏自适应逻辑已写好并有单测覆盖
+（`bottle_grasp/shelf_model.py`，泛化自 `table_model.py` 同一套算法到
+`shelf_bottom/top/back/left_panel/right_panel` 五个面），现场测量脚本
+`scripts/measure_shelf_geometry.py` 也已写好（零机械臂运动，只读头部
+RGB-D）。**这些都只是代码/工具层面的准备**——货架真实尺寸、出货口
+真实坐标（`output_joints_deg`/`output_point_base`，见下）、多格位视觉
+按商品识别在真实光照/遮挡下的表现，仍然一次都没有现场测量或真机验证
+过。不要把"代码写好了"读成"风险已解决"，这条风险要等第一次现场测量
++plan-only+低速试跑之后才能改状态。
+
+**新增关联风险**：真实出货（送到取货口）替代了 table_demo 的"放回原位"
+循环（`BottleDemo._deliver_to_output`，见 `SAFETY_PROFILES.md`）。出货口
+坐标在 `shelf_template` 里目前是 `null` 占位，且默认
+`output_visible_to_head_camera=false`——也就是说即使填了坐标，释放确认
+默认也只信夹爪反馈，没有视觉证据。这是比"货架尺寸未测"更宽的一个未知：
+出货口物理位置、是否在头部相机视野内、真实光照下商品识别准确率，三者
+都需要现场跟货架尺寸一起测。
+
 ### G. RTC/CMOS 时钟问题可能复发 [待发生]
 
 已手动矫正过一次，怀疑是主板电池问题，没有根本解决（没换电池）。板房

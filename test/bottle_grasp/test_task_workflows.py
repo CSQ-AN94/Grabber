@@ -45,6 +45,7 @@ class FakeDemo:
         self.calls = []
         self.head = _localization([0.12, 0.52, -0.12])
         self.wrist = _localization([0.13, 0.51, -0.12])
+        self.lifted = _localization([0.13, 0.51, -0.07])
         self.left_robot = SimpleNamespace(joints_deg=lambda: [0.0] * 7)
 
     def stage(self, name, message=""):
@@ -100,9 +101,11 @@ class FakeDemo:
     def _grasp_and_lift(self, wrist_target):
         assert wrist_target is self.wrist
         self.calls.append(("grasp_lift",))
+        return self.lifted
 
-    def _place_back(self, wrist_target):
+    def _place_back(self, wrist_target, lifted_target):
         assert wrist_target is self.wrist
+        assert lifted_target is self.lifted
         self.calls.append(("place_release_retreat",))
 
     def _refresh_head_scene_for_global_motion(self, wrist_target):

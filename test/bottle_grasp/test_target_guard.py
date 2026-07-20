@@ -320,3 +320,70 @@ def test_release_confirmation_uses_fresh_3d_measurement_at_locked_point():
     localize_call = next(call for call in calls if call[0] == "localize")
     np.testing.assert_allclose(localize_call[2], locked.point_base)
     assert localize_call[3] is False
+
+
+def test_release_confirmation_accepts_20260720_returned_bottle_trace():
+    """Replay the successful grasp/place that aborted before return-home.
+
+    Wrist lock and post-release fixed-head localization sample different
+    semantic pixels on the bottle. The horizontal association is good, but
+    the sampled height moved 34.4 mm and made the raw 3-D norm 41.6 mm.
+    """
+    locked = Localization(
+        point_camera=[0.016410, -0.001285, 0.299033],
+        point_base=[0.010814, 0.622928, -0.149620],
+        pixel=[360.5, 246.230275985172],
+        depth_m=0.299033,
+        depth_mad_m=0.0,
+        position_spread_m=0.0004567,
+        box=[326, 0, 397, 378],
+        confidence=0.8,
+        frame_count=7,
+    )
+    lifted = Localization(
+        point_camera=[0.117794, -0.007661, 0.557000],
+        point_base=[-0.002952, 0.621046, -0.030264],
+        pixel=[549.0, 239.26],
+        depth_m=0.557000,
+        depth_mad_m=0.003,
+        position_spread_m=0.002803,
+        box=[514, 133, 587, 294],
+        confidence=0.8,
+        frame_count=3,
+    )
+    measured_point = [-0.000404, 0.602440, -0.115207]
+    demo, _calls = _demo_with_independent_head_measurement(measured_point)
+
+    assert demo._confirm_released_target(locked, lifted) == "head"
+
+
+@pytest.mark.parametrize(
+    ("measured_point", "message"),
+    (
+        ([0.060, 0.000, -0.010], "水平"),
+        ([0.000, 0.000, 0.070], "下降"),
+    ),
+)
+def test_directional_release_confirmation_still_rejects_wrong_release(
+    measured_point,
+    message,
+):
+    def localization(point):
+        return Localization(
+            point_camera=list(point),
+            point_base=list(point),
+            pixel=[320, 240],
+            depth_m=0.5,
+            depth_mad_m=0.001,
+            position_spread_m=0.002,
+            box=[280, 100, 360, 400],
+            confidence=0.8,
+            frame_count=3,
+        )
+
+    locked = localization([0.0, 0.0, 0.0])
+    lifted = localization([0.0, 0.0, 0.08])
+    demo, _calls = _demo_with_independent_head_measurement(measured_point)
+
+    with pytest.raises(SafetyAbort, match=message):
+        demo._confirm_released_target(locked, lifted)

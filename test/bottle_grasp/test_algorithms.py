@@ -16,6 +16,7 @@ from bottle_grasp.collision import classify_moveit_collision_probe
 from bottle_grasp.perception import depth_point_for_detection, robust_near_cluster
 from bottle_grasp.safety import load_safety_profile
 from bottle_grasp.scene import build_scene_voxels, union_scene_voxels
+from bottle_grasp.shelf_model import FACE_SPECS
 
 
 def test_stop_reason_is_generic_without_a_recorded_source():
@@ -73,9 +74,9 @@ def test_depth_point_rejects_background_and_deprojects():
     assert abs(pixel[0] - 50) < 5
 
 
-def test_grasp_pixel_height_is_deterministic_and_low():
-    # 纵向抓取点必须是检测框固定比例（偏低），不随有效深度像素分布漂移；
-    # 太高的抓取点在近距接近时会移出腕部相机视野。
+def test_grasp_pixel_height_is_deterministic_and_above_midline():
+    # 纵向抓取点必须是检测框固定比例，不随有效深度像素分布漂移。
+    # 2026-07-20 货架实测将它提到中线上方，给 r_hand 留出层板净空。
     params = DemoParams()
     K = np.array([[100, 0, 50], [0, 100, 50], [0, 0, 1]], float)
     detection = Detection((35, 10, 65, 90), 0.9, "bottle")
@@ -86,7 +87,7 @@ def test_grasp_pixel_height_is_deterministic_and_low():
         _, _, _, pixel = depth_point_for_detection(depth, detection, K, params)
         expected_v = 10 + params.grasp_height_fraction * 80
         assert pixel[1] == expected_v
-    assert expected_v > 0.5 * (10 + 90)  # 低于框中线
+    assert expected_v < 0.5 * (10 + 90)  # 高于框中线
 
 
 def test_scene_builds_generic_rgbd_voxels():
@@ -248,6 +249,43 @@ def test_electronic_fence_profile_accepts_task_and_home_zones():
     assert [box["id"] for box in profile.moveit_collision_boxes()] == [
         "fence_table_top"
     ]
+
+
+def test_shelf_profile_accepts_20260720_center_bottle_target():
+    """The measured centre bottle must sit above, not inside, the shelf."""
+    profile = load_safety_profile(
+        Path(__file__).parents[2] / "bottle_grasp" / "safety_profiles.json",
+        "shelf_template",
+        require_verified=False,
+    )
+    # 2026-07-20 site check: 7/7-frame localization after centring the bottle.
+    # A follow-up read-only shelf survey measured the conservative shelf-bottom
+    # bound at z=-0.2140 m (1683 inliers), so this z=-0.1366 m grasp point is
+    # physically about 7.7 cm above the protected shelf surface.
+    profile.assert_tcp_point(
+        [-0.1133, 0.6976, -0.1366], label="measured centre bottle"
+    )
+    # The narrow left/right bounds came from neighbouring bottles, not rigid
+    # shelf panels.  Keep them as static slot guards; otherwise per-run plane
+    # fitting locks onto the current bottle's vertical surface and moves them.
+    dynamic_faces = {
+        box.id for box in profile.keepout_boxes if box.id in FACE_SPECS
+    }
+    assert dynamic_faces == {"shelf_bottom", "shelf_top", "shelf_back"}
+
+
+def test_shelf_profile_accepts_reused_home_pose_tcp():
+    profile = load_safety_profile(
+        Path(__file__).parents[2] / "bottle_grasp" / "safety_profiles.json",
+        "shelf_template",
+        require_verified=False,
+    )
+    # 2026-07-20 site check FK at the real starting joints.  shelf_template
+    # reuses table_demo's home_joints_deg, so its entry corridor must include
+    # the same already-demonstrated low home TCP instead of rejecting point 1.
+    profile.assert_tcp_point(
+        [0.2361, 0.0245, -0.5727], label="reused real home TCP"
+    )
 
 
 def test_moveit_keepout_padding_covers_top_and_all_four_sides():

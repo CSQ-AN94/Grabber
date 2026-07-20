@@ -54,7 +54,7 @@ def test_bottom_clipped_wrist_box_keeps_locked_target_depth(monkeypatch):
 
     class Detector:
         @staticmethod
-        def detect(_color, predicate=None):
+        def detect(_color, predicate=None, target_classes=None):
             if predicate is None or predicate(detection):
                 return detection
             return None
@@ -121,7 +121,7 @@ def test_independent_head_measurement_never_synthesizes_prior_depth(monkeypatch)
 
     class Detector:
         @staticmethod
-        def detect(_color, predicate=None):
+        def detect(_color, predicate=None, target_classes=None):
             return detection if predicate is None or predicate(detection) else None
 
     demo.camera = Camera()

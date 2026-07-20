@@ -27,6 +27,47 @@ SAFETY_PROFILE=my_shelf PLAN_ONLY=1 scripts/start_bottle_demo.sh
 Only after plan-only validation and a low-speed supervised dry run should the
 profile be marked `verified_for_execution: true`.
 
+### Shelf panel keepout box ids and per-run adaptation
+
+`shelf_bottom`/`shelf_top`/`shelf_back`/`shelf_left_panel`/`shelf_right_panel`
+are not arbitrary names — `bottle_grasp/shelf_model.py`'s `FACE_SPECS`
+registry recognizes exactly these five ids and, every run, refits each one
+against a fresh head-camera point cloud near the target the same way
+`table_model.py` already does for `table_top` on `table_demo` (median across
+multiple frames, in-plane extent only ever grows, hard abort if the measured
+position drifts outside `shelf_fit_bound_tolerance_m` of the configured
+value). Do not rename these ids without updating that registry, and do not
+add a sixth ad-hoc face id expecting it to be adapted automatically — it will
+silently pass through unmodified instead (harmless, but not what you want).
+
+To get the initial numbers for a real shelf, run
+`scripts/measure_shelf_geometry.py` on the robot (no arm motion — it only
+starts the head camera). It prints a draft `keepout_boxes` fragment per face;
+review and correct it by hand before pasting it into `shelf_template`. It
+never writes `safety_profiles.json` itself, on purpose.
+
+### Real dispensing vs. table_demo's place-back cycle
+
+`table_demo`'s task flow is verify-and-replace: pick the bottle up, then put
+it back at the same locked point (`BottleDemo._place_back`). A shelf/vending
+deployment instead needs to *deliver* the bottle to an output/pickup point —
+`BottleDemo._deliver_to_output`, selected via `task.DeliverMode.DISPENSE`
+(CLI: `--task-mode ... --dispense`). It needs two additional profile fields
+that `table_demo` does not set:
+
+- `output_joints_deg`: 7-number joint target for the delivery transfer, same
+  contract as `home_joints_deg`. Absent by default; `_deliver_to_output`
+  fails closed (`SafetyAbort`) rather than guessing a delivery point.
+- `output_visible_to_head_camera` (+ `output_point_base` when true): whether
+  a real 3-D release check is possible at the output point. Most output
+  points will *not* be in the head camera's field of view, so the default is
+  `false` and release is judged from gripper feedback alone — this is
+  intentionally weaker evidence than `table_demo`'s vision-confirmed release,
+  logged as such rather than silently reusing the stronger claim.
+
+Both fields are placeholders in the checked-in `shelf_template` until a real
+output point is measured on site.
+
 When a good route has already been demonstrated by teleoperation, record the
 whole route instead of guessing a new global path:
 

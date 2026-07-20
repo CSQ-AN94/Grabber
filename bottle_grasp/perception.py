@@ -146,16 +146,22 @@ class BottleDetector:
             self.fallback_model = YOLO(fallback_model_path)
 
     def _best(
-        self, model, bgr: np.ndarray, confidence: float, predicate=None
+        self,
+        model,
+        bgr: np.ndarray,
+        confidence: float,
+        predicate=None,
+        target_classes: Optional[set] = None,
     ) -> Optional[Detection]:
         with self.lock:
             result = model.predict(bgr, conf=confidence, verbose=False)[0]
+        allowed = target_classes if target_classes is not None else self.aliases
         choices = []
         for box in result.boxes:
             cls = int(box.cls[0])
             name = str(model.names[cls])
             normalized = name.lower().replace(" ", "_")
-            if normalized not in self.aliases and name not in self.aliases:
+            if normalized not in allowed and name not in allowed:
                 continue
             detection = Detection(
                 tuple(map(int, box.xyxy[0].tolist())),
@@ -167,16 +173,32 @@ class BottleDetector:
             choices.append(detection)
         return max(choices, key=lambda d: d.confidence, default=None)
 
-    def detect(self, bgr: np.ndarray, predicate=None) -> Optional[Detection]:
+    def detect(
+        self,
+        bgr: np.ndarray,
+        predicate=None,
+        target_classes: Optional[set] = None,
+    ) -> Optional[Detection]:
         """Best bottle detection, optionally restricted by a predicate.
 
         The predicate pre-filters candidate boxes (e.g. a close-range shape
         gate) so a higher-confidence but implausible background bottle cannot
         shadow the real target.
+
+        `target_classes`, when given, replaces the generic bottle-alias
+        class filter with a specific set of YOLO class names — shelf/vending
+        selection by requested product instead of "any bottle". Omitted, the
+        behaviour is unchanged: match against the built-in `self.aliases`.
         """
-        detection = self._best(self.model, bgr, self.confidence, predicate)
+        detection = self._best(
+            self.model, bgr, self.confidence, predicate, target_classes
+        )
         if detection is not None or self.fallback_model is None:
             return detection
         return self._best(
-            self.fallback_model, bgr, self.fallback_confidence, predicate
+            self.fallback_model,
+            bgr,
+            self.fallback_confidence,
+            predicate,
+            target_classes,
         )

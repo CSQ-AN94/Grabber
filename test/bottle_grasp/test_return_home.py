@@ -30,17 +30,20 @@ def test_table_demo_profile_has_home_joints_deg():
     assert len(profile.home_joints_deg) == 7
 
 
-def test_shelf_template_has_no_home_joints_deg():
-    # shelf_template is a disabled placeholder profile (load_safety_profile
-    # refuses disabled profiles), so check the raw config instead.
-    import json
-
-    data = json.loads(
-        (
-            Path(__file__).parents[2] / "bottle_grasp" / "safety_profiles.json"
-        ).read_text()
+def test_shelf_template_has_taught_right_home_posture():
+    # 2026-07-20 现场重新示教右臂的高净空停靠位。左臂每轮任务
+    # 采集实时快照，不用这份 profile 里的静态目标。
+    profile = load_safety_profile(
+        Path(__file__).parents[2] / "bottle_grasp" / "safety_profiles.json",
+        "shelf_template",
+        require_verified=False,
     )
-    assert "home_joints_deg" not in data["profiles"]["shelf_template"]
+    assert profile.home_joints_deg is not None
+    assert len(profile.home_joints_deg) == 7
+    assert profile.home_joints_deg == pytest.approx(
+        [7.665, 113.884, -7.937, 33.977, -82.214, -83.986, -13.099],
+        abs=1e-3,
+    )
 
 
 def _make_demo(calls):
@@ -182,12 +185,12 @@ def test_complete_task_visually_confirms_release_before_empty_close():
     demo.safety = FakeSafety()
     demo.robot = FakeRobot()
     demo._plan_ik_avoiding_singularity = lambda path, params, **kwargs: path
-    demo._confirm_released_target = lambda target: calls.append(
-        ("release_confirm", target)
+    demo._confirm_released_target = lambda target, lifted=None: calls.append(
+        ("release_confirm", target, lifted)
     )
 
     demo._place_back(locked)
 
-    assert calls.index(("release_confirm", locked)) < calls.index(
+    assert calls.index(("release_confirm", locked, None)) < calls.index(
         ("close_empty",)
     )

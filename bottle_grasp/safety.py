@@ -98,6 +98,18 @@ class SafetyProfile:
     # proven planning seed that avoids asking one global search to both unfold
     # a near-singular arm and arrive at the bottle-facing wrist pose.
     observation_staging_joints_deg: tuple[float, ...] | None = None
+    # Real dispensing (as opposed to table_demo's place-back-in-place cycle):
+    # where to carry a held bottle before releasing it. Same structural
+    # contract as home_joints_deg — absent by default, _deliver_to_output
+    # fails closed if a caller asks for it without this configured.
+    output_joints_deg: tuple[float, ...] | None = None
+    # Whether the output point is expected to be visible to the fixed head
+    # camera, so _deliver_to_output knows whether a real 3-D release check is
+    # possible or whether it must honestly fall back to gripper-feedback-only
+    # evidence. False by default: assuming visibility that does not exist
+    # would silently downgrade a safety check into a fabricated pass.
+    output_visible_to_head_camera: bool = False
+    output_point_base: tuple[float, float, float] | None = None
 
     def assert_tcp_point(
         self,
@@ -297,6 +309,24 @@ def load_safety_profile(
                 "observation_staging_joints_deg 必须是 7 个有限数"
             )
         observation_staging_joints_deg = tuple(map(float, staging))
+    output_raw = raw.get("output_joints_deg")
+    output_joints_deg = None
+    if output_raw is not None:
+        output = np.asarray(output_raw, dtype=float)
+        if output.shape != (7,) or not np.all(np.isfinite(output)):
+            raise SafetyAbort(
+                f"电子围栏 profile {profile_name} 的 output_joints_deg 必须是 7 个有限数"
+            )
+        output_joints_deg = tuple(map(float, output))
+    output_point_raw = raw.get("output_point_base")
+    output_point_base = None
+    if output_point_raw is not None:
+        output_point = np.asarray(output_point_raw, dtype=float)
+        if output_point.shape != (3,) or not np.all(np.isfinite(output_point)):
+            raise SafetyAbort(
+                f"电子围栏 profile {profile_name} 的 output_point_base 必须是 3 个有限数"
+            )
+        output_point_base = tuple(map(float, output_point))
     profile = SafetyProfile(
         name=profile_name,
         description=str(raw.get("description", "")),
@@ -311,6 +341,11 @@ def load_safety_profile(
         use_dynamic_rgbd=bool(raw.get("use_dynamic_rgbd", True)),
         home_joints_deg=home_joints_deg,
         observation_staging_joints_deg=observation_staging_joints_deg,
+        output_joints_deg=output_joints_deg,
+        output_visible_to_head_camera=bool(
+            raw.get("output_visible_to_head_camera", False)
+        ),
+        output_point_base=output_point_base,
     )
     # Validate that each allowed zone is itself inside the global workspace.
     for zone in profile.allowed_tcp_zones:

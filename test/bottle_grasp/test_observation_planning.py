@@ -8,6 +8,7 @@ below the state machine mocked out.
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -205,6 +206,155 @@ def test_candidates_failing_even_the_hard_margin_are_rejected():
     # 降级尝试必须覆盖从软余量到执行余量的全部档位，最宽的先试
     assert max(margins_seen) == demo.params.observation_grasp_margin_deg
     assert min(margins_seen) == demo.params.joint_limit_margin_deg
+
+
+def test_observation_precheck_includes_moveit_whole_arm_collision_validation():
+    """A controller-IK-valid local path can still put the hand through a shelf."""
+    demo = _precheck_demo([])
+
+    class IKOnlyRobot:
+        @staticmethod
+        def plan_ik(poses, params, *, allow_first_jump=False,
+                    seed_joints_deg=None):
+            return [[0.0] * 7 for _ in poses]
+
+    demo.robot = IKOnlyRobot()
+    validated = []
+
+    def reject_hand_collision(**kwargs):
+        validated.append(kwargs["name"])
+        raise SafetyAbort("r_hand collides with fence_shelf_bottom")
+
+    demo._validate_local_joint_path = reject_hand_collision
+    target = SimpleNamespace(
+        label="candidate",
+        flange=np.eye(4),
+        goal_joints=tuple([0.0] * 7),
+    )
+
+    assert not demo._grasp_precheck_ok(
+        target, np.array([0.0, 0.52, -0.11]), 3.0
+    )
+    assert validated == ["observation_grasp_precheck"] * 5
+
+
+def test_plan_only_site_check_does_not_skip_local_moveit_validation():
+    """The no-motion site check must exercise the same local collision seam.
+
+    2026-07-20现场复现：site_check 在约 1 秒内把 16 个候选全部判为可行，
+    随后的真实任务却花数分钟将相同候选判为 r_hand vs shelf_bottom。
+    根因不能被 ``task_mode=None`` 静默短路。
+    """
+    demo = _precheck_demo([])
+    demo.args = SimpleNamespace(task_mode=None, plan_only=True)
+    demo.stop_event = __import__("threading").Event()
+    demo.scene_voxels = []
+    demo.scene_boxes = []
+
+    class Robot:
+        @staticmethod
+        def joints_deg():
+            return [0.0] * 7
+
+        @staticmethod
+        def validate_planned_joints(*_args, **_kwargs):
+            return None
+
+    class LeftRobot:
+        @staticmethod
+        def joints_deg():
+            return [0.0] * 7
+
+    class RejectingPlanner:
+        @staticmethod
+        def validate_exact_path(**_kwargs):
+            raise SafetyAbort("r_hand collides with fence_shelf_bottom")
+
+    class Safety:
+        moveit_frame = "platform_base_link"
+
+        @staticmethod
+        def points_to_moveit(points):
+            return list(points)
+
+    demo.robot = Robot()
+    demo.left_robot = LeftRobot()
+    demo.planner = RejectingPlanner()
+    demo.safety = Safety()
+
+    with pytest.raises(SafetyAbort, match="r_hand.*shelf_bottom"):
+        demo._validate_local_joint_path(
+            name="observation_grasp_precheck",
+            joints=[[1.0] * 7],
+            target_base=np.array([0.0, 0.52, -0.11]),
+            start_joints_deg=[0.0] * 7,
+        )
+
+
+def test_hypothetical_observation_precheck_starts_at_candidate_not_live_home():
+    """Do not validate a fictitious live-home-to-grasp interpolation.
+
+    The captured local_01 request began at the live home
+    [7.665, 113.884, ...] even though controller IK had been seeded from the
+    hypothetical observation candidate.  That invented path crossed the
+    shelf and rejected every candidate before global transfer planning.
+    """
+    demo = _precheck_demo([])
+    live_home = [7.0] * 7
+    candidate = tuple([42.0] * 7)
+    captured = []
+
+    class Robot:
+        @staticmethod
+        def plan_ik(*_args, **_kwargs):
+            return [[43.0] * 7]
+
+    demo.robot = Robot()
+
+    def validate(**kwargs):
+        captured.append(tuple(kwargs["start_joints_deg"]))
+
+    demo._validate_local_joint_path = validate
+    target = SimpleNamespace(
+        label="candidate",
+        flange=np.eye(4),
+        goal_joints=candidate,
+    )
+
+    assert demo._grasp_precheck_ok(
+        target, np.array([0.0, 0.52, -0.11]), 3.0
+    )
+    assert captured == [candidate]
+    assert captured[0] != tuple(live_home)
+
+
+def test_stop_during_observation_precheck_aborts_instead_of_trying_more_rolls():
+    """Ctrl+C is terminal, not another ordinary infeasible roll candidate."""
+    import threading
+
+    demo = _precheck_demo([])
+    demo.stop_event = threading.Event()
+    attempts = []
+
+    class InterruptedRobot:
+        def plan_ik(self, *_args, **_kwargs):
+            attempts.append(1)
+            demo.stop_event.set()
+            raise SafetyAbort("MoveIt helper interrupted")
+
+    demo.robot = InterruptedRobot()
+    demo._validate_local_joint_path = lambda **_kwargs: None
+    target = SimpleNamespace(
+        label="candidate",
+        flange=np.eye(4),
+        goal_joints=tuple([0.0] * 7),
+    )
+
+    with pytest.raises(SafetyAbort, match="用户停止"):
+        demo._grasp_precheck_ok(
+            target, np.array([0.0, 0.52, -0.11]), 3.0
+        )
+    assert attempts == [1]
 
 
 def test_observation_candidates_keep_wrist_camera_pitch_moderate():

@@ -52,9 +52,9 @@ def test_shared_geometry_uses_conservative_first_site_adjustment():
     assert params.grasp_stop_short_m == 0.030
     assert params.pregrasp_standoff_m == 0.085
     assert params.retreat_standoff_m == 0.150
-    assert params.transit_speed == 15
+    assert params.transit_speed == 75
     assert params.travel_speed == 15
-    assert params.final_speed == 3
+    assert params.final_speed == 15
 
 
 def test_large_optional_roll_is_split_into_small_rotation_steps():

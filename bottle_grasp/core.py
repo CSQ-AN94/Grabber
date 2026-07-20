@@ -78,18 +78,20 @@ class DemoParams:
     #     movej points took ~90 s at 3%).
     #   travel_speed  — local straight-line approach toward the pregrasp
     #     hover point and the post-release retreat.  Both stay away from
-    #     contact and can use the same 15% transit speed.
+    #     contact and stays at 15% even when global transit is faster.
     #   final_speed   — final approach, lift and lower; contact-adjacent.
-    # 2026-07-19, operator-approved: transit raised 3% -> 15% after the
-    # 2026-07-18 run spent ~90 s stepping 146 blocking movej points through
-    # free space.  Contact-adjacent final motion stays at 3%.
+    # 2026-07-20, operator-approved: global transit raised 15% -> 75% after
+    # the full MoveIt trajectory and dense independent fence checks passed on
+    # the shelf.  The operator also approved 15% for local travel and the
+    # contact-adjacent approach/lift/lower legs after the shelf hardware was
+    # corrected on site.
     # Still executed as discrete blocking points (走一步停一下); switching to
     # SDK connect=1 continuous trajectories would remove the remaining
     # start/stop overhead but would also rewrite the per-point feedback
     # contract, so it waits for real measured execution residuals.
-    transit_speed: int = 15
+    transit_speed: int = 75
     travel_speed: int = 15
-    final_speed: int = 3
+    final_speed: int = 15
     j4_singularity_deg: float = 8.0
     # 起点已在 J4≈0 奇异带内时，先用关节空间 movej 把肘弯到这个角度再做
     # 笛卡尔规划。比奇异带宽出 6°，避免逃逸后又贴着带边被下一次检查拒绝。
@@ -147,6 +149,20 @@ class DemoParams:
     table_fit_height_tolerance_m: float = 0.12
     table_fit_edge_margin_m: float = 0.08
     table_fit_zone_attach_band_m: float = 0.06
+    # 每轮从头部点云拟合货架各面（bottom/top/back/left/right），泛化自上面的
+    # 桌面拟合同一套"分箱众数+多帧一致性+只扩不缩"算法（bottle_grasp/
+    # shelf_model.py）。跟桌面不同：货架从未在真机上测量/验证过，这些默认值
+    # 是工程判断的起点，不是实测反推出来的，第一次现场测量后应该重新核实。
+    shelf_fit_min_gap_m: float = 0.02
+    shelf_fit_max_gap_m: float = 0.35
+    shelf_fit_lateral_radius_m: float = 0.35
+    shelf_fit_min_inliers: int = 40
+    shelf_fit_bound_tolerance_m: float = 0.05
+    shelf_fit_edge_margin_m: float = 0.03
+    shelf_fit_conservative_margin_m: float = 0.01
+    # 视觉选目标：给定时只在这些 YOLO 类别名里选（按商品识别选格位）；不给
+    # 则保持现状——detector.aliases 里的通用瓶子类别，桌面 demo 行为不变。
+    target_product_classes: tuple[str, ...] | None = None
     # Global MoveIt transfer: try several endpoint candidates and feed an
     # independently detected fence violation back as a temporary collision
     # box. The bounds keep failure deterministic instead of retrying forever.
@@ -195,12 +211,16 @@ class DemoParams:
     lift_confirmation_min_displacement_m: float = 0.025
     lift_confirmation_max_horizontal_m: float = 0.050
     # Release likewise requires a fresh 3-D measurement at the original lock;
-    # it may never be synthesized from the lock's prior depth.
+    # it may never be synthesized from the lock's prior depth.  Wrist and head
+    # detections can sample different heights on the bottle, so association is
+    # horizontal while a separate lifted->released drop proves it came down.
     release_confirmation_tolerance_m: float = 0.035
-    # 抓取点高度：检测框顶部向下的比例（0=瓶盖, 1=瓶底）。取偏低的固定
-    # 比例而不是深度像素中位数——中位数随每帧有效深度像素分布漂移，导致
-    # 每轮抓取高度不一致；太高时腕部相机在近距会丢失目标。
-    grasp_height_fraction: float = 0.66
+    release_confirmation_min_drop_m: float = 0.025
+    # 抓取点高度：检测框顶部向下的比例（0=瓶盖, 1=瓶底）。固定比例
+    # 避免深度像素分布让高度逐帧漂移。2026-07-20 货架实测：旧的
+    # 0.66 位置只比膨胀后层板高 3.8 cm，TCP 虽安全但 r_hand 包络
+    # 会碰 shelf_bottom。改为 0.45，先在瓶身中部偏上建立接近线。
+    grasp_height_fraction: float = 0.45
     # RM Plus two-finger gripper.  The legacy rm_set_gripper_* API does not
     # control the installed ZX gripper.
     gripper_open_position: int = 900

@@ -9,6 +9,47 @@
 分支 `dual-arm-sdk`。这份文档是给"换个窗口继续写代码"用的，目标是让你不用
 重新翻聊天记录就能接上上下文。
 
+## 2026-07-20：货架多格位真出货——代码/工具准备，现场验收仍未开始
+
+用户要求把这套方案从"桌面单瓶+放回原位"改造成售货机器人要用的版本：多格位
+货架（视觉按商品识别选格，不是上层传坐标）+ 真出货（送到取货口，不是放回
+原货架位）。这轮改动**只是代码和工具层面的准备**，完整的货架现场测量、
+出货口坐标、多格位视觉识别效果，仍然一次都没有真机验证——不要跳过下面
+"验证状态"表直接当成"货架能跑了"。
+
+- **新增** `bottle_grasp/shelf_model.py`：把 `table_model.py` 那套"分箱众数
+  拟合+多帧一致性+水平范围只扩不缩+超容差 fail-closed"算法，泛化成按轴/
+  方向参数化，覆盖货架的 `shelf_bottom/top/back/left_panel/right_panel`
+  五个面（`table_model.py` 本身**完全没动**，`table_demo` 零回归）。
+  `bottle_grasp/demo.py` 新增 `_adapt_fence_to_measured_shelf`，跟原有
+  `_adapt_fence_to_measured_table` 并行调用，互不影响。
+- **新增** `BottleDemo._deliver_to_output`（`task.DeliverMode.DISPENSE`，
+  CLI `--dispense`）：转移到 profile 的 `output_joints_deg`→松开→(可选)
+  视觉确认→退开→收拢，风险等级跟 `_return_home` 一致。默认
+  `output_visible_to_head_camera=false`——出货口大概率不在头部相机视野内，
+  释放确认诚实地退化成"只信夹爪反馈"，不假装有视觉证据。
+  `shelf_template` 里 `output_joints_deg`/`output_point_base` 目前是
+  `null` 占位。
+- **新增** `perception.BottleDetector` 的 `target_classes` 参数：给定时按
+  商品类别名筛选检测框（多格位选择靠视觉识别，不靠坐标），不给则保持
+  `table_demo` 现有的通用瓶子类别行为不变。CLI: `--target-product`。
+  **依赖**：真正按 SKU 区分需要 YOLO 模型本身有对应类别标签，这轮只打通
+  参数链路，模型训练是另一件事。
+- **新增** `scripts/measure_shelf_geometry.py` + `bottle_grasp/shelf_survey.py`：
+  现场测量工具，零机械臂运动（只起头部相机），复用 `shelf_model.py` 的
+  拟合算法输出每个面的草稿 `keepout_boxes` 片段。**不自动写
+  `safety_profiles.json`**——只打印/落盘草稿供人工核对后手动合并，测量→
+  核对→标记 `verified_for_execution` 仍是三个独立的人工步骤。
+- 251→262 个测试（新增 `test_shelf_model.py`/`test_deliver_to_output.py`/
+  `test_target_classes.py`/`test_shelf_survey.py`），全部通过；确认
+  `table_demo` 相关测试（`test_table_model.py`/`test_return_home.py` 等）
+  同样全过，零回归。
+
+**下次会话/现场第一件事**：这轮完全没有真机验证——没有真实货架尺寸、没有
+真实出货口坐标、没有在真实光照下测过商品识别准确率。详见
+`docs/handoff/bottle_grasp_known_risks.md` 第二部分 F 条更新和本文件末尾
+"下一步优先级"第 7 条。
+
 ## ⚠️ 现在最需要知道的两件事
 
 1. **所有这些改动都还没提交**：`git log` 停在 `a6c5aa0`，工作区里 43 个文件
@@ -314,7 +355,14 @@ bottle_grasp/
   moveit_collision_selftest.py — 独立诊断工具，用真机示教安全姿态做三态碰撞探针
   safety.py         — 电子围栏：FenceBox/SafetyProfile，笛卡尔空间硬校验
   safety_profiles.json — 围栏配置数据（table_demo已启用verified，shelf_template
-                      是禁用的模板）
+                      是禁用的模板，keepout box id 对齐 shelf_model.FACE_SPECS）
+  table_model.py    — table_demo专用：每轮拟合桌面单水平面并自适应table_top围栏
+                      （2026-07-20起完全没再改，shelf_model.py是独立平行实现）
+  shelf_model.py    — 2026-07-20新增：泛化table_model.py的算法到货架五个面
+                      （shelf_bottom/top/back/left_panel/right_panel），demo.py
+                      并行调用，不影响table_demo路径
+  shelf_survey.py   — 2026-07-20新增：现场一次性测量（零机械臂运动），复用
+                      shelf_model.py的拟合函数，只产出草稿box供人工核对
   scene.py          — RGB-D点云→体素化障碍物（喂给MoveIt）
   collision.py      — 最后接近前的点云通道检查 + selftest三态分类器
   dashboard.py       — 本地Web dashboard（实时看阶段/检测画面）
@@ -328,8 +376,11 @@ scripts/
   run_bottle_grasp_autonomous.sh — 已停用；退出 2 并指向 from-start
   start_bottle_demo.sh       — 已停用；退出 2 并列出两个新入口
   head_position_lock.py      — bottle_grasp/head_lock.py的人工诊断命令行封装（check/restore）
+  measure_shelf_geometry.py — 2026-07-20新增：现场货架测量CLI，零机械臂运动，
+                      只打印/落盘草稿keepout_boxes，不自动写safety_profiles.json
 
-test/bottle_grasp/（共69个测试，纯逻辑+mock，不连真机/ROS，全部通过不代表真机能跑）
+test/bottle_grasp/（262个测试，纯逻辑+mock，不连真机/ROS，全部通过不代表真机能跑；
+                     下面这份文件清单本身也早于262这个数字，只补充了2026-07-20新增的几个）
   test_algorithms.py            — 感知/围栏算法单测（含夹取点确定性）14个
   test_camera_access.py         — 相机所有权释放/重建/硬件重启触发时机 6个
   test_gripper_judgment.py      — 空夹判定（实测基线/静态回退/夹持力） 9个
@@ -341,6 +392,10 @@ test/bottle_grasp/（共69个测试，纯逻辑+mock，不连真机/ROS，全部
   test_return_home.py           — 返回初始姿态 + finish-from-current 编排 6个
   test_safe_planner.py          — SafeMotionPlanner围栏反馈/候选降级/有限换路 4个
   test_singularity_avoidance.py — 绕接近轴避奇异重试 + J4 弯肘逃逸 10个
+  test_shelf_model.py           — 2026-07-20新增：货架五个面的拟合/多帧共识/自适应 24个
+  test_deliver_to_output.py     — 2026-07-20新增：_deliver_to_output编排+释放确认分支 6个
+  test_target_classes.py        — 2026-07-20新增：BottleDetector按商品类别选择 5个
+  test_shelf_survey.py          — 2026-07-20新增：现场测量草稿box+端到端拟合 11个
   test_target_guard.py          — LockedTargetGuard一次性头部确认逻辑 4个
 ```
 
@@ -382,5 +437,19 @@ ArmController都没有，硬塞会把那套也搞乱。
    `from-start` 做完整现场验收，不能重新启用旧阶段 launcher。
 6. 用两个新入口多验证几次稳定性（不同瓶子摆位、不同光照），积累"能不能复现"
    的证据，而不是只信一次成功
-7. 货架部署：量出货架真实尺寸，填 `safety_profiles.json` 的 `shelf_template`，
-   现场验证后把 `verified_for_execution` 改 `true`
+7. 货架部署（2026-07-20 更新——工具已就绪，现场步骤还没走）：
+   a. 跑 `scripts/measure_shelf_geometry.py --target-base X Y Z --faces ...`
+      量出各面草稿 box，人工核对后手动填进 `safety_profiles.json` 的
+      `shelf_template.keepout_boxes`（id 必须是 `shelf_model.FACE_SPECS`
+      认的五个名字之一，别自己改名）。
+   b. 现场量出货架取货口/出货口真实坐标，填 `output_joints_deg`
+      （关节角）和需要的话 `output_point_base`；确认出货口是否在头部
+      相机视野内，据此设置 `output_visible_to_head_camera`。
+   c. `--task-mode ... --dispense --plan-only` 先验证转移到出货口的规划
+      不撞（跟当年 `table_demo` 的 plan-only 验证同一套流程），再低速
+      `--execute` 试跑一次完整"抓→送到出货口→放→回home"。
+   d. 用 `--target-product` 在真实光照/瓶子朝向下测商品识别准确率，
+      YOLO 模型如果还只有通用 "bottle" 类，需要先补按 SKU 标注的训练
+      数据，这不是这轮代码能解决的。
+   e. 全部验证通过后才把 `verified_for_execution` 改 `true`——这是最后
+      一步，不是前置条件。
