@@ -108,14 +108,16 @@ camera:
   fps: 30
 
 # 语音合成配置 - iFlytek WebAPI
+# 凭证不要提交到仓库；本地填入真实值或改用环境变量。
 speech:
-  app_id: "aeb60378"
-  api_key: "e248b59b7b21d7291702b7808ba07257"
-  api_secret: "MjQ1ZmM3MjkwNmEzZTQyN2ZiNTYxN2Ey"
+  app_id: "YOUR_IFLYTEK_APP_ID"
+  api_key: "YOUR_IFLYTEK_API_KEY"
+  api_secret: "YOUR_IFLYTEK_API_SECRET"
 
 # 大语言模型配置
+# 凭证不要提交到仓库；本地填入真实值或改用环境变量。
 llm:
-  gemini_api_key: "AIzaSyAtCZCLxeRyRXK7dZAEnx0ydS_90VTcHxw"
+  gemini_api_key: "YOUR_GEMINI_API_KEY"
   model_name: "gemini-2.5-flash"
 
 # 计算机视觉配置
