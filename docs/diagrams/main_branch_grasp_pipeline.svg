@@ -1,0 +1,176 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="820" viewBox="0 0 1600 820" role="img" aria-labelledby="title desc">
+  <title id="title">main 分支抓取流程工程框图（enhanced_grab_interface.py）</title>
+  <desc id="desc">main 分支的抓取链路：Gemini agent 工具调用触发单帧 YOLO 检测与反投影，硬编码手眼矩阵解算抓取位姿，单关节基座旋转对准后直接下发笛卡尔目标点，开闭夹爪完成抓取，循环使用三个固定放置位姿并返回HOME。全程开环、无碰撞规划、无独立安全通道；底部列出相对 dual-arm-sdk 架构的已知差距。</desc>
+
+  <defs>
+    <pattern id="grid2" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M24 0H0V24" fill="none" stroke="#DCE3E8" stroke-width="0.7" opacity="0.55"/>
+    </pattern>
+    <marker id="arrow-blue2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10Z" fill="#1F6F8B"/>
+    </marker>
+    <marker id="arrow-gray2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10Z" fill="#657887"/>
+    </marker>
+    <style>
+      .font { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif; }
+      .title { font-size: 30px; font-weight: 600; fill: #102A3A; }
+      .subtitle { font-size: 14.5px; font-weight: 400; fill: #526776; }
+      .meta { font-size: 12px; font-weight: 600; letter-spacing: 0.9px; fill: #526776; }
+      .lane-id { font-size: 13px; font-weight: 700; fill: #FFFFFF; }
+      .lane-name { font-size: 14px; font-weight: 700; letter-spacing: 1.2px; fill: #294454; }
+      .module-title { font-size: 15.5px; font-weight: 600; fill: #173544; }
+      .module-note { font-size: 12px; font-weight: 400; fill: #596E7C; }
+      .port { font-size: 11px; font-weight: 600; fill: #1F6F8B; }
+      .small { font-size: 11px; font-weight: 400; fill: #657887; }
+      .code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 10.5px; fill: #405968; }
+      .gap-title { font-size: 13.5px; font-weight: 600; fill: #526776; }
+      .gap-note { font-size: 11.5px; font-weight: 400; fill: #657887; }
+      .line-blue { fill: none; stroke: #1F6F8B; stroke-width: 2; marker-end: url(#arrow-blue2); }
+      .line-gray { fill: none; stroke: #657887; stroke-width: 1.5; marker-end: url(#arrow-gray2); }
+      .line-mock { fill: none; stroke: #9AA7B0; stroke-width: 1.3; stroke-dasharray: 4 4; }
+      .lane { fill: #FFFFFF; stroke: #C6D0D8; stroke-width: 1.2; }
+      .module { fill: #FAFBFC; stroke: #95A6B3; stroke-width: 1.2; }
+      .module-blue { fill: #F2F8FA; stroke: #1F6F8B; stroke-width: 1.35; }
+      .trigger { fill: #F3F4F6; stroke: #9CA6AF; stroke-width: 1.1; }
+      .gap-box { fill: #FBFBFC; stroke: #9CA6AF; stroke-width: 1.1; stroke-dasharray: 5 4; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="820" fill="#F6F8FA"/>
+  <rect width="1600" height="820" fill="url(#grid2)"/>
+  <rect x="28" y="28" width="1544" height="764" rx="8" fill="none" stroke="#AEBBC5" stroke-width="1.2"/>
+
+  <!-- Header -->
+  <g class="font">
+    <text x="58" y="70" class="meta">SYSTEM BLOCK DIAGRAM · main 分支 · REV. 2026-07-21</text>
+    <text x="58" y="106" class="title">单臂零售抓取流程（旧 UGV 链路）</text>
+    <text x="58" y="130" class="subtitle">Gemini 工具调用触发的开环单帧抓取：无碰撞规划、无独立安全通道</text>
+
+    <g transform="translate(1015 58)">
+      <text x="0" y="0" class="meta">PLATFORM</text>
+      <text x="0" y="20" class="module-note">Realman RM-65B 单臂 · 全向移动底盘</text>
+      <text x="0" y="46" class="meta">SENSOR</text>
+      <text x="0" y="66" class="module-note">Orbbec Gemini 336L（单帧 RGB-D）</text>
+      <text x="0" y="92" class="meta">SOFTWARE</text>
+      <text x="0" y="112" class="module-note">references/enhanced_grab_interface.py</text>
+    </g>
+  </g>
+  <line x1="58" y1="150" x2="1542" y2="150" stroke="#9EADB8"/>
+
+  <!-- Trigger -->
+  <rect x="58" y="170" width="330" height="52" rx="4" class="trigger"/>
+  <text x="72" y="191" class="font meta">TRIGGER（外部，非本模块）</text>
+  <text x="72" y="211" class="font module-note">main_agent 语音 → GeminiAgent 决策 → execute_grab(item_name)</text>
+
+  <!-- Lane A -->
+  <g class="font">
+    <rect x="58" y="240" width="1484" height="170" rx="5" class="lane"/>
+    <rect x="58" y="240" width="1484" height="36" fill="#E9EEF2"/>
+    <rect x="72" y="247" width="24" height="22" rx="3" fill="#294454"/>
+    <text x="84" y="263" text-anchor="middle" class="lane-id">A</text>
+    <text x="108" y="264" class="lane-name">单帧感知与位姿解算 / SINGLE-FRAME PERCEPTION &amp; POSE</text>
+
+    <rect x="82" y="292" width="330" height="100" rx="4" class="module-blue"/>
+    <text x="98" y="316" class="module-title">相机扫描</text>
+    <text x="98" y="337" class="module-note">scan_with_camera：单帧 YOLO 检测 + 内参反投影</text>
+    <text x="98" y="356" class="module-note">仅取当帧，无多帧一致性/置信度投票</text>
+    <line x1="98" y1="368" x2="396" y2="368" stroke="#B9CAD3"/>
+    <text x="98" y="384" class="code">coords_3d (camera frame)</text>
+
+    <rect x="460" y="292" width="300" height="100" rx="4" class="module-blue"/>
+    <text x="476" y="316" class="module-title">目标选择</text>
+    <text x="476" y="337" class="module-note">smart_target_selection：按名称字符串精确匹配</text>
+    <text x="476" y="356" class="module-note">取列表首个同名项，不比较居中度/置信度</text>
+    <line x1="476" y1="368" x2="744" y2="368" stroke="#B9CAD3"/>
+    <text x="476" y="384" class="code">selected_target</text>
+
+    <rect x="808" y="292" width="360" height="100" rx="4" class="module-blue"/>
+    <text x="824" y="316" class="module-title">位姿解算</text>
+    <text x="824" y="337" class="module-note">calculate_grasp_poses：硬编码手眼矩阵</text>
+    <text x="824" y="356" class="module-note">T_tool0_cam(常量) × 当前末端位姿 → touch_pose</text>
+    <line x1="824" y1="368" x2="1152" y2="368" stroke="#B9CAD3"/>
+    <text x="824" y="384" class="code">touch_pose (base frame)</text>
+
+    <rect x="1216" y="292" width="294" height="100" rx="4" class="module"/>
+    <text x="1232" y="316" class="module-title">基座当前位姿</text>
+    <text x="1232" y="337" class="module-note">arm_controller.get_base_to_end_pose_matrix()</text>
+    <text x="1232" y="356" class="module-note">手眼变换的右乘输入，非独立标定读数</text>
+    <line x1="1232" y1="368" x2="1494" y2="368" stroke="#C7D0D7"/>
+    <text x="1232" y="384" class="code">T_base_end</text>
+
+    <path d="M412 342H460" class="line-blue"/>
+    <path d="M760 342H808" class="line-blue"/>
+    <path d="M1168 342H1216" class="line-gray"/>
+  </g>
+
+  <!-- Lane B -->
+  <g class="font">
+    <rect x="58" y="428" width="1484" height="196" rx="5" class="lane"/>
+    <rect x="58" y="428" width="1484" height="36" fill="#E9EEF2"/>
+    <rect x="72" y="435" width="24" height="22" rx="3" fill="#294454"/>
+    <text x="84" y="451" text-anchor="middle" class="lane-id">B</text>
+    <text x="108" y="452" class="lane-name">开环执行与放置 / OPEN-LOOP EXECUTION &amp; PLACEMENT</text>
+
+    <rect x="80" y="480" width="270" height="118" rx="4" class="module"/>
+    <text x="94" y="504" class="module-title">基座旋转对准</text>
+    <text x="94" y="524" class="module-note">orient_base_to_target：atan2(y,x)+180°</text>
+    <text x="94" y="542" class="module-note">仅movej 旋转 J1，speed=30，无碰撞检查</text>
+    <line x1="94" y1="558" x2="336" y2="558" stroke="#C7D0D7"/>
+    <text x="94" y="578" class="code">joint[0] 更新</text>
+
+    <rect x="368" y="480" width="270" height="118" rx="4" class="module-blue"/>
+    <text x="382" y="504" class="module-title">抓取序列</text>
+    <text x="382" y="524" class="module-note">execute_grasp：开爪→直线movej到touch_pose</text>
+    <text x="382" y="542" class="module-note">→闭爪→sleep(1s)，无路径规划/无避障</text>
+    <line x1="382" y1="558" x2="624" y2="558" stroke="#B9CAD3"/>
+    <text x="382" y="578" class="code">gripper close (openness=0.1)</text>
+
+    <rect x="656" y="480" width="220" height="118" rx="4" class="module"/>
+    <text x="670" y="504" class="module-title">返回 HOME</text>
+    <text x="670" y="524" class="module-note">go_to_home_position：固定 6D 位姿</text>
+    <text x="670" y="542" class="module-note">movej_to_cartesian_pose，speed=50</text>
+    <line x1="670" y1="558" x2="862" y2="558" stroke="#C7D0D7"/>
+    <text x="670" y="578" class="code">home_pose (常量)</text>
+
+    <rect x="908" y="480" width="330" height="118" rx="4" class="module-blue"/>
+    <text x="922" y="504" class="module-title">循环放置</text>
+    <text x="922" y="524" class="module-note">place_object_at_position：3 个硬编码位姿</text>
+    <text x="922" y="542" class="module-note">全局计数器 % 3 顺序循环，无视觉确认落位</text>
+    <line x1="922" y1="558" x2="1224" y2="558" stroke="#B9CAD3"/>
+    <text x="922" y="578" class="code">placement_index → placement_poses[i]</text>
+
+    <rect x="1270" y="480" width="240" height="118" rx="4" class="module"/>
+    <text x="1284" y="504" class="module-title">再次返回 HOME</text>
+    <text x="1284" y="524" class="module-note">go_to_home_position（同一固定位姿）</text>
+    <text x="1284" y="546" class="module-note">返回 {success, message, placement_index}</text>
+
+    <path d="M350 539H368" class="line-blue"/>
+    <path d="M638 539H656" class="line-blue"/>
+    <path d="M876 539H908" class="line-blue"/>
+    <path d="M1238 539H1270" class="line-blue"/>
+
+  </g>
+  <path d="M988 392V416H215V480" class="line-blue"/>
+  <text x="600" y="411" text-anchor="middle" class="font small">touch_pose</text>
+  <path d="M150 222V292" class="line-gray"/>
+
+  <!-- Gap note -->
+  <rect x="58" y="646" width="1484" height="118" rx="5" class="gap-box"/>
+  <g class="font">
+    <text x="74" y="670" class="gap-title">对照 dual-arm-sdk 架构（bottle_grasp/）的已知差距 — 均为本图未画出的能力，非本模块具备但简化：</text>
+    <text x="74" y="692" class="gap-note">· 单帧检测，无 7 帧共识/离群过滤；目标匹配仅按名称字符串，不做居中度/置信度排序</text>
+    <text x="74" y="710" class="gap-note">· 手眼矩阵是源码内硬编码常量，并非每次现场标定读取</text>
+    <text x="74" y="728" class="gap-note">· 无 MoveIt2/碰撞场景规划，无独立电子围栏或运行时安全守卫（LockedTargetGuard 等在本链路不存在）</text>
+    <text x="74" y="746" class="gap-note">· 抓取/放置成功与否仅凭 SDK 调用返回码判断，无位置阈值或视觉复核；任一步失败即中止，机械臂可能停在中间姿态，无自动回退</text>
+  </g>
+
+  <!-- Footer legend -->
+  <g class="font" transform="translate(62 792)">
+    <line x1="0" y1="0" x2="36" y2="0" class="line-blue"/>
+    <text x="50" y="4" class="small">数据 / 控制主流（开环，无反馈）</text>
+    <line x1="330" y1="0" x2="366" y2="0" class="line-gray"/>
+    <text x="380" y="4" class="small">只读输入</text>
+    <text x="1478" y="4" text-anchor="end" class="meta">OPEN-LOOP · NO COLLISION CHECK · NO SAFETY LANE</text>
+  </g>
+</svg>

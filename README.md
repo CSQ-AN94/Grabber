@@ -14,6 +14,12 @@
 互不导入、互不干扰，是刻意的架构分离，方便以后真正拆分成两个仓库。改代码
 前先确认自己在哪条路线上，别把两边的假设/坑混着用。
 
+### 抓水瓶技术验证架构图（`bottle_grasp/`，dual-arm-sdk 分支）
+
+多视角感知/货架面重建、MoveIt2 规划 + 独立电子围栏复核、任务状态机与运行时安全守卫；货架多格位/出货送达代码已写但尚未现场验证（图中已标注）。
+
+![双臂货架售货抓取系统工程框图](docs/diagrams/dual_arm_sdk_bottle_grasp_architecture.svg)
+
 ---
 
 # Grabber - 直接识别抓取版本
@@ -85,6 +91,10 @@ python3 direct_grab.py grab 红牛
 `grab` 会先扫描一次用于确认/解析商品名，然后调用抓取流程。输入商品名必须能和 YOLO 输出的中文商品名匹配；支持唯一子串匹配，例如识别到“可口可乐”时输入“可乐”。
 
 ## 当前架构
+
+单帧检测 + 硬编码手眼矩阵 + 开环执行，无 MoveIt/碰撞规划，无独立安全通道；下图逐步对照 `enhanced_grab_interface.py` 的实际调用链，并标出与 `bottle_grasp/` 架构的已知差距。
+
+![单臂零售抓取流程工程框图](docs/diagrams/main_branch_grasp_pipeline.svg)
 
 #### 智能决策层 (`intelligence/`)
 - **`vision.py`**: YOLOv8 商品检测。

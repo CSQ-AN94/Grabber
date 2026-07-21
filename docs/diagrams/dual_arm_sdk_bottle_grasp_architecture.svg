@@ -1,0 +1,320 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1200" viewBox="0 0 1600 1200" role="img" aria-labelledby="title desc">
+  <title id="title">双臂货架售货抓取系统工程框图（dual-arm-sdk / bottle_grasp）</title>
+  <desc id="desc">系统从固定头部 RGB-D 多帧感知与场景/货架面重建开始，经观察位候选生成、MoveIt2 规划与独立电子围栏复核、腕部重定位和局部接近，最终使用 RM Plus 位置控制夹爪完成抓取；随后放回原位或转移到出货口。底部展示任务状态机、独立安全守卫与运行证据；货架多格位/出货路径 2026-07-20 完成开发但尚未现场验证。</desc>
+
+  <defs>
+    <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M24 0H0V24" fill="none" stroke="#DCE3E8" stroke-width="0.7" opacity="0.55"/>
+    </pattern>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10Z" fill="#1F6F8B"/>
+    </marker>
+    <marker id="arrow-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10Z" fill="#657887"/>
+    </marker>
+    <marker id="arrow-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10Z" fill="#C9791B"/>
+    </marker>
+    <style>
+      .font { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif; }
+      .title { font-size: 32px; font-weight: 600; fill: #102A3A; }
+      .subtitle { font-size: 15px; font-weight: 400; fill: #526776; }
+      .meta { font-size: 12px; font-weight: 600; letter-spacing: 0.9px; fill: #526776; }
+      .lane-id { font-size: 13px; font-weight: 700; fill: #FFFFFF; }
+      .lane-name { font-size: 14px; font-weight: 700; letter-spacing: 1.2px; fill: #294454; }
+      .module-title { font-size: 16px; font-weight: 600; fill: #173544; }
+      .module-note { font-size: 12.5px; font-weight: 400; fill: #596E7C; }
+      .port { font-size: 11px; font-weight: 600; fill: #1F6F8B; }
+      .small { font-size: 11px; font-weight: 400; fill: #657887; }
+      .code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 11px; fill: #405968; }
+      .phase { font-size: 13px; font-weight: 600; fill: #173544; }
+      .phase-note { font-size: 10.5px; font-weight: 400; fill: #657887; }
+      .safety-title { font-size: 14px; font-weight: 600; fill: #75470F; }
+      .safety-note { font-size: 11px; font-weight: 400; fill: #7B654A; }
+      .line-blue { fill: none; stroke: #1F6F8B; stroke-width: 2; marker-end: url(#arrow-blue); }
+      .line-gray { fill: none; stroke: #657887; stroke-width: 1.5; marker-end: url(#arrow-gray); }
+      .line-feedback { fill: none; stroke: #657887; stroke-width: 1.4; stroke-dasharray: 5 5; marker-end: url(#arrow-gray); }
+      .line-safety { fill: none; stroke: #C9791B; stroke-width: 1.7; stroke-dasharray: 6 5; marker-end: url(#arrow-orange); }
+      .lane { fill: #FFFFFF; stroke: #C6D0D8; stroke-width: 1.2; }
+      .module { fill: #FAFBFC; stroke: #95A6B3; stroke-width: 1.2; }
+      .module-blue { fill: #F2F8FA; stroke: #1F6F8B; stroke-width: 1.35; }
+      .module-safety { fill: #FFF9F0; stroke: #C9791B; stroke-width: 1.2; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1200" fill="#F6F8FA"/>
+  <rect width="1600" height="1200" fill="url(#grid)"/>
+  <rect x="28" y="28" width="1544" height="1144" rx="8" fill="none" stroke="#AEBBC5" stroke-width="1.2"/>
+
+  <!-- Header -->
+  <g class="font">
+    <text x="58" y="72" class="meta">SYSTEM BLOCK DIAGRAM · dual-arm-sdk · REV. 2026-07-21</text>
+    <text x="58" y="110" class="title">双臂货架售货抓取系统</text>
+    <text x="58" y="136" class="subtitle">多视角定位、货架面重建、碰撞规划、独立电子围栏与真实任务状态机</text>
+
+    <g transform="translate(1005 60)">
+      <text x="0" y="0" class="meta">PLATFORM</text>
+      <text x="0" y="22" class="module-note">Realman RM75-BI · 右臂执行 / 左臂稳定性监控</text>
+      <text x="0" y="51" class="meta">SENSORS</text>
+      <text x="0" y="73" class="module-note">头部 RealSense · 右腕 RealSense</text>
+      <text x="0" y="102" class="meta">SOFTWARE</text>
+      <text x="0" y="124" class="module-note">Python · Realman SDK · ROS2 / MoveIt2</text>
+    </g>
+  </g>
+  <line x1="58" y1="160" x2="1542" y2="160" stroke="#9EADB8"/>
+
+  <!-- Lane A -->
+  <g class="font">
+    <rect x="58" y="184" width="1484" height="246" rx="5" class="lane"/>
+    <rect x="58" y="184" width="1484" height="38" fill="#E9EEF2"/>
+    <rect x="72" y="192" width="24" height="22" rx="3" fill="#294454"/>
+    <text x="84" y="208" text-anchor="middle" class="lane-id">A</text>
+    <text x="108" y="209" class="lane-name">感知与世界模型 / PERCEPTION &amp; WORLD MODEL</text>
+
+    <!-- Head camera -->
+    <rect x="82" y="254" width="178" height="100" rx="4" class="module"/>
+    <rect x="82" y="254" width="178" height="24" fill="#E6EDF1"/>
+    <text x="94" y="271" class="meta">SENSOR</text>
+    <text x="96" y="306" class="module-title">头部 RealSense</text>
+    <text x="96" y="330" class="module-note">全局彩色图 + 深度图</text>
+    <text x="96" y="347" class="code">RGB-D frames</text>
+
+    <!-- Detection -->
+    <rect x="314" y="244" width="242" height="120" rx="4" class="module-blue"/>
+    <text x="330" y="275" class="module-title">目标感知</text>
+    <text x="330" y="299" class="module-note">YOLO 检测 / 商品类别筛选</text>
+    <text x="330" y="320" class="module-note">分区深度采样 · 中位数 · MAD</text>
+    <line x1="330" y1="336" x2="540" y2="336" stroke="#B9CAD3"/>
+    <text x="330" y="354" class="code">Detection + robust depth</text>
+
+    <!-- Localization -->
+    <rect x="610" y="244" width="248" height="120" rx="4" class="module-blue"/>
+    <text x="626" y="275" class="module-title">目标三维定位</text>
+    <text x="626" y="299" class="module-note">7 帧共识 · 离群过滤</text>
+    <text x="626" y="320" class="module-note">手眼变换 → 右臂基座坐标</text>
+    <line x1="626" y1="336" x2="842" y2="336" stroke="#B9CAD3"/>
+    <text x="626" y="354" class="code">Localization(point_base)</text>
+
+    <!-- Scene model -->
+    <rect x="914" y="244" width="248" height="120" rx="4" class="module-blue"/>
+    <text x="930" y="275" class="module-title">场景 / 货架重建</text>
+    <text x="930" y="299" class="module-note">头部点云 · 体素化 · 目标剔除</text>
+    <text x="930" y="320" class="module-note">桌面 / 货架各面多帧一致拟合</text>
+    <line x1="930" y1="336" x2="1146" y2="336" stroke="#B9CAD3"/>
+    <text x="930" y="354" class="code">scene voxels + shelf face fit</text>
+
+    <!-- Configuration -->
+    <rect x="1218" y="244" width="292" height="120" rx="4" class="module"/>
+    <text x="1234" y="275" class="module-title">标定与场景配置</text>
+    <text x="1234" y="299" class="module-note">相机外参 · TCP / 法兰语义</text>
+    <text x="1234" y="320" class="module-note">静态禁入区 · 观察位 · 商品类别/出货点</text>
+    <line x1="1234" y1="336" x2="1494" y2="336" stroke="#C7D0D7"/>
+    <text x="1234" y="354" class="code">calibration + SafetyProfile</text>
+
+    <!-- A-lane connectors -->
+    <path d="M260 304H314" class="line-blue"/>
+    <rect x="270" y="289" width="36" height="18" fill="#FFFFFF"/>
+    <text x="288" y="302" text-anchor="middle" class="port">RGB-D</text>
+    <path d="M556 304H610" class="line-blue"/>
+    <text x="583" y="294" text-anchor="middle" class="port">2D+Z</text>
+    <path d="M858 304H914" class="line-blue"/>
+    <text x="886" y="294" text-anchor="middle" class="port">target</text>
+
+    <path d="M1364 364V396H734V364" class="line-gray"/>
+    <text x="1072" y="391" class="small">外参 / 坐标系</text>
+    <path d="M1364 364V411H1038V364" class="line-gray"/>
+    <text x="1195" y="406" class="small">几何约束</text>
+  </g>
+
+  <!-- Lane B -->
+  <g class="font">
+    <rect x="58" y="454" width="1484" height="302" rx="5" class="lane"/>
+    <rect x="58" y="454" width="1484" height="38" fill="#E9EEF2"/>
+    <rect x="72" y="462" width="24" height="22" rx="3" fill="#294454"/>
+    <text x="84" y="478" text-anchor="middle" class="lane-id">B</text>
+    <text x="108" y="479" class="lane-name">规划与操作 / PLANNING &amp; MANIPULATION</text>
+
+    <!-- Candidate generator -->
+    <rect x="82" y="532" width="190" height="126" rx="4" class="module"/>
+    <text x="98" y="562" class="module-title">观察位候选</text>
+    <text x="98" y="586" class="module-note">围绕头部目标采样 (4x4x3)</text>
+    <text x="98" y="606" class="module-note">IK / 关节限位 / J4 奇异区过滤</text>
+    <line x1="98" y1="623" x2="256" y2="623" stroke="#C7D0D7"/>
+    <text x="98" y="643" class="code">candidate camera poses</text>
+
+    <!-- SafeMotionPlanner container -->
+    <rect x="316" y="508" width="454" height="174" rx="4" fill="#F7FAFB" stroke="#1F6F8B" stroke-width="1.4"/>
+    <rect x="316" y="508" width="454" height="30" fill="#DDEBF0"/>
+    <text x="330" y="529" class="meta">SafeMotionPlanner</text>
+    <rect x="332" y="554" width="118" height="62" rx="3" class="module"/>
+    <text x="344" y="577" class="phase">MoveIt2 规划</text>
+    <text x="344" y="598" class="phase-note">全臂 + 场景/货架碰撞</text>
+    <rect x="467" y="554" width="126" height="62" rx="3" class="module-blue"/>
+    <text x="479" y="577" class="phase">运动学契约核验</text>
+    <text x="479" y="598" class="phase-note">MoveIt/SDK 同状态 FK</text>
+    <rect x="610" y="554" width="144" height="62" rx="3" class="module-safety"/>
+    <text x="622" y="577" class="phase">独立密集复核</text>
+    <text x="622" y="598" class="phase-note">SDK 电子围栏 + MoveIt 复算</text>
+    <path d="M450 585H467" class="line-blue"/>
+    <path d="M593 585H610" class="line-blue"/>
+    <path d="M682 616V650H391V616" class="line-feedback"/>
+    <text x="536" y="645" text-anchor="middle" class="small">拒绝 → exclusion box → 下一候选/规划器</text>
+
+    <!-- Global execute -->
+    <rect x="814" y="532" width="178" height="126" rx="4" class="module"/>
+    <text x="830" y="562" class="module-title">全局轨迹执行</text>
+    <text x="830" y="586" class="module-note">刷新场景后再次复核</text>
+    <text x="830" y="606" class="module-note">SDK 关节轨迹 + 跟踪误差</text>
+    <line x1="830" y1="623" x2="976" y2="623" stroke="#C7D0D7"/>
+    <text x="830" y="643" class="code">JointTrajectory</text>
+
+    <!-- Wrist relocalization -->
+    <rect x="1036" y="518" width="190" height="154" rx="4" class="module-blue"/>
+    <text x="1052" y="548" class="module-title">右腕重定位</text>
+    <text x="1052" y="572" class="module-note">腕部 RealSense 新鲜帧</text>
+    <text x="1052" y="592" class="module-note">目标关联 + 横向精定位</text>
+    <text x="1052" y="612" class="module-note">观察位起点一致性检查</text>
+    <line x1="1052" y1="632" x2="1210" y2="632" stroke="#B9CAD3"/>
+    <text x="1052" y="652" class="code">wrist Localization</text>
+
+    <!-- Local approach -->
+    <rect x="1270" y="508" width="240" height="174" rx="4" class="module-blue"/>
+    <text x="1286" y="538" class="module-title">局部接近与抓取</text>
+    <text x="1286" y="563" class="module-note">预抓取直线 + 连续 IK</text>
+    <text x="1286" y="584" class="module-note">每段目标可见性 / 通道检查</text>
+    <text x="1286" y="605" class="module-note">Realman SDK · MOVEL 低速执行</text>
+    <line x1="1286" y1="623" x2="1494" y2="623" stroke="#B9CAD3"/>
+    <text x="1286" y="644" class="module-title">RM Plus 两指夹爪</text>
+    <text x="1286" y="664" class="module-note">位置跟随命令 · 内部力限幅</text>
+
+    <!-- B-lane connectors -->
+    <path d="M734 364V500H177V532" class="line-blue"/>
+    <text x="724" y="446" text-anchor="end" class="port">head target</text>
+    <path d="M1038 364V500H543V508" class="line-blue"/>
+    <text x="1028" y="446" text-anchor="end" class="port">scene voxels</text>
+
+    <path d="M272 595H316" class="line-blue"/>
+    <path d="M770 595H814" class="line-blue"/>
+    <text x="792" y="586" text-anchor="middle" class="port">plan</text>
+    <path d="M992 595H1036" class="line-blue"/>
+    <text x="1014" y="586" text-anchor="middle" class="port">arrived</text>
+    <path d="M1226 595H1270" class="line-blue"/>
+    <text x="1248" y="586" text-anchor="middle" class="port">target</text>
+
+    <!-- Gripper feedback block -->
+    <rect x="1270" y="701" width="240" height="38" rx="3" class="module"/>
+    <text x="1284" y="725" class="code">feedback: pos / current / dof_state</text>
+    <path d="M1390 682V701" class="line-gray"/>
+  </g>
+
+  <!-- Lane C -->
+  <g class="font">
+    <rect x="58" y="780" width="1484" height="166" rx="5" class="lane"/>
+    <rect x="58" y="780" width="1484" height="38" fill="#E9EEF2"/>
+    <rect x="72" y="788" width="24" height="22" rx="3" fill="#294454"/>
+    <text x="84" y="804" text-anchor="middle" class="lane-id">C</text>
+    <text x="108" y="805" class="lane-name">任务状态机 / BOUNDED PICK–PLACE TRANSACTION</text>
+
+    <!-- State boxes -->
+    <g transform="translate(79 847)">
+      <rect x="0" y="0" width="134" height="56" rx="3" class="module"/>
+      <text x="67" y="24" text-anchor="middle" class="phase">Preflight</text>
+      <text x="67" y="43" text-anchor="middle" class="phase-note">硬件 / 安全配置</text>
+
+      <rect x="170" y="0" width="134" height="56" rx="3" class="module-blue"/>
+      <text x="237" y="24" text-anchor="middle" class="phase">Head lock</text>
+      <text x="237" y="43" text-anchor="middle" class="phase-note">本轮新鲜目标</text>
+
+      <rect x="340" y="0" width="134" height="56" rx="3" class="module-blue"/>
+      <text x="407" y="24" text-anchor="middle" class="phase">Scene sync</text>
+      <text x="407" y="43" text-anchor="middle" class="phase-note">点云 / 货架面更新</text>
+
+      <rect x="510" y="0" width="150" height="56" rx="3" class="module"/>
+      <text x="585" y="24" text-anchor="middle" class="phase">Observation transfer</text>
+      <text x="585" y="43" text-anchor="middle" class="phase-note">仅 from-start</text>
+
+      <rect x="696" y="0" width="134" height="56" rx="3" class="module-blue"/>
+      <text x="763" y="24" text-anchor="middle" class="phase">Wrist lock</text>
+      <text x="763" y="43" text-anchor="middle" class="phase-note">新鲜腕部目标</text>
+
+      <rect x="866" y="0" width="134" height="56" rx="3" class="module-blue"/>
+      <text x="933" y="24" text-anchor="middle" class="phase">Grasp + lift</text>
+      <text x="933" y="43" text-anchor="middle" class="phase-note">反馈 + 抬升确认</text>
+
+      <rect x="1036" y="0" width="150" height="56" rx="3" class="module"/>
+      <text x="1111" y="24" text-anchor="middle" class="phase">Place / dispense</text>
+      <text x="1111" y="43" text-anchor="middle" class="phase-note">放回原位或送出货口 *</text>
+
+      <rect x="1222" y="0" width="134" height="56" rx="3" class="module"/>
+      <text x="1289" y="24" text-anchor="middle" class="phase">Return / done</text>
+      <text x="1289" y="43" text-anchor="middle" class="phase-note">释放确认与结果</text>
+
+      <path d="M134 28H170" class="line-gray"/>
+      <path d="M304 28H340" class="line-gray"/>
+      <path d="M474 28H510" class="line-gray"/>
+      <path d="M660 28H696" class="line-gray"/>
+      <path d="M830 28H866" class="line-gray"/>
+      <path d="M1000 28H1036" class="line-gray"/>
+      <path d="M1186 28H1222" class="line-gray"/>
+
+      <path d="M407 56V79H763V56" class="line-feedback"/>
+      <rect x="500" y="67" width="166" height="18" fill="#FFFFFF"/>
+      <text x="583" y="80" text-anchor="middle" class="small">from-observation：跳过转移</text>
+    </g>
+
+    <path d="M1390 739V765H1012V847" class="line-gray"/>
+    <text x="1194" y="762" class="small">grasp feedback + lift evidence</text>
+  </g>
+
+  <!-- Lane D -->
+  <g class="font">
+    <rect x="58" y="970" width="1484" height="127" rx="5" fill="#FFFCF7" stroke="#D2B48A" stroke-width="1.2"/>
+    <rect x="58" y="970" width="1484" height="32" fill="#F4E8D5"/>
+    <rect x="72" y="975" width="24" height="22" rx="3" fill="#9A5B12"/>
+    <text x="84" y="991" text-anchor="middle" class="lane-id">D</text>
+    <text x="108" y="993" class="lane-name" fill="#75470F">安全守卫与运行证据 / SAFETY &amp; AUDIT</text>
+
+    <rect x="82" y="1020" width="220" height="54" rx="3" class="module-safety"/>
+    <text x="96" y="1042" class="safety-title">Site check · GO / NO-GO</text>
+    <text x="96" y="1062" class="safety-note">相机、SDK、MoveIt2、夹爪反馈链</text>
+
+    <rect x="324" y="1020" width="220" height="54" rx="3" class="module-safety"/>
+    <text x="338" y="1042" class="safety-title">独立笛卡尔围栏</text>
+    <text x="338" y="1062" class="safety-note">SafetyProfile + 动态表面 + TCP 插值</text>
+
+    <rect x="566" y="1020" width="220" height="54" rx="3" class="module-safety"/>
+    <text x="580" y="1042" class="safety-title">运行时守卫</text>
+    <text x="580" y="1062" class="safety-note">目标漂移 · 左臂稳定 · stop_event</text>
+
+    <rect x="808" y="1020" width="244" height="54" rx="3" class="module-safety"/>
+    <text x="822" y="1042" class="safety-title">抓取判定（非力闭环）</text>
+    <text x="822" y="1062" class="safety-note">空夹基线 + pos/current/state + 抬升确认</text>
+
+    <rect x="1074" y="1020" width="220" height="54" rx="3" class="module-safety"/>
+    <text x="1088" y="1042" class="safety-title">SafetyAbort</text>
+    <text x="1088" y="1062" class="safety-note">任一检查失败 → 不下发后续运动</text>
+
+    <rect x="1316" y="1020" width="194" height="54" rx="3" class="module-safety"/>
+    <text x="1330" y="1042" class="safety-title">运行证据</text>
+    <text x="1330" y="1062" class="safety-note">journal / result / scene / plan</text>
+
+    <!-- Safety veto / evidence lines -->
+    <path d="M434 1020V967H682V616" class="line-safety"/>
+    <path d="M676 1020V955H1390V682" class="line-safety"/>
+    <path d="M930 1020V938H1012V903" class="line-safety"/>
+    <path d="M1184 1020V929H1460V903" class="line-safety"/>
+    <path d="M1413 1020V929H1368V903" class="line-feedback"/>
+  </g>
+
+  <!-- Footer legend -->
+  <g class="font" transform="translate(62 1119)">
+    <line x1="0" y1="0" x2="36" y2="0" class="line-blue"/>
+    <text x="50" y="4" class="small">数据 / 控制主流</text>
+    <line x1="186" y1="0" x2="222" y2="0" class="line-feedback"/>
+    <text x="236" y="4" class="small">反馈 / 重试路径</text>
+    <line x1="380" y1="0" x2="416" y2="0" class="line-safety"/>
+    <text x="430" y="4" class="small">安全否决 / 运行时守卫</text>
+    <text x="1478" y="4" text-anchor="end" class="meta">CONFIG-DRIVEN · FAIL-CLOSED · AUDITABLE</text>
+  </g>
+  <text x="58" y="1160" class="font small">* 货架多格位识别与出货口转移（DeliverMode.DISPENSE）2026-07-20 代码完成，尚未现场测量或真机验证；已验证场景仅为桌面单瓶抓取/放回（table_demo）。</text>
+</svg>
